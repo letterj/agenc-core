@@ -82,5 +82,8 @@
     "bn.js": "^5.2.3",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"
+  },
+  "optionalDependencies": {
+    "@tailwindcss/oxide-linux-x64-gnu": "4.2.2"
   }
 }
