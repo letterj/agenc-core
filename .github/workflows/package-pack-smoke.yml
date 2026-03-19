@@ -111,11 +111,21 @@ jobs:
       - name: Build private-kernel packages
         run: npm run build:private-kernel
 
+      - name: Setup Node for dashboard build
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Build dashboard surface
         run: AGENC_DASHBOARD_BASE=/ui/ npm run build --workspace=@tetsuo-ai/web
 
       - name: Sync dashboard assets
         run: npm run sync:dashboard-assets
+
+      - name: Restore minimum-supported Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
 
       - name: Run minimum-supported Node public agenc install smoke test
         run: npm run smoke:public-agenc-install -- --skip-build
