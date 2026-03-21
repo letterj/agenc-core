@@ -2,19 +2,33 @@
 
 Canonical public implementation repository for the AgenC framework product.
 
+## Start Here
+
+- [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md) - repo-level reading order
+- [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) - full repo map across workspaces, tools, tests, scripts, and docs
+- [docs/COMMANDS_AND_VALIDATION.md](docs/COMMANDS_AND_VALIDATION.md) - validation and release-sensitive commands
+- [runtime/docs/MODULE_MAP.md](runtime/docs/MODULE_MAP.md) - runtime module navigation guide
+- [docs/architecture/README.md](docs/architecture/README.md) - architecture-focused reading path
+
 This repository currently owns the implementation for:
 
+- `packages/agenc/`
 - `runtime/`
 - `mcp/`
 - `docs-mcp/`
 - `contracts/desktop-tool-contracts/`
 - `containers/desktop/server/`
+- `containers/private-registry/`
 - `web/`
 - `mobile/`
 - `demo-app/`
 - runtime-dependent internal examples
 - `tools/localnet-social/`
 - `tools/proof-harness/`
+- `test-fixtures/plugin-kit-channel-adapter/`
+- `tests/`
+- `scripts/`
+- `config/`
 
 Under [ADR-003](docs/architecture/adr/adr-003-public-framework-product.md), the
 product contract is public-framework-first:
@@ -61,6 +75,29 @@ Internal package/service policy:
 
 - distribution mechanics: `docs/PRIVATE_KERNEL_DISTRIBUTION.md`
 - support and deprecation policy: `docs/PRIVATE_KERNEL_SUPPORT_POLICY.md`
+
+## Repo Layout
+
+```text
+agenc-core/
+  packages/agenc/
+  runtime/
+  mcp/
+  docs-mcp/
+  contracts/desktop-tool-contracts/
+  containers/desktop/server/
+  containers/private-registry/
+  web/
+  mobile/
+  demo-app/
+  examples/
+  tools/
+  test-fixtures/
+  tests/
+  scripts/
+  config/
+  docs/
+```
 
 ## Development
 

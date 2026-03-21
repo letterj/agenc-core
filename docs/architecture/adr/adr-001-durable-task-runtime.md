@@ -4,7 +4,6 @@
 - **Date:** 2026-03-07
 - **Owners:** Runtime / Gateway
 - **Related code:** `runtime/src/gateway/agent-run-contract.ts`, `runtime/src/gateway/background-run-store.ts`, `runtime/src/gateway/background-run-supervisor.ts`
-- **Related roadmap:** [`REFACTOR.MD`](../../../REFACTOR.MD), [`REFACTOR-MASTER-PROGRAM.md`](../../../REFACTOR-MASTER-PROGRAM.md)
 
 ## Context
 
@@ -99,7 +98,7 @@ Every run contract must define:
 
 ## Follow-On Work
 
-This ADR unlocks the next phases in [`REFACTOR.MD`](../../../REFACTOR.MD) and [`REFACTOR-MASTER-PROGRAM.md`](../../../REFACTOR-MASTER-PROGRAM.md):
+This ADR continues to shape:
 
 - durable kernel hardening
 - event-driven wake plane

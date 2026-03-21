@@ -8,7 +8,7 @@ Canonical private-kernel distribution policy lives in [docs/PRIVATE_KERNEL_DISTR
 
 This server indexes repo documentation and selected machine-readable contract artifacts as MCP tools and resources. It enables AI agents to:
 
-- Search repo docs, planning docs, runtime docs, and contract artifacts
+- Search repo docs, runtime docs, and contract artifacts
 - Read per-file indexed resources from the current repository docs
 - Get runtime module templates and coding conventions when runtime-specific guidance is needed
 
@@ -20,14 +20,12 @@ Indexed corpus:
 - `runtime/idl/**/*.json`
 - `runtime/benchmarks/**/*.json`
 - `scripts/idl/**/*.json`
-- package-local docs and changelogs under top-level packages, apps, platforms, programs, migrations, and `examples/**` when present
-- root docs: `README.md`, `AGENTS.md`, `CODEX.md`, `REFACTOR.MD`, and `REFACTOR-MASTER-PROGRAM.md` when present
+- package-local docs and changelogs under `packages/`, `runtime/`, `mcp/`, `docs-mcp/`, `contracts/`, `tools/`, `test-fixtures/`, `tests/`, `scripts/`, top-level apps/platforms, `programs/`, `migrations/`, and `examples/**` when present
+- root docs: `README.md`, `AGENTS.md`, and `CODEX.md` when present
 
 Important limits:
 
 - This server indexes documentation and contract artifacts, not source code.
-- Legacy runtime-roadmap issue/phase prompts, tools, and special aggregate resources are intentionally not registered.
-- Retired roadmap and issue-map docs are not part of the indexed planning surface.
 - `docs_get_module_template`, `docs_get_module_info`, and `docs_get_conventions` are runtime-scoped helpers, not whole-repository architecture tools.
 
 ## Usage
@@ -48,7 +46,7 @@ claude mcp add agenc-docs -e DOCS_ROOT=/path/to/AgenC -- node /path/to/AgenC/doc
 
 | Tool | Description |
 |------|-------------|
-| `docs_search` | Full-text search across repo docs, planning docs, runtime docs, and contract artifacts |
+| `docs_search` | Full-text search across repo docs, runtime docs, and contract artifacts |
 | `docs_get_module_template` | Runtime-module boilerplate helper; not whole-repository planning authority |
 | `docs_get_module_info` | Runtime-module architecture helper; not whole-repository planning authority |
 | `docs_get_conventions` | Runtime implementation conventions helper; not whole-repository planning authority |
@@ -65,8 +63,6 @@ Indexed docs and contract artifacts are exposed as MCP resources. Resource prefi
 Special aggregate resources:
 - `agenc-docs://conventions` — all guide docs concatenated
 - `agenc-docs://scope` — indexed scope manifest and current limits
-
-Whole-repository planning authority comes from the indexed docs themselves, especially `REFACTOR.MD` and `REFACTOR-MASTER-PROGRAM.md`, which remain available through ordinary search and resource reads.
 
 ## Environment Variables
 

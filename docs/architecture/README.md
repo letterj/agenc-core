@@ -2,12 +2,12 @@
 
 Architecture reference for AgenC protocol and runtime surfaces. These docs are implementation reference, not the whole-repository planning authority.
 
+For whole-repo navigation, start with [../CODEBASE_MAP.md](../CODEBASE_MAP.md) and [../DOCS_INDEX.md](../DOCS_INDEX.md).
+
 ## How to Use
 
 - **Understanding the current product contract?** Start with [product-contract.md](product-contract.md) and [adr/adr-003-public-framework-product.md](adr/adr-003-public-framework-product.md)
-- **Understanding the tracked rollout for that contract?** See [product-contract.md](product-contract.md) plus GitHub issues `#4` through `#9` in `tetsuo-ai/agenc-core`
-- **Planning whole-repository refactor work?** Use the historical records only as background: [REFACTOR.MD](../../REFACTOR.MD) and [REFACTOR-MASTER-PROGRAM.md](../../REFACTOR-MASTER-PROGRAM.md)
-- **Reading legacy runtime roadmap material?** Use the relevant phase guide in `phases/` as historical runtime-scoped reference only
+- **Understanding the tracked rollout for that contract?** See [product-contract.md](product-contract.md) plus the active implementation issues in `tetsuo-ai/agenc-core`
 - **Understanding the system?** Read `overview.md` then `runtime-layers.md`
 - **Writing new code?** Check `guides/` for conventions and templates
 - **Debugging a flow?** See the sequence diagrams in `flows/`
@@ -28,7 +28,6 @@ Architecture reference for AgenC protocol and runtime surfaces. These docs are i
 | Document | Description |
 |----------|-------------|
 | [adr/adr-001-durable-task-runtime.md](adr/adr-001-durable-task-runtime.md) | Canonical durable task runtime contract, lifecycle semantics, and invariants |
-| [adr/adr-002-public-contract-private-kernel-boundary.md](adr/adr-002-public-contract-private-kernel-boundary.md) | Historical private-kernel boundary decision, now superseded by ADR-003 |
 | [adr/adr-003-public-framework-product.md](adr/adr-003-public-framework-product.md) | Current direction: public framework product, shared daemon, and staged declassification |
 
 ### Flow Diagrams
@@ -57,21 +56,6 @@ Architecture reference for AgenC protocol and runtime surfaces. These docs are i
 | [guides/testing-patterns.md](guides/testing-patterns.md) | Mock patterns, vitest setup, LiteSVM |
 | [guides/error-handling.md](guides/error-handling.md) | RuntimeErrorCodes, error class patterns |
 | [guides/integration-points.md](guides/integration-points.md) | Cross-module wiring, builder, telemetry |
-
-### Phase Implementation Guides
-
-| Document | Issues | Priority |
-|----------|--------|----------|
-| [phases/phase-01-gateway.md](phases/phase-01-gateway.md) | 12 issues (#1051-#1063) | P0 |
-| [phases/phase-02-heartbeat.md](phases/phase-02-heartbeat.md) | 4 issues (#1078-#1085) | P1 |
-| [phases/phase-03-skills.md](phases/phase-03-skills.md) | 6 issues (#1065-#1075) | P0 |
-| [phases/phase-04-tools.md](phases/phase-04-tools.md) | 7 issues (#1067-#1077) | P0 |
-| [phases/phase-05-memory.md](phases/phase-05-memory.md) | 6 issues (#1079-#1087) | P1 |
-| [phases/phase-06-registry.md](phases/phase-06-registry.md) | 5 issues (#1088-#1092) | P2 |
-| [phases/phase-07-multi-agent.md](phases/phase-07-multi-agent.md) | 4 issues (#1093-#1096) | P2 |
-| [phases/phase-08-social.md](phases/phase-08-social.md) | 5 issues (#1097-#1105) | P2 |
-| [phases/phase-09-channels-ui.md](phases/phase-09-channels-ui.md) | 4 issues (#1098-#1102) | P2 |
-| [phases/phase-10-marketplace.md](phases/phase-10-marketplace.md) | 5 issues (#1106-#1110) | P3 |
 
 ## Docs MCP Server
 

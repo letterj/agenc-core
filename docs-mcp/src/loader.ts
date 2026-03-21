@@ -6,14 +6,18 @@ const ROOT_DOC_FILES = [
   'README.md',
   'AGENTS.md',
   'CODEX.md',
-  'REFACTOR.MD',
-  'REFACTOR-MASTER-PROGRAM.md',
 ] as const;
 
 const PACKAGE_DOC_ROOTS = [
+  'packages',
   'runtime',
   'mcp',
   'docs-mcp',
+  'contracts',
+  'tools',
+  'test-fixtures',
+  'tests',
+  'scripts',
   'migrations',
   'examples',
   'programs',
@@ -61,7 +65,6 @@ function categorize(relPath: string): DocEntry['category'] {
   const normalized = normalizeRelPath(relPath);
 
   if (normalized.startsWith('docs/architecture/flows/')) return 'flow';
-  if (normalized.startsWith('docs/architecture/phases/')) return 'phase';
   if (normalized.startsWith('docs/architecture/guides/')) return 'guide';
   if (normalized.startsWith('docs/architecture/') || normalized === 'docs/architecture.md') return 'architecture';
   if (normalized.startsWith('docs/api-baseline/')) return 'baseline';
@@ -71,12 +74,6 @@ function categorize(relPath: string): DocEntry['category'] {
     || normalized.startsWith('scripts/idl/')
   ) {
     return 'artifact';
-  }
-  if (
-    normalized === 'REFACTOR.MD'
-    || normalized === 'REFACTOR-MASTER-PROGRAM.md'
-  ) {
-    return 'planning';
   }
   if (
     normalized.startsWith('runtime/docs/')

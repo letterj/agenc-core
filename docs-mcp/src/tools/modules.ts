@@ -169,7 +169,7 @@ export function registerModuleTools(server: McpServer, docs: Map<string, DocEntr
       }
 
       const lines = [
-        'Runtime scope note: this helper summarizes runtime module patterns only. Use the indexed docs, `REFACTOR.MD`, and `REFACTOR-MASTER-PROGRAM.md` for whole-repository planning authority.',
+        'Runtime scope note: this helper summarizes runtime module patterns only. Use the indexed docs and the architecture documentation for whole-repository planning authority.',
         '',
         `# Module: ${moduleName}/`,
         '',

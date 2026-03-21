@@ -12,7 +12,7 @@ The runtime CLI also provides operator bootstrap and diagnostics commands. All t
 
 ### 1) onboard
 
-Generate a runtime config file (default: `.agenc-runtime.json`) and run basic environment checks.
+Generate or refresh operator config under `~/.agenc/config.json` and run basic environment checks.
 
 ```bash
 agenc-runtime onboard \

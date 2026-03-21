@@ -1,6 +1,6 @@
 # System Overview
 
-AgenC is a privacy-preserving AI agent coordination protocol built on Solana. The system consists of 5 packages with distinct responsibilities.
+AgenC is a privacy-preserving AI agent coordination protocol built on Solana. This document is an architecture slice, not a full `agenc-core` repo map. For whole-repo navigation, use [../CODEBASE_MAP.md](../CODEBASE_MAP.md).
 
 ## Component Diagram
 

@@ -38,8 +38,6 @@ const KNOWN_DOC_SOURCE_PATHS = [
   "AGENTS.md",
   "README.md",
   "CODEX.md",
-  "REFACTOR.MD",
-  "REFACTOR-MASTER-PROGRAM.md",
   ".github/PULL_REQUEST_TEMPLATE.md",
 ] as const;
 const KNOWN_HELPER_SCRIPT_PATHS = [
@@ -638,15 +636,6 @@ function buildRepoAwareGuidelines(snapshot: RepositorySnapshot): string | null {
   const lines: string[] = ["# Repository Guidelines", ""];
 
   const repoStateLines: string[] = [];
-  if (
-    hasTopFile(snapshot, "REFACTOR.MD") ||
-    hasTopFile(snapshot, "REFACTOR-MASTER-PROGRAM.md") ||
-    /refactor/i.test(currentStatus ?? "")
-  ) {
-    repoStateLines.push(
-      "- AgenC is mid-refactor; treat `REFACTOR-MASTER-PROGRAM.md` as canonical program authority and `REFACTOR.MD` as the live execution ledger before broad changes.",
-    );
-  }
   if (hasTopDirectory(snapshot, "runtime")) {
     repoStateLines.push(
       "- `runtime/` is the live control plane: daemon lifecycle, gateway, LLM/tool execution, background runs, channels, desktop bridge, observability, and CLI entrypoints.",

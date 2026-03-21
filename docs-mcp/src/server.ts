@@ -53,13 +53,11 @@ function buildScopeManifest(loaded: ReturnType<typeof loadDocs>): string {
   lines.push('- `runtime/benchmarks/**/*.json`');
   lines.push('- `scripts/idl/**/*.json`');
   lines.push('- package-local docs and changelogs under top-level packages, apps, platforms, programs, migrations, and `examples/**` when present');
-  lines.push('- root docs: `README.md`, `AGENTS.md`, `CODEX.md`, `REFACTOR.MD`, `REFACTOR-MASTER-PROGRAM.md` when present');
+  lines.push('- root docs: `README.md`, `AGENTS.md`, and `CODEX.md` when present');
   lines.push('');
   lines.push('## Important limits');
   lines.push('');
   lines.push('- This server indexes documentation and contract artifacts, not source code.');
-  lines.push('- Legacy runtime-roadmap issue/phase prompts, tools, and special aggregate resources are intentionally not registered.');
-  lines.push('- Retired roadmap and issue-map docs are not part of the indexed planning surface.');
   lines.push('- Module template/info/conventions tools remain runtime-scoped helpers and are not whole-repository planning authority.');
 
   return lines.join('\n');

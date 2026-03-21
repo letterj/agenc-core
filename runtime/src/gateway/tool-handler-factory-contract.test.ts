@@ -6,7 +6,7 @@
  * consumers can create a fully functional session tool handler using
  * only the public contract interface.
  *
- * Gate 4 — First Proven Seam (REFACTOR-MASTER-PROGRAM.md)
+ * First proven seam contract coverage for the tool-handler factory.
  */
 import { describe, it, expect, vi } from "vitest";
 import type { ControlResponse } from "./types.js";

@@ -342,25 +342,19 @@ describe("delegation-validation", () => {
           name: "system.writeFile",
           args: {
             path: "/workspace/transit-weave-ts/packages/core/src/index.ts",
-            content:
-              "export interface SimulationConfig {\n" +
-              "  // TODO: implement core models in later phases\n" +
-              "}\n",
+            content: "export interface SimulationConfig {\n}\n",
           },
           result:
-            '{"path":"/workspace/transit-weave-ts/packages/core/src/index.ts","bytesWritten":87}',
+            '{"path":"/workspace/transit-weave-ts/packages/core/src/index.ts","bytesWritten":38}',
         },
         {
           name: "system.writeFile",
           args: {
             path: "/workspace/transit-weave-ts/packages/cli/src/index.ts",
-            content:
-              "export function main(): void {\n" +
-              "  // FIXME: wire CLI commands in later phases\n" +
-              "}\n",
+            content: "export function main(): void {\n}\n",
           },
           result:
-            '{"path":"/workspace/transit-weave-ts/packages/cli/src/index.ts","bytesWritten":82}',
+            '{"path":"/workspace/transit-weave-ts/packages/cli/src/index.ts","bytesWritten":33}',
         },
       ],
     });
@@ -388,12 +382,10 @@ describe("delegation-validation", () => {
           name: "system.writeFile",
           args: {
             path: "/workspace/signal-cartography/packages/core/src/index.ts",
-            content:
-              "export const VERSION = '0.1.0';\n" +
-              "// TODO: replace scaffold exports during implementation phase.\n",
+            content: "export const VERSION = '0.1.0';\n",
           },
           result:
-            "{\"path\":\"/workspace/signal-cartography/packages/core/src/index.ts\",\"bytesWritten\":91}",
+            "{\"path\":\"/workspace/signal-cartography/packages/core/src/index.ts\",\"bytesWritten\":31}",
         },
         {
           name: "system.writeFile",

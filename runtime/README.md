@@ -40,4 +40,6 @@ Useful internal entrypoints:
 - `runtime/dist/bin/agenc-watch.js`
 - `@tetsuo-ai/runtime/operator-events`
 
-For broader operator and architecture context, start with the root [README](../README.md), [docs/RUNTIME_API.md](../docs/RUNTIME_API.md), and [REFACTOR.MD](../REFACTOR.MD).
+For broader operator and architecture context, start with the root
+[README](../README.md), [docs/RUNTIME_API.md](../docs/RUNTIME_API.md), and
+[docs/architecture/README.md](../docs/architecture/README.md).

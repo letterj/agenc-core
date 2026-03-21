@@ -7,7 +7,7 @@ export interface DocEntry {
   /** Raw markdown content */
   content: string;
   /** Document category */
-  category: 'architecture' | 'flow' | 'phase' | 'guide' | 'runbook' | 'baseline' | 'artifact' | 'planning' | 'repo-meta' | 'other';
+  category: 'architecture' | 'flow' | 'guide' | 'runbook' | 'baseline' | 'artifact' | 'repo-meta' | 'other';
 }
 
 /** A search result with relevance score */

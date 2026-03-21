@@ -110,16 +110,6 @@ for (const absPath of readWorkspaceFiles(workspaceRoot)) {
 
 const repoWideChecks = [
   {
-    relPath: "REFACTOR.MD",
-    pattern: /tools\/zk-admin|@tetsuo-ai\/zk-admin-tools|npm run zk:config|npm run zk:devnet:preflight/u,
-    reason: "still references the removed AgenC admin surface",
-  },
-  {
-    relPath: "REFACTOR-MASTER-PROGRAM.md",
-    pattern: /tools\/zk-admin|@tetsuo-ai\/zk-admin-tools|npm run zk:config|npm run zk:devnet:preflight/u,
-    reason: "still references the removed AgenC admin surface",
-  },
-  {
     relPath: "docs/MAINNET_DEPLOYMENT.md",
     pattern: /npm run zk:config/u,
     reason: "still instructs operators to use the removed AgenC admin wrapper",

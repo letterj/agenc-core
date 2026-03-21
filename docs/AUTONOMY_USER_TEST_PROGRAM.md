@@ -16,7 +16,7 @@ behavior, user-path correctness, and operator trust.
 1. Open `http://127.0.0.1:5173/`.
 2. Start a fresh chat session.
 3. Use one unique run token for the whole ladder.
-4. Copy prompts from [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt).
+4. Copy prompts from the generated workspace profile under `~/.agenc/workspace/`.
 5. After every stage, verify the expected evidence before advancing.
 
 ## Automated Watch Mode
@@ -72,7 +72,7 @@ Purpose:
 - confirm websocket transport, session creation, and plain non-tool reply behavior
 
 Prompt:
-- in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt) under `Stage 0`
+- in the generated workspace profile under `~/.agenc/workspace/` under `Stage 0`
 
 Pass:
 - a reply arrives in CHAT
@@ -90,7 +90,7 @@ Purpose:
 - prove the agent can select a tool, execute it, and ground the answer in the result
 
 Prompt:
-- in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt) under `Stage 1`
+- in the generated workspace profile under `~/.agenc/workspace/` under `Stage 1`
 
 Pass:
 - CHAT shows a real tool execution
@@ -111,7 +111,7 @@ Purpose:
 - validate ordered tool chaining and grounded verification
 
 Prompt:
-- in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt) under `Stage 2`
+- in the generated workspace profile under `~/.agenc/workspace/` under `Stage 2`
 
 Pass:
 - the file is created and read back
@@ -129,7 +129,7 @@ Purpose:
 - verify operator-facing policy preview on the live user path
 
 Action:
-- run the slash command in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt) under `Stage 3`
+- run the slash command in the generated workspace profile under `~/.agenc/workspace/` under `Stage 3`
 
 Pass:
 - CHAT returns a policy preview instead of a generic model answer
@@ -148,7 +148,7 @@ Purpose:
   and durable run state
 
 Prompt:
-- in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt) under `Stage 4`
+- in the generated workspace profile under `~/.agenc/workspace/` under `Stage 4`
 
 Pass:
 - CHAT reports a durable run/session id and a handle id
@@ -169,7 +169,7 @@ Purpose:
 - validate the operator control plane from the real UI
 
 Action:
-- follow the RUNS actions in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt) under `Stage 5`
+- follow the RUNS actions in the generated workspace profile under `~/.agenc/workspace/` under `Stage 5`
 
 Pass:
 - pause changes the run state to paused
@@ -188,7 +188,7 @@ Purpose:
 - verify that observability is complete enough for operator debugging
 
 Action:
-- follow the TRACE actions in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt) under `Stage 6`
+- follow the TRACE actions in the generated workspace profile under `~/.agenc/workspace/` under `Stage 6`
 
 Pass:
 - TRACE lists a trace for the active session
@@ -206,7 +206,7 @@ Purpose:
 - validate durable recovery under daemon restart
 
 Action:
-- follow the restart drill in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt) under `Stage 7`
+- follow the restart drill in the generated workspace profile under `~/.agenc/workspace/` under `Stage 7`
 
 Pass:
 - the session resumes
@@ -286,7 +286,7 @@ Goal:
   background control
 
 Use:
-- the `Desktop/browser` extension prompt in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt)
+- the `Desktop/browser` extension prompt in the generated workspace profile under `~/.agenc/workspace/`
 
 Watch:
 - `[8] DESKTOP`
@@ -299,7 +299,7 @@ Goal:
 - validate typed sandbox lifecycle, command execution, output grounding, and cleanup
 
 Use:
-- the `Sandbox` extension prompt in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt)
+- the `Sandbox` extension prompt in the generated workspace profile under `~/.agenc/workspace/`
 
 Watch:
 - `[1] CHAT`
@@ -312,7 +312,7 @@ Goal:
 - validate real delegation, not fake “background shell jobs” misdescribed as agents
 
 Use:
-- the `Delegation` extension prompt in [prompt.txt](/home/tetsuo/git/AgenC/prompt.txt)
+- the `Delegation` extension prompt in the generated workspace profile under `~/.agenc/workspace/`
 
 Watch:
 - `[1] CHAT`

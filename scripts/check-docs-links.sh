@@ -65,7 +65,6 @@ while IFS= read -r -d '' FILE; do
       fail "$FILE -> $LINK (resolved: $RESOLVED)"
     fi
   done < <(extract_links "$FILE")
-done < <(find docs sdk runtime mcp -name '*.md' -not -path '*/node_modules/*' -print0)
+done < <(find docs packages runtime mcp docs-mcp -name '*.md' -not -path '*/node_modules/*' -print0)
 
 exit $EXIT_CODE
-

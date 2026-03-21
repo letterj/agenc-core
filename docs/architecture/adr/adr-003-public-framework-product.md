@@ -3,11 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-03-18
 - **Owners:** Product / Runtime Architecture
-- **Supersedes:** [ADR-002](adr-002-public-contract-private-kernel-boundary.md)
 
 ## Context
 
-ADR-002 solved a real problem: the repo had public-contract surfaces and a
+The earlier private-boundary direction solved a real problem: the repo had public-contract surfaces and a
 still-public runtime posture at the same time, which made the intended
 public/private split incoherent.
 
