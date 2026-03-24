@@ -297,7 +297,6 @@ function evaluateTaskRisk(task: Task): RiskScore {
 
 ## Related Issues
 
-- #1109: Service marketplace integration with speculative execution
 - #1076: Execution sandboxing for secure speculative environments
 - #1081: Heartbeat scheduler for monitoring speculative commitments
 - #1097: Agent discovery for verifier lane assignment

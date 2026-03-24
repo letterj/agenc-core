@@ -1,21 +1,9 @@
 {
   "package": "@tetsuo-ai/runtime",
   "version": "0.1.0",
-  "generatedAt": "2026-03-16T02:41:38.699Z",
+  "generatedAt": "2026-03-24T03:09:37.251Z",
   "entryPoint": "runtime/src/index.ts",
   "exports": [
-    {
-      "name": "AcceptServiceBidInput",
-      "kind": "interface"
-    },
-    {
-      "name": "AcceptTaskBidRequest",
-      "kind": "interface"
-    },
-    {
-      "name": "AcceptTaskBidResult",
-      "kind": "interface"
-    },
     {
       "name": "ActionSchemaMap",
       "kind": "type"
@@ -284,10 +272,6 @@
       "kind": "interface"
     },
     {
-      "name": "AutoMatchTaskBidRequest",
-      "kind": "interface"
-    },
-    {
       "name": "AutonomousAgent",
       "kind": "class"
     },
@@ -297,14 +281,6 @@
     },
     {
       "name": "AutonomousAgentStats",
-      "kind": "interface"
-    },
-    {
-      "name": "AutonomousBidder",
-      "kind": "class"
-    },
-    {
-      "name": "AutonomousBidderConfig",
       "kind": "interface"
     },
     {
@@ -357,14 +333,6 @@
     },
     {
       "name": "BackgroundRunOperatorSummary",
-      "kind": "interface"
-    },
-    {
-      "name": "BalancedBidStrategy",
-      "kind": "class"
-    },
-    {
-      "name": "BalancedBidStrategyConfig",
       "kind": "interface"
     },
     {
@@ -451,30 +419,6 @@
     {
       "name": "BID_ID_MAX_LENGTH",
       "kind": "const"
-    },
-    {
-      "name": "BidAntiSpamConfig",
-      "kind": "interface"
-    },
-    {
-      "name": "BidOnServiceInput",
-      "kind": "interface"
-    },
-    {
-      "name": "BidRateLimitConfig",
-      "kind": "interface"
-    },
-    {
-      "name": "BidStatus",
-      "kind": "type"
-    },
-    {
-      "name": "BidStrategy",
-      "kind": "interface"
-    },
-    {
-      "name": "BidStrategyContext",
-      "kind": "interface"
     },
     {
       "name": "bigintReplacer",
@@ -610,14 +554,6 @@
     },
     {
       "name": "CancelProposalParams",
-      "kind": "interface"
-    },
-    {
-      "name": "CancelServiceInput",
-      "kind": "interface"
-    },
-    {
-      "name": "CancelTaskBidRequest",
       "kind": "interface"
     },
     {
@@ -858,10 +794,6 @@
       "kind": "interface"
     },
     {
-      "name": "CompleteServiceInput",
-      "kind": "interface"
-    },
-    {
       "name": "CompleteTeamCheckpointInput",
       "kind": "interface"
     },
@@ -951,11 +883,6 @@
       "signature": "(input: TeamPayoutComputationInput): TeamPayoutResult"
     },
     {
-      "name": "computeWeightedScore",
-      "kind": "function",
-      "signature": "(bid: TaskBid, candidates: readonly TaskBid[], weights: WeightedScoreWeights): WeightedScoreComputation"
-    },
-    {
       "name": "ConfigDiff",
       "kind": "interface"
     },
@@ -1018,14 +945,6 @@
     },
     {
       "name": "ConnectionManagerStats",
-      "kind": "interface"
-    },
-    {
-      "name": "ConservativeBidStrategy",
-      "kind": "class"
-    },
-    {
-      "name": "ConservativeBidStrategyConfig",
       "kind": "interface"
     },
     {
@@ -1274,14 +1193,6 @@
       "name": "createServerTools",
       "kind": "function",
       "signature": "(config?: SystemServerToolConfig): Tool[]"
-    },
-    {
-      "name": "CreateServiceRequestInput",
-      "kind": "interface"
-    },
-    {
-      "name": "CreateTaskBidRequest",
-      "kind": "interface"
     },
     {
       "name": "CreateTeamContractInput",
@@ -1797,6 +1708,10 @@
       "kind": "const"
     },
     {
+      "name": "DisputeAcceptedBidSettlement",
+      "kind": "interface"
+    },
+    {
       "name": "DisputeCancelledEvent",
       "kind": "interface"
     },
@@ -1838,10 +1753,6 @@
     },
     {
       "name": "DisputeResult",
-      "kind": "interface"
-    },
-    {
-      "name": "DisputeServiceInput",
       "kind": "interface"
     },
     {
@@ -2280,6 +2191,18 @@
     },
     {
       "name": "GatewayChannelConfig",
+      "kind": "interface"
+    },
+    {
+      "name": "GatewayChannelHealth",
+      "kind": "type"
+    },
+    {
+      "name": "GatewayChannelMode",
+      "kind": "type"
+    },
+    {
+      "name": "GatewayChannelStatus",
       "kind": "interface"
     },
     {
@@ -3008,14 +2931,6 @@
       "signature": "(): readonly PersonalityTemplate[]"
     },
     {
-      "name": "ListServiceRequestsInput",
-      "kind": "interface"
-    },
-    {
-      "name": "ListTaskBidsRequest",
-      "kind": "interface"
-    },
-    {
       "name": "LLMAuthenticationError",
       "kind": "class"
     },
@@ -3152,37 +3067,9 @@
       "kind": "const"
     },
     {
-      "name": "MarketplaceAuthorizationError",
-      "kind": "class"
-    },
-    {
-      "name": "MarketplaceMatchingError",
-      "kind": "class"
-    },
-    {
-      "name": "MarketplaceMutationInput",
-      "kind": "interface"
-    },
-    {
-      "name": "MarketplaceStateError",
-      "kind": "class"
-    },
-    {
-      "name": "MarketplaceValidationError",
-      "kind": "class"
-    },
-    {
       "name": "matchesFilter",
       "kind": "function",
       "signature": "(task: OnChainTask, agentCapabilities: bigint, filter: TaskFilterConfig): boolean"
-    },
-    {
-      "name": "MatchingPolicy",
-      "kind": "type"
-    },
-    {
-      "name": "MatchingPolicyConfig",
-      "kind": "interface"
     },
     {
       "name": "MatrixChannel",
@@ -3971,7 +3858,7 @@
     {
       "name": "parseTaskType",
       "kind": "function",
-      "signature": "(type: { exclusive?: object; collaborative?: object; competitive?: object; } | number): TaskType"
+      "signature": "(type: { exclusive?: object; collaborative?: object; competitive?: object; bidExclusive?: object; } | number): TaskType"
     },
     {
       "name": "parseTrajectoryTrace",
@@ -4210,10 +4097,6 @@
     },
     {
       "name": "PipelineToolTurnInput",
-      "kind": "interface"
-    },
-    {
-      "name": "PlaceBidOptions",
       "kind": "interface"
     },
     {
@@ -4507,15 +4390,6 @@
     {
       "name": "QueryDSLValidationError",
       "kind": "interface"
-    },
-    {
-      "name": "RankedTaskBid",
-      "kind": "interface"
-    },
-    {
-      "name": "rankTaskBids",
-      "kind": "function",
-      "signature": "(bids: readonly TaskBid[], policy: MatchingPolicyConfig): RankedTaskBid[]"
     },
     {
       "name": "rankTasks",
@@ -4896,10 +4770,6 @@
       "signature": "(input: EscalationGraphInput): EscalationGraphTransition"
     },
     {
-      "name": "ResolveServiceDisputeInput",
-      "kind": "interface"
-    },
-    {
       "name": "responseToOutput",
       "kind": "function",
       "signature": "(response: string): bigint[]"
@@ -5174,15 +5044,6 @@
       "kind": "const"
     },
     {
-      "name": "SelectTaskBidRequest",
-      "kind": "interface"
-    },
-    {
-      "name": "selectWinningBid",
-      "kind": "function",
-      "signature": "(bids: readonly TaskBid[], policy: MatchingPolicyConfig): RankedTaskBid | null"
-    },
-    {
       "name": "SemanticMemoryRetriever",
       "kind": "class"
     },
@@ -5242,34 +5103,6 @@
       "signature": "(artifact: PipelineQualityArtifact): string"
     },
     {
-      "name": "ServiceBid",
-      "kind": "interface"
-    },
-    {
-      "name": "ServiceMarketplace",
-      "kind": "class"
-    },
-    {
-      "name": "ServiceMarketplaceConfig",
-      "kind": "interface"
-    },
-    {
-      "name": "ServiceRequest",
-      "kind": "interface"
-    },
-    {
-      "name": "ServiceRequestRecord",
-      "kind": "interface"
-    },
-    {
-      "name": "ServiceRequestSnapshot",
-      "kind": "interface"
-    },
-    {
-      "name": "ServiceRequestStatus",
-      "kind": "type"
-    },
-    {
       "name": "Session",
       "kind": "interface"
     },
@@ -5312,10 +5145,6 @@
     {
       "name": "SessionScope",
       "kind": "type"
-    },
-    {
-      "name": "SetTaskOwnerRequest",
-      "kind": "interface"
     },
     {
       "name": "signAgentMessage",
@@ -5576,10 +5405,6 @@
     },
     {
       "name": "StalePidResult",
-      "kind": "interface"
-    },
-    {
-      "name": "StartServiceInput",
       "kind": "interface"
     },
     {
@@ -5926,38 +5751,6 @@
       "kind": "const"
     },
     {
-      "name": "TaskBid",
-      "kind": "interface"
-    },
-    {
-      "name": "TaskBidBookSnapshot",
-      "kind": "interface"
-    },
-    {
-      "name": "TaskBidBookState",
-      "kind": "interface"
-    },
-    {
-      "name": "TaskBidInput",
-      "kind": "interface"
-    },
-    {
-      "name": "TaskBidMarketplace",
-      "kind": "class"
-    },
-    {
-      "name": "TaskBidMarketplaceConfig",
-      "kind": "interface"
-    },
-    {
-      "name": "TaskBidSelection",
-      "kind": "interface"
-    },
-    {
-      "name": "TaskBidUpdateInput",
-      "kind": "interface"
-    },
-    {
       "name": "TaskCancelledEvent",
       "kind": "interface"
     },
@@ -5967,6 +5760,14 @@
     },
     {
       "name": "TaskCompletedEvent",
+      "kind": "interface"
+    },
+    {
+      "name": "TaskCompletionAcceptedBidSettlement",
+      "kind": "interface"
+    },
+    {
+      "name": "TaskCompletionOptions",
       "kind": "interface"
     },
     {
@@ -6489,10 +6290,6 @@
       "kind": "class"
     },
     {
-      "name": "UpdateTaskBidRequest",
-      "kind": "interface"
-    },
-    {
       "name": "UpsertMemoryNodeInput",
       "kind": "interface"
     },
@@ -6825,14 +6622,6 @@
     {
       "name": "WebhookRouteRegistry",
       "kind": "class"
-    },
-    {
-      "name": "WeightedScoreWeights",
-      "kind": "interface"
-    },
-    {
-      "name": "WeightedScoringBreakdown",
-      "kind": "interface"
     },
     {
       "name": "WeightedTeamPayoutConfig",

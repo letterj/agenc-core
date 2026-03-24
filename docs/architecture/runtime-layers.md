@@ -19,7 +19,6 @@ flowchart TB
     subgraph L6["Layer 6: Specialized"]
         policy["policy/\nPolicyEngine"]
         team["team/\nTeamContractEngine"]
-        marketplace["marketplace/\nTaskBidMarketplace"]
         eval_mod["eval/\nBenchmarks + Mutations"]
         replay["replay/\nReplayStore + Projector"]
         telemetry["telemetry/\nMetrics + Sinks"]
@@ -68,7 +67,6 @@ flowchart TB
     %% Layer 6 → lower
     policy --> types
     team --> task
-    marketplace --> task
     eval_mod --> llm
     eval_mod --> tools
     replay --> events
@@ -153,7 +151,6 @@ flowchart TB
 |--------|--------------|-------------|-------|
 | `policy/` | `PolicyEngine` | — | ~40 |
 | `team/` | `TeamContractEngine`, `computeTeamPayout` | — | ~50 |
-| `marketplace/` | `TaskBidMarketplace`, bid strategies | — | ~60 |
 | `eval/` | `BenchmarkRunner`, `MutationRunner` | — | ~80 |
 | `replay/` | `ReplayStore`, `ReplayProjector`, `IncidentReconstructor` | — | ~70 |
 | `telemetry/` | `UnifiedTelemetryCollector`, `NoopTelemetryCollector` | — | ~30 |

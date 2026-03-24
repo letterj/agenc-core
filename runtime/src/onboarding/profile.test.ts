@@ -31,7 +31,7 @@ function makeAnswers(
 
 describe("onboarding profile", () => {
   it("hydrates onboarding defaults from an existing gateway config", () => {
-    const existingConfig: GatewayConfig = {
+    const existingConfig = {
       gateway: { port: 3100 },
       agent: { name: "Scout" },
       connection: {
@@ -46,7 +46,7 @@ describe("onboarding profile", () => {
       desktop: { enabled: true },
       marketplace: { enabled: false },
       social: { enabled: true },
-    };
+    } as GatewayConfig & { marketplace?: { enabled?: boolean } };
 
     const defaults = createDefaultOnboardingAnswers(existingConfig);
 
@@ -66,7 +66,9 @@ describe("onboarding profile", () => {
     expect(profile.config.llm?.provider).toBe("grok");
     expect(profile.config.llm?.apiKey).toBe("xai-test-key");
     expect(profile.config.workspace?.hostPath).toBe(getDefaultWorkspacePath());
-    expect(profile.config.marketplace?.enabled).toBe(true);
+    expect(
+      (profile.config as GatewayConfig & { marketplace?: unknown }).marketplace,
+    ).toBeUndefined();
     expect(profile.config.social?.enabled).toBe(false);
     expect(profile.workspaceFiles[WORKSPACE_FILES.AGENT]).toContain(
       "## Mission",

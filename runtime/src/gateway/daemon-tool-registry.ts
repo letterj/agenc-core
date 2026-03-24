@@ -3,7 +3,7 @@
  *
  * Extracted from daemon.ts to reduce file size.
  * Contains the createDaemonToolRegistry() function that creates and populates
- * the ToolRegistry with all system, marketplace, social, MCP, and protocol tools.
+ * the ToolRegistry with all system, social, MCP, and protocol tools.
  *
  * @module
  */
@@ -101,7 +101,6 @@ export interface ToolRegistryDeps {
       source: string;
     }): Promise<boolean>;
   } | null;
-  getMarketplace(): unknown;
   getAgentDiscovery(): unknown;
   getAgentMessaging(): unknown;
   getAgentFeed(): unknown;
@@ -291,26 +290,6 @@ export async function createDaemonToolRegistry(
   );
   registry.register(createExecuteWithAgentTool());
   const walletResult = await loadWallet(config);
-  const marketplaceActorId = walletResult
-    ? Buffer.from(walletResult.agentId).toString("hex")
-    : "gateway-agent";
-
-  if (config.marketplace?.enabled) {
-    try {
-      const { createMarketplaceTools } =
-        await import("../tools/marketplace/index.js");
-      registry.registerAll(
-        createMarketplaceTools({
-          getMarketplace: () => deps.getMarketplace() as any,
-          actorId: marketplaceActorId,
-          logger,
-        }),
-      );
-    } catch (error) {
-      logger.warn?.("Marketplace tools unavailable:", error);
-    }
-  }
-
   if (config.social?.enabled) {
     try {
       const { createSocialTools } = await import("../tools/social/index.js");

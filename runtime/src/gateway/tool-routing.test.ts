@@ -241,7 +241,6 @@ const TOOLS: LLMTool[] = [
   makeTool("agenc.getTask", "Read task details"),
   makeTool("agenc.getAgent", "Read on-chain agent registration details"),
   makeTool("agenc.registerAgent", "Register the signer wallet as an on-chain agent"),
-  makeTool("marketplace.createService", "Create an on-chain marketplace service request"),
   makeTool("mcp.solana-fender.security_check_file", "Check the anchor file for security issues"),
   makeTool("mcp.doom.start_game", "Start a Doom scenario"),
   makeTool("mcp.doom.stop_game", "Stop the current Doom game"),
@@ -499,7 +498,6 @@ describe("ToolRouter", () => {
     expect(decision.routedToolNames).not.toContain("agenc.createTask");
     expect(decision.routedToolNames).not.toContain("agenc.getAgent");
     expect(decision.routedToolNames).not.toContain("agenc.registerAgent");
-    expect(decision.routedToolNames).not.toContain("marketplace.createService");
     expect(decision.routedToolNames).not.toContain("social.sendMessage");
     expect(decision.routedToolNames).not.toContain("social.getReputation");
     expect(decision.routedToolNames).not.toContain("social.postToFeed");
@@ -732,7 +730,7 @@ describe("ToolRouter", () => {
     const decision = router.route({
       sessionId: "s-protocol-tools",
       messageText:
-        "Use agenc.getAgent, agenc.registerAgent, agenc.createTask, marketplace.createService, " +
+        "Use agenc.getAgent, agenc.registerAgent, agenc.createTask, " +
         "and mcp.solana-fender.security_check_file for an explicit Solana protocol workflow.",
       history: [],
     });
@@ -740,7 +738,6 @@ describe("ToolRouter", () => {
     expect(decision.routedToolNames).toContain("agenc.createTask");
     expect(decision.routedToolNames).toContain("agenc.getAgent");
     expect(decision.routedToolNames).toContain("agenc.registerAgent");
-    expect(decision.routedToolNames).toContain("marketplace.createService");
     expect(decision.routedToolNames).toContain(
       "mcp.solana-fender.security_check_file",
     );

@@ -1,5 +1,5 @@
 /**
- * Feature wiring for the daemon: marketplace, social, and autonomous features.
+ * Feature wiring for the daemon: social and autonomous features.
  *
  * Extracted from daemon.ts to reduce file size.
  *
@@ -29,8 +29,6 @@ export interface FeatureWiringContext {
   readonly logger: Logger;
   // Connection
   connectionManager: import("../connection/manager.js").ConnectionManager | null;
-  // Marketplace
-  marketplace: import("../marketplace/service-marketplace.js").ServiceMarketplace | null;
   // Social
   agentDiscovery: import("../social/discovery.js").AgentDiscovery | null;
   agentMessaging: import("../social/messaging.js").AgentMessaging | null;
@@ -59,41 +57,6 @@ export interface FeatureWiringContext {
   llmProviders: LLMProvider[];
   // Social message handler
   handleIncomingSocialMessage?: (message: import("../social/messaging-types.js").AgentMessage) => void;
-}
-
-// ============================================================================
-// wireMarketplace
-// ============================================================================
-
-export async function wireMarketplace(
-  config: GatewayConfig,
-  ctx: FeatureWiringContext,
-): Promise<void> {
-  if (!config.marketplace?.enabled) return;
-
-  try {
-    const { TaskBidMarketplace } = await import("../marketplace/engine.js");
-    const { ServiceMarketplace } =
-      await import("../marketplace/service-marketplace.js");
-
-    const bidMarketplace = new TaskBidMarketplace({
-      antiSpam: config.marketplace.antiSpam,
-      defaultPolicy: config.marketplace.defaultMatchingPolicy
-        ? { policy: config.marketplace.defaultMatchingPolicy }
-        : undefined,
-      authorizedSelectorIds: config.marketplace.authorizedSelectorIds,
-    });
-
-    ctx.marketplace = new ServiceMarketplace({
-      bidMarketplace,
-    });
-
-    ctx.logger.info(
-      "Marketplace initialized (TaskBidMarketplace + ServiceMarketplace)",
-    );
-  } catch (err) {
-    ctx.logger.warn?.("Marketplace initialization failed:", err);
-  }
 }
 
 // ============================================================================

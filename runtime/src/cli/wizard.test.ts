@@ -66,13 +66,8 @@ describe("wizard: generateDefaultConfig", () => {
     expect(config.llm?.apiKey).toBe("test-key");
   });
 
-  it("preserves marketplace and optional runtime overrides in generated config", () => {
+  it("preserves optional runtime overrides in generated config", () => {
     const config = generateDefaultConfig({
-      marketplace: {
-        enabled: true,
-        defaultMatchingPolicy: "weighted_score",
-        authorizedSelectorIds: ["selector-1"],
-      },
       voice: {
         enabled: true,
       },
@@ -84,11 +79,6 @@ describe("wizard: generateDefaultConfig", () => {
       },
     });
 
-    expect(config.marketplace).toEqual({
-      enabled: true,
-      defaultMatchingPolicy: "weighted_score",
-      authorizedSelectorIds: ["selector-1"],
-    });
     expect(config.voice).toEqual({ enabled: true });
     expect(config.telemetry).toEqual({ enabled: true });
     expect(config.mcp).toEqual({ servers: [] });

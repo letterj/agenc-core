@@ -551,16 +551,6 @@ export interface GatewayApprovalConfig {
   resolverSigningKey?: string;
 }
 
-export interface GatewayMarketplaceConfig {
-  enabled?: boolean;
-  defaultMatchingPolicy?: "best_price" | "best_eta" | "weighted_score";
-  antiSpam?: {
-    maxActiveBidsPerBidderPerTask?: number;
-    maxBidsPerTask?: number;
-  };
-  authorizedSelectorIds?: string[];
-}
-
 export interface GatewaySocialConfig {
   enabled?: boolean;
   discoveryEnabled?: boolean;
@@ -676,8 +666,6 @@ export interface GatewayConfig {
   policy?: GatewayPolicyConfig;
   /** Approval engine: SLAs and escalation behavior for gated tool calls. */
   approvals?: GatewayApprovalConfig;
-  /** Marketplace: task bidding between agents */
-  marketplace?: GatewayMarketplaceConfig;
   /** Social module: discovery, messaging, feed, reputation, collaboration */
   social?: GatewaySocialConfig;
   /** Runtime autonomy controls, notifications, and rollout policy. */

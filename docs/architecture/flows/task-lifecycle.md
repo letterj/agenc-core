@@ -125,6 +125,5 @@ stateDiagram-v2
 ## Related Issues
 
 - #1053: Gateway infrastructure for task submission and monitoring
-- #1109: Service marketplace integration for task discovery
 - #1104: Reputation integration with task completion metrics
 - #1076: Execution sandboxing for secure task execution

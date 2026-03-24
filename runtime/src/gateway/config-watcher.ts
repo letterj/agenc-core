@@ -136,11 +136,6 @@ const VALID_MCP_TRUST_TIERS: ReadonlySet<string> = new Set([
   "sandboxed",
   "untrusted",
 ]);
-const VALID_MATCHING_POLICIES: ReadonlySet<string> = new Set([
-  "best_price",
-  "best_eta",
-  "weighted_score",
-]);
 const VALID_MESSAGING_MODES: ReadonlySet<string> = new Set([
   "on-chain",
   "off-chain",
@@ -1314,57 +1309,6 @@ function validateProcessBudget(
     value.maxConcurrent <= 0
   ) {
     errors.push(`${path}.maxConcurrent must be a finite positive integer`);
-  }
-}
-
-function validateMarketplaceSection(
-  marketplace: unknown,
-  errors: string[],
-): void {
-  if (marketplace === undefined) return;
-  if (!isRecord(marketplace)) {
-    errors.push("marketplace must be an object");
-    return;
-  }
-  if (
-    marketplace.enabled !== undefined &&
-    typeof marketplace.enabled !== "boolean"
-  ) {
-    errors.push("marketplace.enabled must be a boolean");
-  }
-  if (marketplace.defaultMatchingPolicy !== undefined) {
-    requireOneOf(
-      marketplace.defaultMatchingPolicy,
-      "marketplace.defaultMatchingPolicy",
-      VALID_MATCHING_POLICIES,
-      errors,
-    );
-  }
-  if (marketplace.antiSpam !== undefined) {
-    if (!isRecord(marketplace.antiSpam)) {
-      errors.push("marketplace.antiSpam must be an object");
-    } else {
-      if (
-        marketplace.antiSpam.maxActiveBidsPerBidderPerTask !== undefined &&
-        typeof marketplace.antiSpam.maxActiveBidsPerBidderPerTask !== "number"
-      ) {
-        errors.push(
-          "marketplace.antiSpam.maxActiveBidsPerBidderPerTask must be a number",
-        );
-      }
-      if (
-        marketplace.antiSpam.maxBidsPerTask !== undefined &&
-        typeof marketplace.antiSpam.maxBidsPerTask !== "number"
-      ) {
-        errors.push("marketplace.antiSpam.maxBidsPerTask must be a number");
-      }
-    }
-  }
-  if (
-    marketplace.authorizedSelectorIds !== undefined &&
-    !isStringArray(marketplace.authorizedSelectorIds)
-  ) {
-    errors.push("marketplace.authorizedSelectorIds must be an array of strings");
   }
 }
 
@@ -2597,7 +2541,6 @@ export function validateGatewayConfig(obj: unknown): ValidationResult {
   validateMcpSection(obj.mcp, errors);
   validatePolicySection(obj.policy, errors);
   validateApprovalsSection(obj.approvals, errors);
-  validateMarketplaceSection(obj.marketplace, errors);
   validateSocialSection(obj.social, errors);
   validateAutonomySection(obj.autonomy, errors);
   validatePluginsSection(obj.plugins, errors);
@@ -2618,7 +2561,6 @@ const UNSAFE_KEYS = new Set([
   "agent.capabilities",
   "agent.name",
   "desktop.enabled",
-  "marketplace.enabled",
   "social.enabled",
 ]);
 const UNSAFE_KEY_PREFIXES = ["channels.", "plugins."] as const;

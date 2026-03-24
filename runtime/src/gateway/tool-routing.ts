@@ -376,9 +376,6 @@ const MCP_TERMS = new Set([
 const AGENC_PROTOCOL_INTENT_RE =
   /\b(?:agenc\s+(?:protocol|task|tasks|agent|agent\s+registration)|on-?chain|solana|lamports?|stake|reputation|slashing|escrow|pda|devnet|mainnet|proof(?:s)?\s+of\s+completion|claim(?:able|ing)?\s+tasks?|agent\s+registration|register(?:ed|ing)?\s+(?:the\s+)?agent|capabilit(?:y|ies))\b/i;
 
-const MARKETPLACE_PROTOCOL_INTENT_RE =
-  /\b(?:marketplace|service\s+request|service\s+bids?|agent\s+marketplace)\b/i;
-
 const SOCIAL_PROTOCOL_INTENT_RE =
   /\b(?:social(?:\.[a-z_]+)?|message(?:s|ing)?|inbox|feed|recipient|collaboration|reputation|agent\s+message|send\s+message|recent\s+messages?)\b/i;
 
@@ -472,7 +469,6 @@ interface ExplicitToolMention {
 
 function isProtocolScopedTool(toolName: string): boolean {
   return toolName.startsWith("agenc.") ||
-    toolName.startsWith("marketplace.") ||
     toolName.startsWith("social.") ||
     toolName.startsWith("wallet.") ||
     toolName.startsWith("mcp.solana-fender.");
@@ -488,9 +484,6 @@ function protectedToolIntentSatisfied(
   }
   if (toolName.startsWith("agenc.")) {
     return AGENC_PROTOCOL_INTENT_RE.test(messageText);
-  }
-  if (toolName.startsWith("marketplace.")) {
-    return MARKETPLACE_PROTOCOL_INTENT_RE.test(messageText);
   }
   if (toolName.startsWith("social.")) {
     return SOCIAL_PROTOCOL_INTENT_RE.test(messageText);

@@ -40,6 +40,17 @@ function cleanList(
   return normalized.length > 0 ? normalized : [...fallback];
 }
 
+function readLegacyMarketplaceEnabled(
+  config: GatewayConfig | undefined,
+): boolean | undefined {
+  const legacyConfig = config as (GatewayConfig & {
+    marketplace?: { enabled?: boolean };
+  }) | undefined;
+  return typeof legacyConfig?.marketplace?.enabled === "boolean"
+    ? legacyConfig.marketplace.enabled
+    : undefined;
+}
+
 function describeToolPosture(posture: OnboardingAnswers["toolPosture"]): string {
   switch (posture) {
     case "guarded":
@@ -325,7 +336,7 @@ export function createDefaultOnboardingAnswers(
       existingConfig?.connection?.rpcUrl,
       "https://api.devnet.solana.com",
     ),
-    marketplaceEnabled: existingConfig?.marketplace?.enabled ?? true,
+    marketplaceEnabled: readLegacyMarketplaceEnabled(existingConfig) ?? true,
     socialEnabled: existingConfig?.social?.enabled ?? false,
   };
 }
@@ -349,7 +360,13 @@ export function buildOnboardingProfile(
     walletPath: cleanText(answers.walletPath ?? undefined) || null,
   };
 
-  const base = baseConfig ? structuredClone(baseConfig) : generateDefaultConfig();
+  const baseSource = baseConfig
+    ? structuredClone(baseConfig)
+    : generateDefaultConfig();
+  const {
+    marketplace: _legacyMarketplace,
+    ...base
+  } = baseSource as GatewayConfig & { marketplace?: unknown };
   const connection = {
     ...base.connection,
     rpcUrl: normalizedAnswers.rpcUrl,
@@ -380,10 +397,6 @@ export function buildOnboardingProfile(
     desktop: {
       ...(base.desktop ?? defaultDesktopSandboxConfig()),
       enabled: normalizedAnswers.desktopAutomationEnabled,
-    },
-    marketplace: {
-      ...(base.marketplace ?? {}),
-      enabled: normalizedAnswers.marketplaceEnabled,
     },
     social: {
       ...(base.social ?? {}),

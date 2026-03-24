@@ -170,6 +170,5 @@ stateDiagram-v2
 
 - #1081: Heartbeat scheduler for autonomous agent health monitoring
 - #1063: ChatExecutor for conversational task interfaces
-- #1109: Service marketplace integration for task discovery
 - #1076: Execution sandboxing for secure autonomous execution
 - #1097: Agent discovery optimization for capability matching

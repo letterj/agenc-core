@@ -1011,7 +1011,7 @@ export async function runInteractiveOnboarding(
           step: 16,
           totalSteps,
           title: "Marketplace Mode",
-          subtitle: "Enable the marketplace/task posture in the generated config and workspace files.",
+          subtitle: "Enable the marketplace/task posture in the generated workspace files.",
           allowBack: true,
           initialValue: answers.marketplaceEnabled ? "enabled" : "disabled",
           options: [

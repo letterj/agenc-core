@@ -286,7 +286,6 @@ import {
   createDaemonToolRegistry,
 } from "./daemon-tool-registry.js";
 import {
-  wireMarketplace as wireMarketplaceStandalone,
   wireSocial as wireSocialStandalone,
   wireAutonomousFeatures as wireAutonomousFeaturesStandalone,
   type FeatureWiringContext,
@@ -1120,9 +1119,6 @@ export class DaemonManager {
   private readonly _foregroundSessionLocks = new Set<string>();
   private _policyEngine: import("../policy/engine.js").PolicyEngine | null =
     null;
-  private _marketplace:
-    | import("../marketplace/service-marketplace.js").ServiceMarketplace
-    | null = null;
   private _agentDiscovery:
     | import("../social/discovery.js").AgentDiscovery
     | null = null;
@@ -1608,8 +1604,7 @@ export class DaemonManager {
       // Wire up autonomous features (curiosity, self-learning, meta-planner, proactive comms)
       await this.wireAutonomousFeatures(gatewayConfig);
 
-      // Wire up subsystems (marketplace, social module)
-      await this.wireMarketplace(gatewayConfig);
+      // Wire up subsystems (social module)
       await this.wireSocial(gatewayConfig);
 
       try {
@@ -3130,7 +3125,6 @@ export class DaemonManager {
     return {
       logger: this.logger,
       connectionManager: this._connectionManager,
-      marketplace: this._marketplace as any,
       agentDiscovery: this._agentDiscovery as any,
       agentMessaging: this._agentMessaging as any,
       agentMessagingUnsubscribe: this._agentMessagingUnsubscribe,
@@ -3158,7 +3152,6 @@ export class DaemonManager {
   }
 
   private _applyFeatureWiringContext(ctx: FeatureWiringContext): void {
-    this._marketplace = ctx.marketplace as any;
     this._agentDiscovery = ctx.agentDiscovery as any;
     this._agentMessaging = ctx.agentMessaging as any;
     this._agentMessagingUnsubscribe = ctx.agentMessagingUnsubscribe;
@@ -3170,12 +3163,6 @@ export class DaemonManager {
     this._cronScheduler = ctx.cronScheduler as any;
     this._goalManager = ctx.goalManager as any;
     this._desktopExecutor = ctx.desktopExecutor as any;
-  }
-
-  private async wireMarketplace(config: GatewayConfig): Promise<void> {
-    const ctx = this._buildFeatureWiringContext();
-    await wireMarketplaceStandalone(config, ctx);
-    this._applyFeatureWiringContext(ctx);
   }
 
   private async wireSocial(config: GatewayConfig): Promise<void> {
@@ -3454,7 +3441,6 @@ export class DaemonManager {
       configPath: this.configPath,
       yolo: this.yolo,
       getBackgroundRunSupervisor: () => this._backgroundRunSupervisor,
-      getMarketplace: () => this._marketplace,
       getAgentDiscovery: () => this._agentDiscovery,
       getAgentMessaging: () => this._agentMessaging,
       getAgentFeed: () => this._agentFeed,
@@ -5913,7 +5899,6 @@ export class DaemonManager {
       this._agentFeed = null;
       this._reputationScorer = null;
       this._collaborationProtocol = null;
-      this._marketplace = null;
       this._policyEngine = null;
       this._governanceAuditLog = null;
       if (this._sessionCredentialBroker !== null) {
@@ -6058,12 +6043,6 @@ export class DaemonManager {
 
   get proactiveCommunicator(): ProactiveCommunicator | null {
     return this._proactiveCommunicator;
-  }
-
-  get marketplace():
-    | import("../marketplace/service-marketplace.js").ServiceMarketplace
-    | null {
-    return this._marketplace;
   }
 
   get policyEngine(): import("../policy/engine.js").PolicyEngine | null {

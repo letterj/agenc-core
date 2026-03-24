@@ -134,7 +134,6 @@ export function generateDefaultConfig(
   if (overrides.desktop) result.desktop = overrides.desktop;
   if (overrides.mcp) result.mcp = overrides.mcp;
   if (overrides.approvals) result.approvals = overrides.approvals;
-  if (overrides.marketplace) result.marketplace = overrides.marketplace;
   if (overrides.social) result.social = overrides.social;
   if (overrides.autonomy) result.autonomy = overrides.autonomy;
 

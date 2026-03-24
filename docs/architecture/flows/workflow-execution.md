@@ -178,6 +178,5 @@ Optimizations are rolled out via canary deployment (10% traffic) with automatic 
 ## Related Issues
 
 - #1096: Sub-agent spawning for workflow task execution
-- #1109: Service marketplace integration for workflow tasks
 - #1081: Heartbeat scheduler for workflow health monitoring
 - #1063: ChatExecutor for interactive workflow management

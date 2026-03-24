@@ -1,6 +1,5 @@
 const PROTOCOL_ROUTED_TOOL_PREFIXES = [
   "agenc.",
-  "marketplace.",
   "social.",
   "wallet.",
   "mcp.solana-fender.",

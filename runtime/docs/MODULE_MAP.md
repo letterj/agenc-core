@@ -53,7 +53,7 @@ This file is the navigation guide for `runtime/src/`.
 
 - `dispute/` - dispute operations
 - `governance/` - governance support
-- `marketplace/` - marketplace surfaces
+- `marketplace/` - protocol marketplace serialization helpers used by the operator CLI, TUI, and web transport
 - `reputation/` - reputation mechanics
 - `social/` - social/feed surfaces
 
