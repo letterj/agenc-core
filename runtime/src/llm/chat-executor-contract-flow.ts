@@ -582,6 +582,8 @@ function analyzeLegacyCompletionTurn(
   const hasMutationProgress = mutatedArtifacts.length > 0;
   const hasResearchEvidence =
     (ctx.providerEvidence?.citations?.length ?? 0) > 0 ||
+    (ctx.providerEvidence?.serverSideToolCalls?.length ?? 0) > 0 ||
+    (ctx.providerEvidence?.serverSideToolUsage?.length ?? 0) > 0 ||
     successfulToolCalls.some((toolCall) =>
       toolCall.name.startsWith(BROWSER_TOOL_PREFIX) ||
       RESEARCH_TOOL_NAMES.has(toolCall.name),

@@ -1944,6 +1944,40 @@ describe("delegation-validation", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts research output backed by provider-native server-side tool telemetry", () => {
+    const result = validateDelegatedOutputContract({
+      spec: {
+        task: "tech_research",
+        objective:
+          "Compare Canvas API, Phaser, and PixiJS from official docs and cite sources",
+        inputContract:
+          "Return JSON with selected framework and supporting evidence",
+        requiredToolCapabilities: [PROVIDER_NATIVE_WEB_SEARCH_TOOL],
+      },
+      output: '{"selected":"pixi","why":["small","fast"]}',
+      toolCalls: [],
+      providerEvidence: {
+        serverSideToolCalls: [
+          {
+            type: "web_search_call",
+            toolType: "web_search",
+            id: "ws_123",
+            status: "completed",
+          },
+        ],
+        serverSideToolUsage: [
+          {
+            category: "SERVER_SIDE_TOOL_WEB_SEARCH",
+            toolType: "web_search",
+            count: 1,
+          },
+        ],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("treats the parent request as browser-grounded evidence context for research steps", () => {
     expect(specRequiresMeaningfulBrowserEvidence({
       task: "design_research",

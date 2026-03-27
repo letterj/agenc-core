@@ -18,7 +18,12 @@ import type {
   SubagentVerifierStepAssessment,
   SubagentVerifierDecision,
 } from "./chat-executor-types.js";
-import type { LLMMessage } from "./types.js";
+import type {
+  LLMMessage,
+  LLMProviderEvidence,
+  LLMProviderNativeServerToolCall,
+  LLMProviderServerSideToolUsageEntry,
+} from "./types.js";
 import type { ImplementationCompletionContract } from "../workflow/completion-contract.js";
 import type {
   WorkflowRequestCompletionContract,
@@ -177,11 +182,7 @@ export function evaluatePlannerDeterministicChecks(
         readonly isError?: boolean;
       }[]
       | undefined;
-    let providerEvidence:
-      | {
-        readonly citations?: readonly string[];
-      }
-      | undefined;
+    let providerEvidence: LLMProviderEvidence | undefined;
 
     if (typeof raw !== "string") {
       issues.push("missing_subagent_result");
@@ -259,19 +260,7 @@ export function evaluatePlannerDeterministicChecks(
           ? parsed.failedToolCalls
           : 0;
         const parsedProviderEvidence = parsed.providerEvidence;
-        if (
-          parsedProviderEvidence &&
-          typeof parsedProviderEvidence === "object" &&
-          !Array.isArray(parsedProviderEvidence)
-        ) {
-          const citations = Array.isArray(
-            (parsedProviderEvidence as { citations?: unknown }).citations,
-          )
-            ? (parsedProviderEvidence as { citations: unknown[] }).citations
-              .filter((entry): entry is string => typeof entry === "string")
-            : [];
-          providerEvidence = citations.length > 0 ? { citations } : undefined;
-        }
+        providerEvidence = parseStructuredProviderEvidence(parsedProviderEvidence);
         if (parsed.success === false || status === "failed") {
           issues.push("child_reported_failure");
           verdict = "retry";
@@ -772,8 +761,10 @@ function collectDeterministicImplementationToolCalls(params: {
 function collectDeterministicImplementationProviderEvidence(params: {
   readonly pipelineResult: PipelineResult;
   readonly resultStepNames?: readonly string[];
-}): { readonly citations?: readonly string[] } | undefined {
+}): LLMProviderEvidence | undefined {
   const citations = new Set<string>();
+  const serverSideToolCalls = new Map<string, LLMProviderNativeServerToolCall>();
+  const serverSideToolUsage = new Map<string, LLMProviderServerSideToolUsageEntry>();
   const resultStepNames =
     params.resultStepNames && params.resultStepNames.length > 0
       ? params.resultStepNames
@@ -785,27 +776,161 @@ function collectDeterministicImplementationProviderEvidence(params: {
       continue;
     }
     const parsed = parseJsonObjectFromText(raw);
-    const providerEvidence = parsed?.providerEvidence;
-    if (
-      !providerEvidence ||
-      typeof providerEvidence !== "object" ||
-      Array.isArray(providerEvidence)
-    ) {
+    const providerEvidence = parseStructuredProviderEvidence(parsed?.providerEvidence);
+    if (!providerEvidence) {
       continue;
     }
-    const stepCitations = Array.isArray(
-      (providerEvidence as { citations?: unknown }).citations,
-    )
-      ? (providerEvidence as { citations: unknown[] }).citations
-      : [];
-    for (const citation of stepCitations) {
+    for (const citation of providerEvidence.citations ?? []) {
       if (typeof citation === "string" && citation.trim().length > 0) {
         citations.add(citation.trim());
       }
     }
+    for (const toolCall of providerEvidence.serverSideToolCalls ?? []) {
+      serverSideToolCalls.set(
+        stableVerifierServerSideToolCallSignature(toolCall),
+        toolCall,
+      );
+    }
+    for (const entry of providerEvidence.serverSideToolUsage ?? []) {
+      const key = `${entry.category}::${entry.toolType ?? ""}`;
+      const current = serverSideToolUsage.get(key);
+      serverSideToolUsage.set(key, {
+        category: entry.category,
+        ...(entry.toolType ? { toolType: entry.toolType } : {}),
+        count: (current?.count ?? 0) + entry.count,
+      });
+    }
   }
 
-  return citations.size > 0 ? { citations: [...citations] } : undefined;
+  if (
+    citations.size === 0 &&
+    serverSideToolCalls.size === 0 &&
+    serverSideToolUsage.size === 0
+  ) {
+    return undefined;
+  }
+  return {
+    ...(citations.size > 0 ? { citations: [...citations] } : {}),
+    ...(serverSideToolCalls.size > 0
+      ? { serverSideToolCalls: [...serverSideToolCalls.values()] }
+      : {}),
+    ...(serverSideToolUsage.size > 0
+      ? { serverSideToolUsage: [...serverSideToolUsage.values()] }
+      : {}),
+  };
+}
+
+function parseStructuredProviderEvidence(
+  value: unknown,
+): LLMProviderEvidence | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const citations = Array.isArray(record.citations)
+    ? record.citations
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+    : [];
+  const serverSideToolCalls = Array.isArray(record.serverSideToolCalls)
+    ? record.serverSideToolCalls
+      .map((entry) => parseStructuredServerSideToolCall(entry))
+      .filter(
+        (entry): entry is LLMProviderNativeServerToolCall => entry !== undefined,
+      )
+    : [];
+  const serverSideToolUsage = Array.isArray(record.serverSideToolUsage)
+    ? record.serverSideToolUsage
+      .map((entry) => parseStructuredServerSideToolUsageEntry(entry))
+      .filter(
+        (entry): entry is LLMProviderServerSideToolUsageEntry =>
+          entry !== undefined,
+      )
+    : [];
+
+  if (
+    citations.length === 0 &&
+    serverSideToolCalls.length === 0 &&
+    serverSideToolUsage.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(citations.length > 0 ? { citations } : {}),
+    ...(serverSideToolCalls.length > 0 ? { serverSideToolCalls } : {}),
+    ...(serverSideToolUsage.length > 0 ? { serverSideToolUsage } : {}),
+  };
+}
+
+function parseStructuredServerSideToolCall(
+  value: unknown,
+): LLMProviderNativeServerToolCall | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.type !== "string" ||
+    typeof record.toolType !== "string"
+  ) {
+    return undefined;
+  }
+  const normalized: LLMProviderNativeServerToolCall = {
+    type: record.type as LLMProviderNativeServerToolCall["type"],
+    toolType: record.toolType as LLMProviderNativeServerToolCall["toolType"],
+    ...(typeof record.id === "string" ? { id: record.id } : {}),
+    ...(typeof record.functionName === "string"
+      ? { functionName: record.functionName }
+      : {}),
+    ...(typeof record.arguments === "string"
+      ? { arguments: record.arguments }
+      : {}),
+    ...(typeof record.status === "string" ? { status: record.status } : {}),
+    ...(record.raw && typeof record.raw === "object" && !Array.isArray(record.raw)
+      ? { raw: record.raw as Record<string, unknown> }
+      : {}),
+  };
+  return normalized;
+}
+
+function parseStructuredServerSideToolUsageEntry(
+  value: unknown,
+): LLMProviderServerSideToolUsageEntry | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.category !== "string" ||
+    typeof record.count !== "number" ||
+    !Number.isFinite(record.count) ||
+    record.count <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    category: record.category,
+    ...(typeof record.toolType === "string"
+      ? { toolType: record.toolType as LLMProviderServerSideToolUsageEntry["toolType"] }
+      : {}),
+    count: record.count,
+  };
+}
+
+function stableVerifierServerSideToolCallSignature(
+  toolCall: LLMProviderNativeServerToolCall,
+): string {
+  return safeStringify({
+    type: toolCall.type,
+    toolType: toolCall.toolType,
+    id: toolCall.id,
+    functionName: toolCall.functionName,
+    arguments: toolCall.arguments,
+    status: toolCall.status,
+  });
 }
 
 function stableVerifierToolCallSignature(toolCall: {

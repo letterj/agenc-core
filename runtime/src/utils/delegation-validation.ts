@@ -3436,7 +3436,7 @@ function getMeaningfulBrowserEvidenceFailureMessage(
 ): string | undefined {
   if (!specRequiresMeaningfulBrowserEvidence(spec)) return undefined;
   const taskIntent = classifyDelegatedTaskIntent(spec);
-  if (taskIntent === "research" && hasProviderCitationEvidence(providerEvidence)) {
+  if (taskIntent === "research" && hasProviderResearchEvidence(providerEvidence)) {
     return undefined;
   }
   if (
@@ -3462,6 +3462,22 @@ function hasProviderCitationEvidence(
   );
 }
 
+function hasProviderServerSideToolEvidence(
+  providerEvidence: DelegationValidationProviderEvidence | undefined,
+): boolean {
+  return (providerEvidence?.serverSideToolCalls?.length ?? 0) > 0 ||
+    (providerEvidence?.serverSideToolUsage ?? []).some((entry) =>
+      typeof entry.count === "number" && Number.isFinite(entry.count) && entry.count > 0
+    );
+}
+
+function hasProviderResearchEvidence(
+  providerEvidence: DelegationValidationProviderEvidence | undefined,
+): boolean {
+  return hasProviderCitationEvidence(providerEvidence) ||
+    hasProviderServerSideToolEvidence(providerEvidence);
+}
+
 function getSuccessfulToolEvidenceFailure(
   toolCalls: readonly DelegationValidationToolCall[] | undefined,
   spec?: DelegationContractSpec,
@@ -3473,7 +3489,7 @@ function getSuccessfulToolEvidenceFailure(
   if (
     spec &&
     classifyDelegatedTaskIntent(spec) === "research" &&
-    hasProviderCitationEvidence(providerEvidence)
+    hasProviderResearchEvidence(providerEvidence)
   ) {
     return undefined;
   }
@@ -3518,7 +3534,7 @@ function validateSuccessfulToolEvidence(
     if (
       specRequiresSuccessfulToolEvidence(spec) &&
       classifyDelegatedTaskIntent(spec) === "research" &&
-      hasProviderCitationEvidence(providerEvidence)
+      hasProviderResearchEvidence(providerEvidence)
     ) {
       return undefined;
     }

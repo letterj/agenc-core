@@ -2278,6 +2278,66 @@ describe("ChatExecutor", () => {
       expect(firstOptions?.toolRouting?.allowedToolNames).toEqual(["web_search"]);
     });
 
+    it("preserves provider-native server-side tool telemetry for delegated research", async () => {
+      const provider = createMockProvider("primary", {
+        chat: vi.fn().mockResolvedValue(
+          mockResponse({
+            content: '{"selected":"pixi","why":["small","fast"]}',
+            providerEvidence: {
+              serverSideToolCalls: [
+                {
+                  type: "web_search_call",
+                  toolType: "web_search",
+                  id: "ws_123",
+                  status: "completed",
+                },
+              ],
+              serverSideToolUsage: [
+                {
+                  category: "SERVER_SIDE_TOOL_WEB_SEARCH",
+                  toolType: "web_search",
+                  count: 1,
+                },
+              ],
+            },
+          }),
+        ),
+      });
+
+      const executor = new ChatExecutor({
+        providers: [provider],
+        allowedTools: ["web_search"],
+      });
+      const result = await executor.execute(
+        createParams({
+          requiredToolEvidence: {
+            maxCorrectionAttempts: 1,
+            delegationSpec: {
+              task: "tech_research",
+              objective:
+                "Compare Canvas API, Phaser, and PixiJS from official docs",
+              inputContract:
+                "Return JSON with selected framework and supporting evidence",
+            },
+          },
+        }),
+      );
+
+      expect(result.stopReason).toBe("completed");
+      expect(result.providerEvidence?.serverSideToolCalls).toEqual([
+        expect.objectContaining({
+          type: "web_search_call",
+          toolType: "web_search",
+        }),
+      ]);
+      expect(result.providerEvidence?.serverSideToolUsage).toEqual([
+        expect.objectContaining({
+          category: "SERVER_SIDE_TOOL_WEB_SEARCH",
+          count: 1,
+        }),
+      ]);
+    });
+
     it("forces an editor-first tool choice for implementation delegation", async () => {
       const provider = createMockProvider("primary", {
         chat: vi

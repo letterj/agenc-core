@@ -205,6 +205,37 @@ describe("evaluateSubagentDeterministicChecks", () => {
       "missing_successful_tool_evidence",
     );
   });
+
+  it("accepts provider-native server-side tool telemetry as research evidence", () => {
+    const decision = evaluateSubagentDeterministicChecks(
+      [createStep({
+        name: "tech_research",
+        objective:
+          "Compare Canvas API, Phaser, and PixiJS from official docs",
+        inputContract:
+          "Return JSON with selected framework and supporting evidence",
+        acceptanceCriteria: ["Ground the choice in official sources"],
+        requiredToolCapabilities: ["web_search"],
+      })],
+      {
+        status: "completed",
+        context: {
+          results: {
+            tech_research:
+              '{"success":true,"status":"completed","output":"{\\"selected\\":\\"pixi\\",\\"why\\":[\\"small\\",\\"fast\\"],\\"evidence\\":[\\"official docs reviewed via provider-native web search\\"]}","toolCalls":0,"providerEvidence":{"serverSideToolCalls":[{"type":"web_search_call","toolType":"web_search","status":"completed","id":"ws_123"}],"serverSideToolUsage":[{"category":"SERVER_SIDE_TOOL_WEB_SEARCH","toolType":"web_search","count":1}]}}',
+          },
+        },
+        completedSteps: 1,
+        totalSteps: 1,
+      },
+      createPlannerContext(),
+    );
+
+    expect(decision.overall).toBe("pass");
+    expect(decision.steps[0]?.issues).not.toContain(
+      "missing_successful_tool_evidence",
+    );
+  });
 });
 
 describe("buildPlannerWorkflowAdmission", () => {
