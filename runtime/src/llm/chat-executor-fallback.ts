@@ -46,21 +46,25 @@ import type { RuntimeFaultInjector } from "../eval/fault-injection.js";
 // Helper
 // ============================================================================
 
-function shouldBypassStreamingForForcedSingleToolTurn(
+function shouldBypassStreamingForModelCall(
   options: LLMChatOptions | undefined,
+  callPhase: ChatCallUsageRecord["phase"] | undefined,
 ): boolean {
+  const isExplicitToolTurn =
+    options?.toolChoice === "required" ||
+    (typeof options?.toolChoice === "object" &&
+      options.toolChoice !== null &&
+      options.toolChoice.type === "function");
+  if (callPhase === "tool_followup" && isExplicitToolTurn) {
+    return true;
+  }
   if (!options?.toolRouting?.allowedToolNames) {
     return false;
   }
   if (options.toolRouting.allowedToolNames.length !== 1) {
     return false;
   }
-  if (options.toolChoice === "required") {
-    return true;
-  }
-  return typeof options.toolChoice === "object" &&
-    options.toolChoice !== null &&
-    options.toolChoice.type === "function";
+  return isExplicitToolTurn;
 }
 
 // ============================================================================
@@ -174,7 +178,7 @@ export async function callWithFallback(
   let lastError: Error | undefined;
   const transport =
     onStreamChunk !== undefined &&
-    !shouldBypassStreamingForForcedSingleToolTurn(baseChatOptions)
+    !shouldBypassStreamingForModelCall(baseChatOptions, options?.callPhase)
       ? "chat_stream"
       : "chat";
 

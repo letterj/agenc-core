@@ -81,6 +81,15 @@ interface StatefulSessionAnchor {
   updatedAt: number;
 }
 
+interface ProviderResponseTraceMeta {
+  readonly providerRequestId?: string;
+  readonly providerResponseId?: string;
+  readonly responseStatus?: number;
+  readonly responseStatusText?: string;
+  readonly responseUrl?: string;
+  readonly responseHeaders?: Record<string, string>;
+}
+
 function createStreamTimeoutError(providerName: string, timeoutMs: number): Error {
   const err = new Error(
     `${providerName} stream stalled after ${timeoutMs}ms without a chunk`,
@@ -100,22 +109,91 @@ function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
   return Math.max(1, Math.floor(timeoutMs));
 }
 
+type RequestTimeoutSource =
+  | "provider_default"
+  | "provider_config"
+  | "call_override";
+
+interface RequestTimeoutResolution {
+  readonly configuredProviderTimeoutMs: number | null;
+  readonly callOverrideTimeoutMs: number | null;
+  readonly timeoutMs: number | undefined;
+  readonly source: RequestTimeoutSource;
+}
+
+function normalizeConfiguredTimeoutMs(
+  timeoutMs: number | undefined,
+): number | null {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return null;
+  }
+  if (timeoutMs <= 0) {
+    return 0;
+  }
+  return Math.max(1, Math.floor(timeoutMs));
+}
+
 function resolveRequestTimeoutMs(
   providerTimeoutMs: number | undefined,
   callTimeoutMs: number | undefined,
-): number | undefined {
-  const normalizedProviderTimeoutMs = normalizeTimeoutMs(providerTimeoutMs);
-  if (typeof callTimeoutMs !== "number" || !Number.isFinite(callTimeoutMs)) {
-    return normalizedProviderTimeoutMs;
+): RequestTimeoutResolution {
+  const configuredProviderTimeoutMs =
+    normalizeConfiguredTimeoutMs(providerTimeoutMs);
+  const callOverrideTimeoutMs = normalizeConfiguredTimeoutMs(callTimeoutMs);
+
+  if (callOverrideTimeoutMs !== null) {
+    if (callOverrideTimeoutMs === 0) {
+      return {
+        configuredProviderTimeoutMs,
+        callOverrideTimeoutMs,
+        timeoutMs: undefined,
+        source: "call_override",
+      };
+    }
+    if (
+      configuredProviderTimeoutMs === null ||
+      configuredProviderTimeoutMs === 0
+    ) {
+      return {
+        configuredProviderTimeoutMs,
+        callOverrideTimeoutMs,
+        timeoutMs: callOverrideTimeoutMs,
+        source: "call_override",
+      };
+    }
+    return {
+      configuredProviderTimeoutMs,
+      callOverrideTimeoutMs,
+      timeoutMs: Math.max(
+        1,
+        Math.min(configuredProviderTimeoutMs, callOverrideTimeoutMs),
+      ),
+      source: "call_override",
+    };
   }
-  if (callTimeoutMs <= 0) {
-    return undefined;
+
+  if (configuredProviderTimeoutMs === 0) {
+    return {
+      configuredProviderTimeoutMs,
+      callOverrideTimeoutMs,
+      timeoutMs: undefined,
+      source: "provider_config",
+    };
   }
-  const normalizedCallTimeoutMs = Math.max(1, Math.floor(callTimeoutMs));
-  if (normalizedProviderTimeoutMs === undefined) {
-    return normalizedCallTimeoutMs;
+  if (configuredProviderTimeoutMs !== null) {
+    return {
+      configuredProviderTimeoutMs,
+      callOverrideTimeoutMs,
+      timeoutMs: configuredProviderTimeoutMs,
+      source: "provider_config",
+    };
   }
-  return Math.max(1, Math.min(normalizedProviderTimeoutMs, normalizedCallTimeoutMs));
+  return {
+    configuredProviderTimeoutMs,
+    callOverrideTimeoutMs,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    source: "provider_default",
+  };
 }
 
 async function nextStreamChunkWithTimeout<T>(
@@ -356,7 +434,7 @@ function buildProviderRequestTraceContext(
   requestMetrics: LLMRequestMetrics,
   statefulDiagnostics?: LLMStatefulDiagnostics,
   compactionDiagnostics?: LLMCompactionDiagnostics,
-  timeoutMs?: number,
+  timeout?: RequestTimeoutResolution,
 ): Record<string, unknown> {
   return {
     ...buildToolSelectionTraceContext(selection, toolChoice),
@@ -395,13 +473,19 @@ function buildProviderRequestTraceContext(
         compactionThreshold: compactionDiagnostics.threshold,
       }
       : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    configuredProviderTimeoutMs:
+      timeout?.configuredProviderTimeoutMs ?? null,
+    callOverrideTimeoutMs: timeout?.callOverrideTimeoutMs ?? null,
+    effectiveTimeoutMs: timeout?.timeoutMs ?? null,
+    timeoutSource: timeout?.source ?? "provider_default",
+    timeoutMs: timeout?.timeoutMs ?? null,
   };
 }
 
 function buildProviderResponseTraceContext(
   statefulDiagnostics?: LLMStatefulDiagnostics,
   compactionDiagnostics?: LLMCompactionDiagnostics,
+  responseMeta?: ProviderResponseTraceMeta,
 ): Record<string, unknown> | undefined {
   const context: Record<string, unknown> = {};
   if (statefulDiagnostics) {
@@ -418,7 +502,124 @@ function buildProviderResponseTraceContext(
       context.compactionLatestItem = compactionDiagnostics.latestItem;
     }
   }
+  if (responseMeta?.providerRequestId) {
+    context.providerRequestId = responseMeta.providerRequestId;
+  }
+  if (responseMeta?.providerResponseId) {
+    context.providerResponseId = responseMeta.providerResponseId;
+  }
+  if (responseMeta?.responseStatus !== undefined) {
+    context.responseStatus = responseMeta.responseStatus;
+  }
+  if (responseMeta?.responseStatusText) {
+    context.responseStatusText = responseMeta.responseStatusText;
+  }
+  if (responseMeta?.responseUrl) {
+    context.responseUrl = responseMeta.responseUrl;
+  }
+  if (responseMeta?.responseHeaders) {
+    context.responseHeaders = responseMeta.responseHeaders;
+  }
   return Object.keys(context).length > 0 ? context : undefined;
+}
+
+function extractProviderRequestId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const requestId =
+    (value as { _request_id?: unknown })._request_id ??
+    (value as { request_id?: unknown }).request_id ??
+    (value as { requestID?: unknown }).requestID;
+  return typeof requestId === "string" && requestId.length > 0
+    ? requestId
+    : undefined;
+}
+
+function extractProviderResponseId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const id =
+    (value as { id?: unknown }).id ??
+    (value as { response_id?: unknown }).response_id;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+function serializeResponseHeaders(
+  response: Response | undefined,
+): Record<string, string> | undefined {
+  if (!response) return undefined;
+  const entries = Array.from(response.headers.entries());
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries);
+}
+
+function buildProviderResponseMeta(input: {
+  response?: Response;
+  requestId?: string | null;
+  payload?: unknown;
+}): ProviderResponseTraceMeta | undefined {
+  const providerRequestId =
+    (typeof input.requestId === "string" && input.requestId.length > 0
+      ? input.requestId
+      : undefined) ?? extractProviderRequestId(input.payload);
+  const providerResponseId = extractProviderResponseId(input.payload);
+  const responseHeaders = serializeResponseHeaders(input.response);
+  const responseStatus = input.response?.status;
+  const responseStatusText = input.response?.statusText;
+  const responseUrl = input.response?.url;
+  if (
+    !providerRequestId &&
+    !providerResponseId &&
+    responseHeaders === undefined &&
+    responseStatus === undefined &&
+    !responseStatusText &&
+    !responseUrl
+  ) {
+    return undefined;
+  }
+  return {
+    ...(providerRequestId ? { providerRequestId } : {}),
+    ...(providerResponseId ? { providerResponseId } : {}),
+    ...(responseStatus !== undefined ? { responseStatus } : {}),
+    ...(responseStatusText ? { responseStatusText } : {}),
+    ...(responseUrl ? { responseUrl } : {}),
+    ...(responseHeaders ? { responseHeaders } : {}),
+  };
+}
+
+async function createWithResponseMetadata<T>(
+  client: unknown,
+  params: Record<string, unknown>,
+  signal: AbortSignal | undefined,
+): Promise<{
+  data: T;
+  response?: Response;
+  requestId?: string | null;
+}> {
+  const request = (client as any).responses.create(params, { signal });
+  if (
+    request &&
+    typeof request === "object" &&
+    typeof (request as { withResponse?: unknown }).withResponse === "function"
+  ) {
+    const result = await (
+      request as {
+        withResponse(): Promise<{
+          data: T;
+          response: Response;
+          request_id: string | null;
+        }>;
+      }
+    ).withResponse();
+    return {
+      data: result.data,
+      response: result.response,
+      requestId: result.request_id,
+    };
+  }
+  const data = await request as T;
+  return {
+    data,
+    requestId: extractProviderRequestId(data),
+  };
 }
 
 function emitProviderTraceEvent(
@@ -547,8 +748,10 @@ export class GrokProvider implements LLMProvider {
   private readonly statefulSessions = new Map<string, StatefulSessionAnchor>();
   private assistantPhaseSupported: boolean | undefined;
   private serverCompactionSupported: boolean | undefined;
+  private readonly configuredTimeoutMs: number | undefined;
 
   constructor(config: GrokProviderConfig) {
+    this.configuredTimeoutMs = config.timeoutMs;
     this.config = {
       ...config,
       model: config.model ?? DEFAULT_MODEL,
@@ -592,19 +795,23 @@ export class GrokProvider implements LLMProvider {
   ): Promise<LLMResponse> {
     const client = await this.ensureClient();
     let plan = this.buildRequestPlan(messages, options);
-    const requestTimeoutMs = resolveRequestTimeoutMs(
-      this.config.timeoutMs,
+    const requestTimeout = resolveRequestTimeoutMs(
+      this.configuredTimeoutMs,
       options?.timeoutMs,
     );
     const requestDeadlineAt =
-      typeof requestTimeoutMs === "number"
-        ? Date.now() + requestTimeoutMs
+      typeof requestTimeout.timeoutMs === "number"
+        ? Date.now() + requestTimeout.timeoutMs
         : Number.POSITIVE_INFINITY;
 
     const run = async (activePlan: ReturnType<GrokProvider["buildRequestPlan"]>) => {
-      const activeRequestTimeoutMs = Number.isFinite(requestDeadlineAt)
-        ? Math.max(1, requestDeadlineAt - Date.now())
-        : undefined;
+      const activeRequestTimeout =
+        Number.isFinite(requestDeadlineAt)
+          ? {
+            ...requestTimeout,
+            timeoutMs: Math.max(1, requestDeadlineAt - Date.now()),
+          }
+          : requestTimeout;
       emitProviderTraceEvent(options, {
         kind: "request",
         transport: "chat",
@@ -619,17 +826,27 @@ export class GrokProvider implements LLMProvider {
           activePlan.requestMetrics,
           activePlan.statefulDiagnostics,
           activePlan.compactionDiagnostics,
-          activeRequestTimeoutMs,
+          activeRequestTimeout,
         ),
       });
       try {
-        const response = await withTimeout(
+        const result = await withTimeout(
           async (signal) =>
-            (client as any).responses.create(activePlan.params, { signal }),
-          activeRequestTimeoutMs,
+            createWithResponseMetadata<Record<string, unknown>>(
+              client,
+              activePlan.params,
+              signal,
+            ),
+          activeRequestTimeout.timeoutMs,
           this.name,
           options?.signal,
         );
+        const response = result.data;
+        const responseMeta = buildProviderResponseMeta({
+          response: result.response,
+          requestId: result.requestId,
+          payload: response,
+        });
         const parsed = this.parseResponse(
           response,
           activePlan.requestMetrics,
@@ -654,6 +871,7 @@ export class GrokProvider implements LLMProvider {
           context: buildProviderResponseTraceContext(
             parsed.stateful,
             parsed.compaction,
+            responseMeta,
           ),
         });
         return parsed;
@@ -750,21 +968,26 @@ export class GrokProvider implements LLMProvider {
     const toolCallAccum = new Map<string, LLMToolCall>();
     let streamIterator: AsyncIterator<any> | null = null;
     let responseTracePayload: Record<string, unknown> | undefined;
-    const streamTimeoutMs = resolveRequestTimeoutMs(
-      this.config.timeoutMs,
+    let streamResponseMeta: ProviderResponseTraceMeta | undefined;
+    const streamTimeout = resolveRequestTimeoutMs(
+      this.configuredTimeoutMs,
       options?.timeoutMs,
     );
     const streamDeadlineAt =
-      typeof streamTimeoutMs === "number"
-        ? Date.now() + streamTimeoutMs
+      typeof streamTimeout.timeoutMs === "number"
+        ? Date.now() + streamTimeout.timeoutMs
         : Number.POSITIVE_INFINITY;
 
     try {
       let stream: AsyncIterable<any>;
       while (true) {
-        const requestAttemptTimeoutMs = Number.isFinite(streamDeadlineAt)
-          ? Math.max(1, streamDeadlineAt - Date.now())
-          : undefined;
+        const requestAttemptTimeout =
+          Number.isFinite(streamDeadlineAt)
+            ? {
+              ...streamTimeout,
+              timeoutMs: Math.max(1, streamDeadlineAt - Date.now()),
+            }
+            : streamTimeout;
         emitProviderTraceEvent(options, {
           kind: "request",
           transport: "chat_stream",
@@ -779,17 +1002,42 @@ export class GrokProvider implements LLMProvider {
             requestMetrics,
             statefulDiagnostics,
             compactionDiagnostics,
-            requestAttemptTimeoutMs,
+            requestAttemptTimeout,
           ),
         });
         try {
-          stream = await withTimeout(
+          const result = await withTimeout(
             async (signal) =>
-              (client as any).responses.create(params, { signal }),
-            requestAttemptTimeoutMs,
+              createWithResponseMetadata<AsyncIterable<any>>(
+                client,
+                params,
+                signal,
+              ),
+            requestAttemptTimeout.timeoutMs,
             this.name,
             options?.signal,
           );
+          stream = result.data;
+          streamResponseMeta = buildProviderResponseMeta({
+            response: result.response,
+            requestId: result.requestId,
+          });
+          emitProviderTraceEvent(options, {
+            kind: "stream_event",
+            transport: "chat_stream",
+            provider: this.name,
+            model: String(params.model ?? this.config.model),
+            payload: { type: "stream.open" },
+            context: {
+              eventIndex: 0,
+              eventType: "stream.open",
+              ...(
+                streamResponseMeta
+                  ? streamResponseMeta
+                  : {}
+              ),
+            },
+          });
           if (plan.assistantPhaseEnabled) {
             this.assistantPhaseSupported = true;
           }
@@ -863,6 +1111,8 @@ export class GrokProvider implements LLMProvider {
       }
 
       streamIterator = stream[Symbol.asyncIterator]();
+      let streamEventIndex = 0;
+      const streamOpenedAt = Date.now();
 
       while (true) {
         const remainingStreamMs = Number.isFinite(streamDeadlineAt)
@@ -872,7 +1122,10 @@ export class GrokProvider implements LLMProvider {
           typeof remainingStreamMs === "number" &&
           remainingStreamMs <= 0
         ) {
-          throw createStreamTimeoutError(this.name, streamTimeoutMs ?? 0);
+          throw createStreamTimeoutError(
+            this.name,
+            streamTimeout.timeoutMs ?? 0,
+          );
         }
         const iterResult = await nextStreamChunkWithTimeout(
           streamIterator,
@@ -881,6 +1134,30 @@ export class GrokProvider implements LLMProvider {
         );
         if (iterResult.done) break;
         const event = iterResult.value;
+        streamEventIndex += 1;
+        emitProviderTraceEvent(options, {
+          kind: "stream_event",
+          transport: "chat_stream",
+          provider: this.name,
+          model,
+          payload:
+            cloneProviderTracePayload(event) ??
+            {
+              type:
+                typeof event?.type === "string" && event.type.length > 0
+                  ? event.type
+                  : "stream.event",
+            },
+          context: {
+            eventIndex: streamEventIndex,
+            eventType:
+              typeof event?.type === "string" && event.type.length > 0
+                ? event.type
+                : "stream.event",
+            streamElapsedMs: Math.max(0, Date.now() - streamOpenedAt),
+            ...(streamResponseMeta ? streamResponseMeta : {}),
+          },
+        });
 
         if (event.type === "response.output_text.delta") {
           const delta = String(event.delta ?? "");
@@ -901,6 +1178,10 @@ export class GrokProvider implements LLMProvider {
 
         if (event.type === "response.completed") {
           const response = event.response ?? {};
+          streamResponseMeta = {
+            ...(streamResponseMeta ?? {}),
+            ...(buildProviderResponseMeta({ payload: response }) ?? {}),
+          };
           responseTracePayload =
             cloneProviderTracePayload(response) ??
             { error: "provider_response_trace_unavailable" };
@@ -946,6 +1227,10 @@ export class GrokProvider implements LLMProvider {
             event.response && typeof event.response === "object"
               ? (event.response as Record<string, unknown>)
               : {};
+          streamResponseMeta = {
+            ...(streamResponseMeta ?? {}),
+            ...(buildProviderResponseMeta({ payload: failedResponse }) ?? {}),
+          };
           emitProviderTraceEvent(options, {
             kind: "error",
             transport: "chat_stream",
@@ -954,6 +1239,11 @@ export class GrokProvider implements LLMProvider {
             payload:
               cloneProviderTracePayload(failedResponse) ??
               { error: "provider_error_trace_unavailable" },
+            context: buildProviderResponseTraceContext(
+              undefined,
+              undefined,
+              streamResponseMeta,
+            ),
           });
           finishReason = "error";
           responseError =
@@ -988,11 +1278,12 @@ export class GrokProvider implements LLMProvider {
         model,
         payload:
           responseTracePayload ?? { error: "provider_response_trace_unavailable" },
-        context: buildProviderResponseTraceContext(
-          parsed.stateful,
-          parsed.compaction,
-        ),
-      });
+          context: buildProviderResponseTraceContext(
+            parsed.stateful,
+            parsed.compaction,
+            streamResponseMeta,
+          ),
+        });
       return parsed;
     } catch (err: unknown) {
       emitProviderTraceEvent(options, {
@@ -1002,7 +1293,7 @@ export class GrokProvider implements LLMProvider {
         model,
         payload: buildProviderTraceErrorPayload(err),
       });
-      const mappedError = this.mapError(err, streamTimeoutMs);
+      const mappedError = this.mapError(err, streamTimeout.timeoutMs);
       this.logPromptOverflowDiagnostics(mappedError, params);
       if (content.length > 0) {
         const partialToolCalls: LLMToolCall[] = Array.from(toolCallAccum.values());

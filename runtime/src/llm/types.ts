@@ -357,7 +357,7 @@ export interface LLMChatToolRoutingOptions {
 }
 
 export interface LLMProviderTraceEvent {
-  readonly kind: "request" | "response" | "error";
+  readonly kind: "request" | "response" | "error" | "stream_event";
   readonly transport: "chat" | "chat_stream";
   readonly provider: string;
   readonly model?: string;
@@ -376,9 +376,9 @@ export interface LLMProviderTraceEvent {
 }
 
 export interface LLMChatTraceOptions {
-  /** Emit raw provider request/response/error payloads through the trace callback. */
+  /** Emit raw provider request/response/error/stream-event payloads through the trace callback. */
   readonly includeProviderPayloads?: boolean;
-  /** Callback invoked with provider-native request/response/error payloads. */
+  /** Callback invoked with provider-native request/response/error/stream-event payloads. */
   readonly onProviderTraceEvent?: (event: LLMProviderTraceEvent) => void;
 }
 

@@ -173,6 +173,38 @@ export function buildProviderTraceErrorPayload(
     ) {
       payload.status = status;
     }
+    const requestID =
+      (error as { requestID?: unknown }).requestID ??
+      (error as { requestId?: unknown }).requestId ??
+      (error as { _request_id?: unknown })._request_id;
+    if (typeof requestID === "string" && requestID.length > 0) {
+      payload.requestID = requestID;
+    }
+    const type = (error as { type?: unknown }).type;
+    if (typeof type === "string" && type.length > 0) {
+      payload.type = type;
+    }
+    const param = (error as { param?: unknown }).param;
+    if (typeof param === "string" && param.length > 0) {
+      payload.param = param;
+    }
+    const headers = (error as { headers?: unknown }).headers;
+    if (headers && typeof headers === "object") {
+      try {
+        if (typeof (headers as { entries?: unknown }).entries === "function") {
+          payload.headers = Object.fromEntries(
+            Array.from(
+              (headers as Headers).entries(),
+              ([key, value]) => [key, value],
+            ),
+          );
+        } else if (!Array.isArray(headers)) {
+          payload.headers = cloneProviderTracePayload(headers);
+        }
+      } catch {
+        // best-effort error header capture
+      }
+    }
     return payload;
   }
   return { error: String(error) };
