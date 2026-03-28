@@ -42,6 +42,7 @@ import {
 } from "../llm/provider-trace-logger.js";
 import { resolveMaxToolRoundsForToolNames } from "./tool-round-budget.js";
 import {
+  hasRuntimeLimit,
   isRuntimeLimitExceeded,
   isRuntimeLimitReached,
   normalizeRuntimeLimit,
@@ -56,7 +57,7 @@ import { SubAgentSpawnError } from "./errors.js";
 // Constants
 // ============================================================================
 
-export const DEFAULT_SUB_AGENT_TIMEOUT_MS = 3_600_000; // 60 min
+export const DEFAULT_SUB_AGENT_TIMEOUT_MS = 0; // unlimited
 export const DEFAULT_SUB_AGENT_CONTEXT_STARTUP_TIMEOUT_MS = 15_000;
 export const MAX_CONCURRENT_SUB_AGENTS = 16;
 export const DEFAULT_MAX_SUB_AGENT_DEPTH = 4;
@@ -535,6 +536,10 @@ export class SubAgentManager {
   ): void {
     if (handle.timeoutTimer !== null) {
       clearTimeout(handle.timeoutTimer);
+    }
+    if (!hasRuntimeLimit(timeoutMs)) {
+      handle.timeoutTimer = null;
+      return;
     }
     handle.timeoutTimer = setTimeout(() => {
       if (handle.status === "running") {

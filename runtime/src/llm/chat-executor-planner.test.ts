@@ -1782,14 +1782,10 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
         category: "validation",
         code: "planner_subagent_budget_hint_ambiguous",
       }),
-      expect.objectContaining({
-        category: "validation",
-        code: "planner_subagent_budget_hint_too_small",
-      }),
     ]);
   });
 
-  it("repairs explicit planner subagent budget hints up to the runtime minimum during parsing", () => {
+  it("preserves explicit planner subagent budget hints during parsing", () => {
     const parsed = parsePlannerPlan(
       JSON.stringify({
         reason: "budget_repair",
@@ -1816,18 +1812,13 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
     expect(parsed.plan?.steps[0]).toEqual(
       expect.objectContaining({
         stepType: "subagent_task",
-        maxBudgetHint: "60s",
+        maxBudgetHint: "30s",
       }),
     );
-    expect(parsed.diagnostics).toEqual(
+    expect(parsed.diagnostics ?? []).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          category: "policy",
           code: "planner_subagent_budget_hint_clamped",
-          details: expect.objectContaining({
-            originalMaxBudgetHint: "30s",
-            repairedMaxBudgetHint: "60s",
-          }),
         }),
       ]),
     );

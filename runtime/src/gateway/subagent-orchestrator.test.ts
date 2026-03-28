@@ -832,7 +832,7 @@ describe("SubAgentOrchestrator", () => {
     });
 
     expect(manager.spawnCalls).toHaveLength(1);
-    expect(manager.spawnCalls[0]?.timeoutMs).toBe(60_000);
+    expect(manager.spawnCalls[0]?.timeoutMs).toBe(0);
   });
 
   it("derives a larger child tool budget for long delegated steps", async () => {

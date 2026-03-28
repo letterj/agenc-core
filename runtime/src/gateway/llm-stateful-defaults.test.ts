@@ -93,8 +93,8 @@ describe("resolveGatewayStatefulResponses", () => {
 });
 
 describe("resolveDefaultGrokCompactionThreshold", () => {
-  it("uses 60% of the resolved context window when available", () => {
-    expect(resolveDefaultGrokCompactionThreshold(128_000)).toBe(76_800);
+  it("uses 30% of the resolved context window when available", () => {
+    expect(resolveDefaultGrokCompactionThreshold(128_000)).toBe(38_400);
   });
 
   it("falls back to the legacy 16k threshold when the context window is unknown", () => {

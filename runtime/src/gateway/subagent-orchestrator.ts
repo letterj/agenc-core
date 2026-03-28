@@ -895,7 +895,7 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
       };
     }
 
-    const timeoutMs = parseBudgetHintMsFn(
+    const budgetHintTimeoutMs = parseBudgetHintMsFn(
       preparedStep.maxBudgetHint,
       this.defaultSubagentTimeoutMs,
     );
@@ -1028,9 +1028,9 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
         parentSessionId,
         parentRequest: pipeline.plannerContext?.parentRequest,
         lastValidationCode: lastFailure?.validationCode,
-        timeoutMs,
+        timeoutMs: 0,
         toolBudgetPerRequest: resolveSubagentToolBudgetPerRequestFn({
-          timeoutMs,
+          timeoutMs: budgetHintTimeoutMs,
           priorFailureClass: lastFailure?.failureClass,
           step: preparedStep,
         }),
@@ -1088,7 +1088,7 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
           ),
           fanout: Math.max(1, subagentStepCount),
           tools: toolScope.allowedTools,
-          timeoutMs,
+          timeoutMs: 0,
           delegated: true,
           strategyArmId: "balanced",
           qualityProxy: 0.9,
@@ -1130,7 +1130,7 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
             ),
             fanout: Math.max(1, subagentStepCount),
             tools: toolScope.allowedTools,
-            timeoutMs,
+            timeoutMs: 0,
             delegated: true,
             strategyArmId: "balanced",
             qualityProxy: 0.2,
@@ -1231,12 +1231,12 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
             ),
             fanout: Math.max(1, subagentStepCount),
             tools: toolScope.allowedTools,
-            timeoutMs,
+            timeoutMs: 0,
             delegated: true,
             strategyArmId: "balanced",
             qualityProxy: 0.1,
             tokenCost: lastFailure.tokenUsage?.totalTokens ?? 0,
-            latencyMs: lastFailure.durationMs ?? timeoutMs,
+            latencyMs: lastFailure.durationMs ?? budgetHintTimeoutMs,
             errorCount: 1,
             errorClass: "budget_exceeded",
             metadata: {
@@ -1298,12 +1298,12 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
         ),
         fanout: Math.max(1, subagentStepCount),
         tools: toolScope.allowedTools,
-        timeoutMs,
+        timeoutMs: 0,
         delegated: true,
         strategyArmId: "balanced",
         qualityProxy: shouldRetry ? 0.3 : 0.15,
         tokenCost: lastFailure.tokenUsage?.totalTokens ?? 0,
-        latencyMs: lastFailure.durationMs ?? timeoutMs,
+        latencyMs: lastFailure.durationMs ?? budgetHintTimeoutMs,
         errorCount: 1,
         errorClass: lastFailure.failureClass,
         metadata: {

@@ -198,9 +198,9 @@ describe("createDaemonCommandRegistry /context", () => {
 
     expect(replies).toHaveLength(1);
     expect(replies[0]).toContain("Session Budget: unlimited");
-    expect(replies[0]).toContain("Free: 1,174,864 tokens");
+    expect(replies[0]).toContain("Free: 574,864 tokens");
     expect(replies[0]).toContain(
-      "Compaction: local enabled @ 1,200,000 tokens; provider disabled",
+      "Compaction: local enabled @ 600,000 tokens; provider disabled",
     );
   });
 });
