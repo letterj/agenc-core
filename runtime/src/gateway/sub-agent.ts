@@ -807,12 +807,26 @@ export class SubAgentManager {
         });
       }
 
+      // When the spawn comes from the orchestrator pipeline (has an
+      // execution context with explicit tool scope), pass the resolved
+      // tools as routedToolNames so the sub-agent's ChatExecutor uses
+      // the full scope instead of re-deriving a narrower set from
+      // message content heuristics.  Direct spawns (no delegation spec)
+      // continue to use the ChatExecutor's default routing.
+      const spawnRoutedTools =
+        handle.config.delegationSpec &&
+        handle.config.tools &&
+        handle.config.tools.length > 0
+          ? [...handle.config.tools]
+          : undefined;
+
       const resultOrAbort = await raceAbort(
         executor.execute({
           message,
           history: handle.history,
           systemPrompt,
           sessionId: handle.sessionId,
+          ...(spawnRoutedTools ? { routedToolNames: spawnRoutedTools } : {}),
           ...(handle.config.workingDirectory
             ? {
               runtimeContext: {
