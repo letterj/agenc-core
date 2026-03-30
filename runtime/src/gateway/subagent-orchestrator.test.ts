@@ -921,8 +921,8 @@ describe("SubAgentOrchestrator", () => {
     });
 
     expect(manager.spawnCalls).toHaveLength(1);
-    // MIN_DELEGATION_TIMEOUT_MS (120s) clamps 4800ms up to 120000ms
-    expect(manager.spawnCalls[0]?.timeoutMs).toBe(120_000);
+    // MIN_DELEGATION_TIMEOUT_MS (300s) clamps 4800ms up to 300000ms
+    expect(manager.spawnCalls[0]?.timeoutMs).toBe(300_000);
   });
 
   it("derives a larger child tool budget for long delegated steps", async () => {
@@ -6391,8 +6391,8 @@ describe("SubAgentOrchestrator", () => {
 
     expect(result.status).toBe("completed");
     expect(manager.spawnCalls).toHaveLength(2);
-    expect(manager.spawnCalls[0]?.timeoutMs).toBe(120_000);
-    expect(manager.spawnCalls[1]?.timeoutMs).toBe(120_000);
+    expect(manager.spawnCalls[0]?.timeoutMs).toBe(300_000);
+    expect(manager.spawnCalls[1]?.timeoutMs).toBe(300_000);
     const payload = JSON.parse(result.context.results.delegate_timeout ?? "{}") as {
       attempts?: number;
     };

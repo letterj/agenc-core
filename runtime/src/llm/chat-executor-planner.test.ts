@@ -366,7 +366,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               allowedReadRoots: ["/tmp/freight-flow-ts"],
               allowedWriteRoots: ["/tmp/freight-flow-ts"],
             },
-            max_budget_hint: "4m",
+            max_budget_hint: "6m",
           },
           {
             name: "install_dependencies",
@@ -463,7 +463,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               allowedReadRoots: ["/tmp/agenc-codegen/regexkit"],
               allowedWriteRoots: ["/tmp/agenc-codegen/regexkit"],
             },
-            max_budget_hint: "4m",
+            max_budget_hint: "6m",
           },
           {
             name: "run_tests",
@@ -576,7 +576,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptanceCriteria: ["Workspace package.json exists"],
             requiredToolCapabilities: ["system.writeFile"],
             contextRequirements: ["repo root"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: false,
           },
           {
@@ -931,7 +931,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               acceptanceCriteria: ["Architecture review completed"],
               requiredToolCapabilities: ["system.readFile"],
               contextRequirements: ["repo_context"],
-              maxBudgetHint: "2m",
+              maxBudgetHint: "6m",
               canRunParallel: true,
             },
             {
@@ -942,7 +942,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               acceptanceCriteria: ["QA review completed"],
               requiredToolCapabilities: ["system.readFile"],
               contextRequirements: ["repo_context"],
-              maxBudgetHint: "2m",
+              maxBudgetHint: "6m",
               canRunParallel: true,
             },
           ],
@@ -985,7 +985,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptanceCriteria: ["Architecture review completed"],
             requiredToolCapabilities: ["system.readFile"],
             contextRequirements: ["repo_context"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: false,
           },
           {
@@ -996,7 +996,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptanceCriteria: ["QA review completed"],
             requiredToolCapabilities: ["system.readFile"],
             contextRequirements: ["repo_context"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: false,
             dependsOn: ["architecture_review"],
           },
@@ -1059,7 +1059,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               allowedReadRoots: ["/tmp/freight-flow-ts"],
               allowedWriteRoots: ["/tmp/freight-flow-ts"],
             },
-            max_budget_hint: "3m",
+            max_budget_hint: "6m",
           },
         ],
       }),
@@ -1094,7 +1094,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptanceCriteria: ["Findings are grounded in the workspace."],
             requiredToolCapabilities: ["system.readFile"],
             contextRequirements: ["repo_context"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: true,
           },
           {
@@ -1105,7 +1105,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptanceCriteria: ["Findings are grounded in the workspace."],
             requiredToolCapabilities: ["system.readFile"],
             contextRequirements: ["repo_context"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: true,
           },
         ],
@@ -1202,7 +1202,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
                 },
               ],
             },
-            max_budget_hint: "2m",
+            max_budget_hint: "6m",
           },
           {
             name: "rewrite_plan",
@@ -1232,7 +1232,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
                 },
               ],
             },
-            max_budget_hint: "3m",
+            max_budget_hint: "6m",
           },
         ],
       }),
@@ -1717,7 +1717,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptance_criteria: ["Return one grounded finding"],
             required_tool_capabilities: ["system.readFile"],
             context_requirements: ["cwd=/workspace/project-a"],
-            max_budget_hint: "2m",
+            max_budget_hint: "6m",
           },
         ],
       }),
@@ -2001,7 +2001,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptanceCriteria: ["Message read"],
             requiredToolCapabilities: ["system.emailMessageInfo"],
             contextRequirements: ["get_incoming_msgs"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: true,
           },
           {
@@ -2329,7 +2329,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptanceCriteria: ["Architecture findings are grounded in PLAN.md."],
             requiredToolCapabilities: ["read"],
             contextRequirements: [],
-            maxBudgetHint: "3m",
+            maxBudgetHint: "6m",
             canRunParallel: true,
             executionContext: {
               version: "v1",
@@ -2358,7 +2358,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptanceCriteria: ["QA findings are grounded in PLAN.md."],
             requiredToolCapabilities: ["read"],
             contextRequirements: [],
-            maxBudgetHint: "3m",
+            maxBudgetHint: "6m",
             canRunParallel: true,
             executionContext: {
               version: "v1",
@@ -2513,7 +2513,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptanceCriteria: ["No code changes; output is analysis only."],
             requiredToolCapabilities: ["system.readFile", "system.listDir"],
             contextRequirements: ["read_plan"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: false,
             executionContext: {
               version: "v1",
@@ -2682,7 +2682,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
           acceptanceCriteria: ["Tests pass"],
           requiredToolCapabilities: ["system.bash"],
           contextRequirements: ["implement_core"],
-          maxBudgetHint: "3m",
+          maxBudgetHint: "6m",
           canRunParallel: false,
         },
       ],
@@ -2715,7 +2715,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               allowedReadRoots: ["/tmp/maze-forge-ts"],
               allowedWriteRoots: ["/tmp/maze-forge-ts"],
             },
-            max_budget_hint: "3m",
+            max_budget_hint: "6m",
           },
         ],
       }),
@@ -2724,7 +2724,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
     expect(parsed.plan?.steps[0]).toEqual(
       expect.objectContaining({
         stepType: "subagent_task",
-        maxBudgetHint: "3m",
+        maxBudgetHint: "6m",
       }),
     );
     expect(parsed.diagnostics ?? []).not.toEqual(
@@ -2756,7 +2756,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             ],
             requiredToolCapabilities: ["system.writeFile", "system.readFile"],
             contextRequirements: ["cwd=/tmp/maze-forge-ts"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: false,
           },
           {
@@ -2773,7 +2773,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             ],
             requiredToolCapabilities: ["system.writeFile", "system.bash"],
             contextRequirements: ["cwd=/tmp/maze-forge-ts"],
-            maxBudgetHint: "4m",
+            maxBudgetHint: "6m",
             canRunParallel: false,
           },
           {
@@ -2840,7 +2840,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               "system.listDir",
             ],
             contextRequirements: ["cwd=/tmp/maze-forge-ts"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: false,
           },
           {
@@ -2897,7 +2897,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               "system.listDir",
             ],
             contextRequirements: ["cwd=/tmp/maze-forge-ts"],
-            maxBudgetHint: "90s",
+            maxBudgetHint: "6m",
             canRunParallel: false,
           },
           {
@@ -2953,7 +2953,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               ],
               requiredToolCapabilities: ["system.writeFile", "system.listDir"],
               contextRequirements: ["repo_context", "parse_phases"],
-              maxBudgetHint: "2m",
+              maxBudgetHint: "6m",
               canRunParallel: false,
             },
           ],
@@ -3433,7 +3433,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               "system.listDir",
             ],
             contextRequirements: ["cwd=/tmp/transit-weave-ts-26"],
-            maxBudgetHint: "90s",
+            maxBudgetHint: "6m",
             canRunParallel: false,
           },
           {
@@ -3501,7 +3501,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               "system.bash",
             ],
             contextRequirements: ["cwd=/tmp/freight-flow-ts-26"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: false,
           },
           {
@@ -3571,7 +3571,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             ],
             requiredToolCapabilities: ["system.writeFile", "system.listDir"],
             contextRequirements: ["cwd=/tmp/transit-weave-ts-29"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: false,
           },
           {
@@ -3680,7 +3680,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               "system.listDir",
             ],
             contextRequirements: ["cwd=/tmp/transit-weave"],
-            maxBudgetHint: "4m",
+            maxBudgetHint: "6m",
           },
           {
             name: "install_dependencies",
@@ -3727,7 +3727,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
               "system.bash",
             ],
             contextRequirements: ["cwd=/tmp/transit-weave"],
-            maxBudgetHint: "4m",
+            maxBudgetHint: "6m",
           },
         ],
         edges: [
@@ -3841,7 +3841,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             acceptanceCriteria: ["web created and adjusted for monorepo"],
             requiredToolCapabilities: ["system.bash", "system.writeFile"],
             contextRequirements: ["cwd=/tmp/transit-weave"],
-            maxBudgetHint: "3m",
+            maxBudgetHint: "6m",
           },
           {
             name: "npm_install",
@@ -3891,7 +3891,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
             ],
             requiredToolCapabilities: ["system.writeFile", "system.bash"],
             contextRequirements: ["cwd=/tmp/maze-forge-ts"],
-            maxBudgetHint: "2m",
+            maxBudgetHint: "6m",
             canRunParallel: false,
           },
           {

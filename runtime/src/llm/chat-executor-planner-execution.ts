@@ -995,6 +995,12 @@ export async function executePlannerPath(
   const seenStructuralDiagnosticSignatures = new Set<string>();
   const seenRuntimeRepairFailureSignatures = new Set<string>();
   let latestPlannerValidationDiagnostics: readonly PlannerDiagnostic[] = [];
+  // Cap total sub-agent spawns across all planner attempts.  Without this,
+  // the planner can spawn dozens of sub-agents across refinement/retry
+  // loops — each one burning 2-5 minutes.  The cap ensures the turn
+  // finishes in bounded time even when every sub-agent fails validation.
+  const MAX_CUMULATIVE_SUBAGENT_SPAWNS = 6;
+  let cumulativeSubagentSpawns = 0;
 
   for (
     let plannerAttempt = 1;
@@ -1963,6 +1969,37 @@ export async function executePlannerPath(
         appendToolRecord: (record: ToolCallRecord) => callbacks.appendToolRecord(ctx, record),
         setStopReason: (reason: LLMPipelineStopReason, detail?: string) => callbacks.setStopReason(ctx, reason, detail),
       });
+
+      // Track cumulative sub-agent spawns across all planner attempts.
+      cumulativeSubagentSpawns += pipelineResult?.totalSteps ?? 0;
+      if (
+        cumulativeSubagentSpawns >= MAX_CUMULATIVE_SUBAGENT_SPAWNS &&
+        pipelineResult?.status !== "completed"
+      ) {
+        ctx.plannerSummaryState.diagnostics.push({
+          category: "policy",
+          code: "planner_cumulative_spawn_cap_reached",
+          message:
+            `Planner exhausted the cumulative sub-agent spawn cap (${MAX_CUMULATIVE_SUBAGENT_SPAWNS}) without completing all steps. ` +
+            "Returning the best partial result instead of re-planning.",
+          details: {
+            cumulativeSpawns: cumulativeSubagentSpawns,
+            cap: MAX_CUMULATIVE_SUBAGENT_SPAWNS,
+            plannerAttempt,
+          },
+        });
+        callbacks.emitPlannerTrace(ctx, "planner_pipeline_finished", {
+          attempt: plannerAttempt,
+          pipelineId: pipeline.id,
+          status: pipelineResult?.status ?? "failed",
+          completionState: pipelineResult?.completionState,
+          completedSteps: pipelineResult?.completedSteps ?? 0,
+          totalSteps: pipelineResult?.totalSteps ?? 0,
+          cumulativeSubagentSpawns,
+          capReached: true,
+        });
+        break;
+      }
 
       if (
         shouldRunPlannerVerifier &&

@@ -7,12 +7,13 @@
  * @module
  */
 
-// Floor: sub-agents always get at least 2 minutes.  The planner's LLM
+// Floor: sub-agents always get at least 5 minutes.  The planner's LLM
 // sometimes emits aggressive budgets (e.g. "30s") that starve coding tasks
-// before the first tool call even completes.  0 = unlimited (no timer).
-export const MIN_DELEGATION_TIMEOUT_MS = 120_000;
-// Ceiling removed — the runtime should support indefinite sub-agent work.
-// Individual callers can still pass explicit timeouts when needed.
+// before the first tool call even completes.  Complex multi-file tasks
+// regularly need 3-4 minutes per sub-agent.  0 = unlimited (no timer).
+export const MIN_DELEGATION_TIMEOUT_MS = 300_000;
+// Ceiling: 0 = unlimited.  The runtime should support indefinite sub-agent
+// work for long-running coding tasks.
 export const MAX_DELEGATION_TIMEOUT_MS = 0;
 
 const EXPLICIT_BUDGET_HINT_RE =
