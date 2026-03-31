@@ -16,6 +16,7 @@ import type { HookDispatcher } from "./hooks.js";
 import type { GatewayConfig } from "./types.js";
 import { createEmbeddingProvider } from "../memory/embeddings.js";
 import { InMemoryVectorStore } from "../memory/vector-store.js";
+import { SqliteVectorBackend } from "../memory/sqlite/vector-backend.js";
 import { SemanticMemoryRetriever } from "../memory/retriever.js";
 import {
   MemoryIngestionEngine,
@@ -58,6 +59,24 @@ export interface CreateMemoryRetrieversParams {
 export interface MemoryRetrieversResult {
   memoryRetriever: MemoryRetriever;
   learningProvider: MemoryRetriever;
+}
+
+// ---------------------------------------------------------------------------
+// Vector DB path resolution
+// ---------------------------------------------------------------------------
+
+function resolveVectorDbPath(workspacePath: string): string | undefined {
+  if (!workspacePath) return undefined;
+  try {
+    const { existsSync, mkdirSync } = require("node:fs");
+    const vectorDir = join(workspacePath, ".agenc");
+    if (!existsSync(vectorDir)) {
+      mkdirSync(vectorDir, { recursive: true });
+    }
+    return join(vectorDir, "vectors.db");
+  } catch {
+    return undefined;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -108,9 +127,18 @@ async function createSemanticRetriever(
   workspacePath: string,
   logger: Logger,
 ): Promise<MemoryRetriever> {
-  const vectorStore = new InMemoryVectorStore({
-    dimension: embeddingProvider.dimension,
-  });
+  // Use SqliteVectorBackend for persistent vector storage.
+  // Per TODO Phase 1: vectors must survive daemon restarts.
+  // The vector DB is stored alongside the memory DB as a sibling file.
+  const vectorDbPath = resolveVectorDbPath(workspacePath);
+  const vectorStore = vectorDbPath
+    ? new SqliteVectorBackend({
+        dbPath: vectorDbPath,
+        dimension: embeddingProvider.dimension,
+      })
+    : new InMemoryVectorStore({
+        dimension: embeddingProvider.dimension,
+      });
 
   const curatedMemoryPath = join(workspacePath, "MEMORY.md");
   const dailyLogPath = join(workspacePath, "logs");

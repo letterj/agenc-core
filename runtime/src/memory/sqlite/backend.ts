@@ -31,7 +31,7 @@ import { createAES256GCMProvider } from "../encryption.js";
 export class SqliteBackend implements MemoryBackend {
   readonly name = "sqlite";
 
-  private db: any = null;
+  protected db: any = null;
   private readonly config: Required<
     Pick<SqliteBackendConfig, "dbPath" | "walMode" | "cleanupOnConnect">
   > &
@@ -354,7 +354,7 @@ export class SqliteBackend implements MemoryBackend {
     );
   }
 
-  private async ensureDb(): Promise<any> {
+  protected async ensureDb(): Promise<any> {
     if (this.closed) {
       throw new MemoryBackendError(this.name, "Backend is closed");
     }
