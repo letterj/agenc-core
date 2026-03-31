@@ -378,6 +378,21 @@ export function assessPlannerDecision(
     };
   }
 
+  // Review/analysis questions about files should go through the direct
+  // tool loop (readFile + conversational response), not the planner.
+  // "read through PLAN.md, are there any gaps?" is a review task.
+  if (
+    /\b(?:read\s+through|review|analyze|check|look\s+at|go\s+through|evaluate|assess)\b/i.test(messageText) &&
+    /\b(?:gaps?|missing|enough|sufficient|complete|cover|edge\s+cases?)\b/i.test(messageText) &&
+    /\?/.test(messageText)
+  ) {
+    return {
+      score,
+      shouldPlan: false,
+      reason: "review_analysis_question",
+    };
+  }
+
   const artifactIntent = classifyPlannerPlanArtifactIntent(messageText);
 
   if (artifactIntent === "grounded_plan_generation") {
