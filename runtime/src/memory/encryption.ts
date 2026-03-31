@@ -152,12 +152,13 @@ export function createVersionedAES256GCMProvider(
   }
 
   const currentVersion = config.currentVersion;
-  const currentKey = keyMap.get(currentVersion);
-  if (!currentKey) {
+  const currentKeyLookup = keyMap.get(currentVersion);
+  if (!currentKeyLookup) {
     throw new Error(
       `Current key version ${currentVersion} not found in key map`,
     );
   }
+  const currentKey: Buffer = currentKeyLookup;
 
   function encryptWithVersion(plaintext: string, version: number, key: Buffer): string {
     const iv = randomBytes(IV_BYTES);
@@ -207,7 +208,7 @@ export function createVersionedAES256GCMProvider(
     }
 
     // Non-versioned ciphertext — try version 0 key, then current key
-    const legacyKey = keyMap.get(0) ?? currentKey;
+    const legacyKey: Buffer = keyMap.get(0) ?? currentKey;
     if (combined.length < IV_BYTES + TAG_BYTES) {
       throw new Error("Ciphertext too short");
     }

@@ -2199,15 +2199,25 @@ export function createDaemonCommandRegistry(
       // /memory search <query>
       if (subcommand === "search" && rest) {
         try {
-          const results = await memoryBackend.query({
-            search: rest,
-            limit: 10,
-          });
-          if (results.length === 0) {
+          const needle = rest.toLowerCase();
+          const sessions = await memoryBackend.listSessions();
+          const matches: Array<{ content: string; role: string; timestamp: number; metadata?: Record<string, unknown> }> = [];
+          // Sample recent sessions for search (cap at 20 to avoid scanning everything)
+          for (const sid of sessions.slice(-20)) {
+            const thread = await memoryBackend.getThread(sid, 50);
+            for (const entry of thread) {
+              if (entry.content.toLowerCase().includes(needle)) {
+                matches.push(entry);
+                if (matches.length >= 10) break;
+              }
+            }
+            if (matches.length >= 10) break;
+          }
+          if (matches.length === 0) {
             await cmdCtx.reply(`No memory entries matching "${rest}".`);
             return;
           }
-          const lines = results.map((e, i) => {
+          const lines = matches.map((e, i) => {
             const age = Math.round((Date.now() - e.timestamp) / 3_600_000);
             const preview = e.content.slice(0, 80).replace(/\n/g, " ");
             const meta = e.metadata as Record<string, unknown> | undefined;
@@ -2295,7 +2305,7 @@ export function createDaemonCommandRegistry(
       if (subcommand === "export") {
         try {
           const { exportMemory } = await import("../memory/export-import.js");
-          const data = await exportMemory(memoryBackend);
+          const data = await exportMemory({ memoryBackend });
           const json = JSON.stringify(data, null, 2);
           await cmdCtx.reply(`Memory export (${data.entries?.length ?? 0} entries):\n\`\`\`json\n${json.slice(0, 4000)}\n\`\`\``);
         } catch (err) {
