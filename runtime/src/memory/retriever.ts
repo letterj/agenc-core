@@ -13,6 +13,7 @@
  */
 
 import type { MemoryEntry } from "./types.js";
+import { computeTrustScore, inferTrustSource, DEFAULT_TRUST_THRESHOLD } from "./trust-scoring.js";
 import type { VectorMemoryBackend } from "./vector-store.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { CuratedMemoryManager } from "./structured.js";
@@ -707,6 +708,17 @@ export class SemanticMemoryRetriever implements MemoryRetriever {
         now,
         this.recencyHalfLifeMs,
       );
+      // Security R29: trust-aware retrieval — filter entries below trust threshold
+      const trustSource = inferTrustSource(meta, result.entry.role);
+      const trustScore = computeTrustScore({
+        source: trustSource,
+        confidence,
+        ageMs: Math.max(0, now - result.entry.timestamp),
+        accessCount,
+        confirmed: false,
+      });
+      if (trustScore < DEFAULT_TRUST_THRESHOLD) continue;
+
       // Per skeptic: weighted scoring per TODO Phase 4.2
       const blended =
         computeRetrievalScore(
