@@ -138,6 +138,32 @@ export function computeRetrievalScore(
   return relevanceScore * (1 - recencyWeight) + recencyScore * recencyWeight;
 }
 
+/**
+ * Compute activation boost from access history (Phase 4.2).
+ * Simplified ACT-R formula: activation = 1 + log(accessCount + 1)
+ * Combined with recency of last access: decays if not accessed recently.
+ * Per skeptic: use recency-weighted activation, not just raw count.
+ */
+export function computeActivationBoost(
+  accessCount: number,
+  lastAccessTime: number | undefined,
+  now: number,
+  halfLifeMs: number,
+): number {
+  if (accessCount <= 0) return 0;
+  const baseActivation = 1 + Math.log(accessCount + 1);
+  // Decay based on time since last access
+  const timeSinceAccess = lastAccessTime
+    ? Math.max(0, now - lastAccessTime)
+    : Infinity;
+  const accessRecency =
+    halfLifeMs > 0 && Number.isFinite(timeSinceAccess)
+      ? Math.exp((-Math.LN2 * timeSinceAccess) / (halfLifeMs * 2))
+      : 0;
+  // Normalize to [0, 1] range — cap at ~7 (1000 accesses) → 1.0
+  return Math.min(1, (baseActivation / 7) * accessRecency);
+}
+
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
@@ -605,6 +631,17 @@ export class SemanticMemoryRetriever implements MemoryRetriever {
       const recency = this.computeRecency(result.entry.timestamp, now);
       const confidence = inferConfidence(result.entry);
       const salience = inferSalience(result.entry);
+      // Phase 4.2: include activation boost from access history
+      const meta = result.entry.metadata as Record<string, unknown> | undefined;
+      const accessCount = typeof meta?.accessCount === "number" ? meta.accessCount : 0;
+      const lastAccessTime = typeof meta?.lastAccessTime === "number" ? meta.lastAccessTime : undefined;
+      const activation = computeActivationBoost(
+        accessCount,
+        lastAccessTime,
+        now,
+        this.recencyHalfLifeMs,
+      );
+      // Per skeptic: weighted scoring per TODO Phase 4.2
       const blended =
         computeRetrievalScore(
           result.score,
@@ -613,9 +650,11 @@ export class SemanticMemoryRetriever implements MemoryRetriever {
           this.recencyWeight,
           this.recencyHalfLifeMs,
         ) *
-          0.5 +
-        confidence * 0.2 +
-        salience * 0.3;
+          0.35 +
+        activation * 0.15 +
+        confidence * 0.15 +
+        salience * 0.20 +
+        recency * 0.15;
 
       if (blended < this.minScore) continue;
 

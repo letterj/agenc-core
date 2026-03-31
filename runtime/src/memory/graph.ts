@@ -66,6 +66,10 @@ export interface MemoryGraphEdge {
   createdAt: number;
   weight?: number;
   metadata?: Record<string, unknown>;
+  /** When this relationship became true (Phase 3.6 temporal tracking). */
+  validFrom?: number;
+  /** When this relationship stopped being true (null = still valid). */
+  validUntil?: number;
 }
 
 export interface UpsertMemoryNodeInput {
@@ -89,6 +93,10 @@ export interface AddMemoryEdgeInput {
   type: MemoryEdgeType;
   weight?: number;
   metadata?: Record<string, unknown>;
+  /** When this relationship became true (Phase 3.6). Default: now. */
+  validFrom?: number;
+  /** When this relationship stopped being true. */
+  validUntil?: number;
 }
 
 export interface MemoryGraphQuery {
@@ -201,6 +209,8 @@ export class MemoryGraph {
       createdAt: this.now(),
       weight: input.weight,
       metadata: input.metadata,
+      validFrom: input.validFrom ?? this.now(),
+      validUntil: input.validUntil,
     };
     await this.backend.set(this.edgeKey(edge.id), edge);
     return edge;
