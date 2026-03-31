@@ -82,8 +82,8 @@ export class SqliteBackend implements MemoryBackend {
     const storedContent = this.encryptField(options.content);
 
     db.prepare(
-      `INSERT INTO memory_entries (id, session_id, role, content, tool_call_id, tool_name, task_pda, metadata, timestamp, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO memory_entries (id, session_id, role, content, tool_call_id, tool_name, task_pda, metadata, timestamp, expires_at, workspace_id, agent_id, user_id, world_id, channel)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       options.sessionId,
@@ -95,6 +95,11 @@ export class SqliteBackend implements MemoryBackend {
       metadataJson,
       now,
       expiresAt,
+      options.workspaceId ?? "default",
+      options.agentId ?? null,
+      options.userId ?? null,
+      options.worldId ?? null,
+      options.channel ?? null,
     );
 
     this.logger.debug(`Added entry ${id} to session ${options.sessionId}`);
@@ -110,6 +115,11 @@ export class SqliteBackend implements MemoryBackend {
       timestamp: now,
       taskPda: options.taskPda,
       metadata: options.metadata,
+      workspaceId: options.workspaceId ?? "default",
+      agentId: options.agentId,
+      userId: options.userId,
+      worldId: options.worldId,
+      channel: options.channel,
     };
   }
 
@@ -165,6 +175,22 @@ export class SqliteBackend implements MemoryBackend {
     if (query.role) {
       conditions.push("role = ?");
       params.push(query.role);
+    }
+    if (query.workspaceId) {
+      conditions.push("workspace_id = ?");
+      params.push(query.workspaceId);
+    }
+    if (query.agentId) {
+      conditions.push("agent_id = ?");
+      params.push(query.agentId);
+    }
+    if (query.userId) {
+      conditions.push("user_id = ?");
+      params.push(query.userId);
+    }
+    if (query.worldId) {
+      conditions.push("world_id = ?");
+      params.push(query.worldId);
     }
 
     const validOrders = { asc: "ASC", desc: "DESC" } as const;
@@ -390,12 +416,19 @@ export class SqliteBackend implements MemoryBackend {
         task_pda TEXT,
         metadata TEXT,
         timestamp INTEGER NOT NULL,
-        expires_at INTEGER
+        expires_at INTEGER,
+        workspace_id TEXT NOT NULL DEFAULT 'default',
+        agent_id TEXT,
+        user_id TEXT,
+        world_id TEXT,
+        channel TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_entries_session_id ON memory_entries(session_id);
       CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON memory_entries(timestamp);
       CREATE INDEX IF NOT EXISTS idx_entries_task_pda ON memory_entries(task_pda);
+      CREATE INDEX IF NOT EXISTS idx_entries_workspace_id ON memory_entries(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_entries_workspace_session ON memory_entries(workspace_id, session_id, timestamp);
 
       CREATE TABLE IF NOT EXISTS memory_kv (
         key TEXT PRIMARY KEY,
@@ -403,6 +436,31 @@ export class SqliteBackend implements MemoryBackend {
         expires_at INTEGER
       );
     `);
+    // Schema migration: add scoping columns to existing DBs
+    this.migrateSchemaIfNeeded();
+  }
+
+  private migrateSchemaIfNeeded(): void {
+    try {
+      // Check if workspace_id column exists
+      const columns = this.db
+        .prepare("PRAGMA table_info(memory_entries)")
+        .all() as Array<{ name: string }>;
+      const hasWorkspaceId = columns.some((c) => c.name === "workspace_id");
+      if (!hasWorkspaceId) {
+        this.db.exec(`
+          ALTER TABLE memory_entries ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default';
+          ALTER TABLE memory_entries ADD COLUMN agent_id TEXT;
+          ALTER TABLE memory_entries ADD COLUMN user_id TEXT;
+          ALTER TABLE memory_entries ADD COLUMN world_id TEXT;
+          ALTER TABLE memory_entries ADD COLUMN channel TEXT;
+          CREATE INDEX IF NOT EXISTS idx_entries_workspace_id ON memory_entries(workspace_id);
+          CREATE INDEX IF NOT EXISTS idx_entries_workspace_session ON memory_entries(workspace_id, session_id, timestamp);
+        `);
+      }
+    } catch {
+      // Migration not needed or already applied
+    }
   }
 
   private cleanupExpired(): void {
@@ -443,6 +501,12 @@ export class SqliteBackend implements MemoryBackend {
         // Ignore corrupt metadata
       }
     }
+    // Scoping fields (Phase 2)
+    if (row.workspace_id) (entry as any).workspaceId = row.workspace_id;
+    if (row.agent_id) (entry as any).agentId = row.agent_id;
+    if (row.user_id) (entry as any).userId = row.user_id;
+    if (row.world_id) (entry as any).worldId = row.world_id;
+    if (row.channel) (entry as any).channel = row.channel;
 
     return entry;
   }
