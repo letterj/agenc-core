@@ -4059,6 +4059,16 @@ export function classifyPlannerPlanArtifactIntent(
   if (!PLANNER_PLAN_ARTIFACT_FILE_RE.test(normalized)) {
     return "none";
   }
+  // Review/question intent — the user is asking ABOUT the plan, not
+  // asking to implement or edit it.  Detect question patterns before
+  // implementation/edit cues so that "are there gaps?" doesn't trigger
+  // the edit_artifact or implement_from_artifact paths.
+  if (
+    /\b(?:are there|is there|is it|does it|do we|can you review|read through|look at|check|analyze|evaluate|assess)\b/i.test(normalized) &&
+    /\?/.test(normalized)
+  ) {
+    return "none";
+  }
   const signals = collectPlannerRequestSignals(normalized, []);
   const hasDirectArtifactEditCue =
     /\b(?:todo(?:\.md)?|plan\.(?:md|txt|rst)|implementation[-_ ]plan(?:\.md)?|project[-_ ]plan(?:\.md)?|roadmap(?:\.md)?|checklist(?:\.md)?|spec(?:ification)?(?:\.md)?)\b[\s\S]{0,80}\b(?:update|rewrite|improve|perfect|polish|edit|revise|expand|flesh\s+out|address\s+gaps?|fix\s+gaps?|tighten|correct)\b/i.test(
