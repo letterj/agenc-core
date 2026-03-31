@@ -75,6 +75,8 @@ export interface SemanticMemoryRetrieverConfig {
   roleBudgetWeights?: Partial<Record<RetrievalMemoryRole, number>>;
   /** Max age in ms for cross-session semantic/episodic retrieval. 0 = unlimited. Default: 30 days. */
   maxSemanticAgeMs?: number;
+  /** Workspace/context scope for retrieval isolation (Phase 2). */
+  workspaceId?: string;
   logger?: Logger;
 }
 
@@ -310,6 +312,7 @@ export class SemanticMemoryRetriever implements MemoryRetriever {
   private readonly maxCandidatesPerRole: number;
   private readonly diversityThreshold: number;
   private readonly maxSemanticAgeMs: number;
+  private readonly workspaceId: string | undefined;
   private readonly roleBudgetWeights: Record<RetrievalMemoryRole, number>;
   private readonly logger: Logger | undefined;
 
@@ -348,6 +351,7 @@ export class SemanticMemoryRetriever implements MemoryRetriever {
       0,
       Math.floor(config.maxSemanticAgeMs ?? DEFAULT_SEMANTIC_MAX_AGE_MS),
     );
+    this.workspaceId = config.workspaceId;
     this.roleBudgetWeights = normalizeRoleWeights(config.roleBudgetWeights);
     this.logger = config.logger;
   }
@@ -578,6 +582,9 @@ export class SemanticMemoryRetriever implements MemoryRetriever {
       {
         limit: this.maxCandidatesPerRole,
         sessionId: isSessionScopedRole ? sessionId : undefined,
+        // Workspace scoping: ensures entries from workspace A never
+        // returned in workspace B (Phase 2 EC-1: cross-context isolation)
+        workspaceId: this.workspaceId,
         ...(
           !isSessionScopedRole && maxAgeMs > 0
             ? { after: Date.now() - maxAgeMs }
