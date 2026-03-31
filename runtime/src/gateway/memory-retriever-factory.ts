@@ -175,6 +175,8 @@ async function createSemanticRetriever(
     recencyHalfLifeMs: SEMANTIC_MEMORY_DEFAULTS.RECENCY_HALF_LIFE_MS,
     hybridVectorWeight: SEMANTIC_MEMORY_DEFAULTS.HYBRID_VECTOR_WEIGHT,
     hybridKeywordWeight: SEMANTIC_MEMORY_DEFAULTS.HYBRID_KEYWORD_WEIGHT,
+    // Phase 2: workspace scoping ensures retrieval isolation
+    workspaceId: workspacePath || undefined,
     logger,
   });
 }

@@ -286,20 +286,6 @@ export class BackgroundRunNotifier {
   ): Record<string, unknown> {
     const text = buildTextSummary({ eventType, context });
     switch (sink.type) {
-      case "slack_webhook":
-        return {
-          text,
-          blocks: [
-            {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: `*${eventType}*\n${text}`,
-              },
-            },
-          ],
-          metadata: sharedPayload,
-        };
       case "discord_webhook":
         return {
           content: text,
