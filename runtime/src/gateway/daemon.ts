@@ -1689,10 +1689,14 @@ export class DaemonManager {
         const daemonLogger = this.logger;
         const concordiaHistories = new Map<string, Array<{ role: string; content: string }>>();
 
+        const webChatRef = this._webChatChannel;
         this._concordiaBridge = new ConcordiaBridge(
           { enabled: true, bridgePort: 3200 },
           {
             logger: this.logger,
+            broadcastEvent: (eventType: string, data: Record<string, unknown>) => {
+              webChatRef?.broadcastEvent(eventType, data);
+            },
             sendMessage: async (agentId: string, content: string): Promise<string> => {
               if (!chatExecutor) return "";
               const sessionId = `concordia:${agentId}`;

@@ -134,59 +134,52 @@ export function useSimulation(config: {
   } = config;
 
   const [state, dispatch] = useReducer(reducer, initialState);
-  const wsRef = useRef<WebSocket | null>(null);
 
-  // WebSocket connection for events with auto-reconnect
+  // Poll bridge for simulation events (no separate WebSocket needed)
+  const eventIndexRef = useRef(0);
+
   useEffect(() => {
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let alive = true;
 
-    function connect() {
+    const pollEvents = async () => {
       if (!alive) return;
       try {
-        ws = new WebSocket(eventWsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
+        const resp = await fetch(
+          `${bridgeUrl}/simulation/events?since=${eventIndexRef.current}`,
+        );
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.events && Array.isArray(data.events)) {
+            for (const evt of data.events) {
+              const simEvent: SimulationEvent = {
+                type: evt.type?.replace("simulation.", "") ?? "step",
+                step: evt.data?.step ?? 0,
+                timestamp: evt.data?.timestamp ?? Date.now(),
+                agent_name: evt.data?.agentName ?? evt.data?.agent_name,
+                content: evt.data?.content,
+                resolved_event: evt.data?.resolution,
+                metadata: evt.data,
+              };
+              dispatch({ type: "ADD_EVENT", event: simEvent });
+            }
+            eventIndexRef.current = data.total ?? eventIndexRef.current;
+          }
           dispatch({ type: "SET_CONNECTED", connected: true });
-          dispatch({ type: "SET_ERROR", error: null });
-        };
-        ws.onclose = () => {
-          dispatch({ type: "SET_CONNECTED", connected: false });
-          // Auto-reconnect after 2s
-          if (alive) {
-            reconnectTimer = setTimeout(connect, 2000);
-          }
-        };
-        ws.onerror = () => {
-          // onclose will fire after onerror, triggering reconnect
-        };
-
-        ws.onmessage = (msg) => {
-          try {
-            const event: SimulationEvent = JSON.parse(msg.data);
-            dispatch({ type: "ADD_EVENT", event });
-          } catch {
-            // Ignore malformed events
-          }
-        };
-      } catch {
-        if (alive) {
-          reconnectTimer = setTimeout(connect, 2000);
         }
+      } catch {
+        dispatch({ type: "SET_CONNECTED", connected: false });
       }
-    }
+    };
 
-    connect();
+    const interval = setInterval(pollEvents, 1000);
+    // Initial poll
+    void pollEvents();
 
     return () => {
       alive = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (ws) ws.close();
-      wsRef.current = null;
+      clearInterval(interval);
     };
-  }, [eventWsUrl]);
+  }, [bridgeUrl]);
 
   // Poll agent states
   useEffect(() => {
@@ -209,11 +202,11 @@ export function useSimulation(config: {
     return () => clearInterval(interval);
   }, [bridgeUrl, agentIds, pollIntervalMs]);
 
-  // Poll simulation status
+  // Poll simulation status (from bridge on same port as /setup)
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const resp = await fetch(`${controlUrl}/simulation/status`);
+        const resp = await fetch(`${bridgeUrl}/simulation/status`);
         if (resp.ok) {
           const status: SimulationStatus = await resp.json();
           dispatch({ type: "SET_STATUS", status });
@@ -224,24 +217,24 @@ export function useSimulation(config: {
     }, pollIntervalMs);
 
     return () => clearInterval(interval);
-  }, [controlUrl, pollIntervalMs]);
+  }, [bridgeUrl, pollIntervalMs]);
 
-  // Control functions
+  // Control functions (all on bridge URL — no separate control port)
   const play = useCallback(async () => {
-    await fetch(`${controlUrl}/simulation/play`, { method: "POST" }).catch(() => {});
-  }, [controlUrl]);
+    await fetch(`${bridgeUrl}/simulation/play`, { method: "POST" }).catch(() => {});
+  }, [bridgeUrl]);
 
   const pause = useCallback(async () => {
-    await fetch(`${controlUrl}/simulation/pause`, { method: "POST" }).catch(() => {});
-  }, [controlUrl]);
+    await fetch(`${bridgeUrl}/simulation/pause`, { method: "POST" }).catch(() => {});
+  }, [bridgeUrl]);
 
   const step = useCallback(async () => {
-    await fetch(`${controlUrl}/simulation/step`, { method: "POST" }).catch(() => {});
-  }, [controlUrl]);
+    await fetch(`${bridgeUrl}/simulation/step`, { method: "POST" }).catch(() => {});
+  }, [bridgeUrl]);
 
   const stop = useCallback(async () => {
-    await fetch(`${controlUrl}/simulation/stop`, { method: "POST" }).catch(() => {});
-  }, [controlUrl]);
+    await fetch(`${bridgeUrl}/simulation/stop`, { method: "POST" }).catch(() => {});
+  }, [bridgeUrl]);
 
   return { state, play, pause, step, stop };
 }
