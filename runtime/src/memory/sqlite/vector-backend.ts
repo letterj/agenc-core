@@ -353,7 +353,15 @@ export class SqliteVectorBackend
         if (!options.memoryRoles.some((r) => combined.includes(r))) continue;
       }
       // Workspace/agent scoping (Phase 2)
-      if (options?.workspaceId && entry.workspaceId !== options.workspaceId) continue;
+      // Allow entries with "default" or undefined workspaceId to match any workspace
+      // (legacy unscoped entries from before workspace-aware ingestion).
+      if (
+        options?.workspaceId &&
+        entry.workspaceId !== options.workspaceId &&
+        entry.workspaceId !== "default" &&
+        entry.workspaceId !== undefined &&
+        entry.workspaceId !== ""
+      ) continue;
       if (options?.agentId && entry.agentId !== options.agentId) continue;
       result.set(id, entry);
     }
