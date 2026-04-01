@@ -8569,6 +8569,87 @@ describe("ChatExecutor", () => {
       });
     });
 
+    it("disables streaming for exact-response turns even when a default stream callback exists", async () => {
+      const provider = createMockProvider("primary", {
+        chat: vi.fn().mockResolvedValue(
+          mockResponse({
+            content: "ACK-STREAMLESS",
+          }),
+        ),
+      });
+      const constructorStreamCallback = vi.fn();
+      const executor = new ChatExecutor({
+        providers: [provider],
+        toolHandler: vi.fn().mockResolvedValue("unused"),
+        plannerEnabled: true,
+        onStreamChunk: constructorStreamCallback,
+        allowedTools: ["desktop.text_editor", "execute_with_agent"],
+      });
+
+      const result = await executor.execute(
+        createParams({
+          message: createMessage(
+            "Concordia exact turn check. Reply with exactly ACK-STREAMLESS and nothing else.",
+          ),
+        }),
+      );
+
+      expect(result.content).toBe("ACK-STREAMLESS");
+      expect(result.plannerSummary?.routeReason).toBe("exact_response_turn");
+      expect(provider.chat).toHaveBeenCalledTimes(1);
+      expect(provider.chatStream).not.toHaveBeenCalled();
+      expect(constructorStreamCallback).not.toHaveBeenCalled();
+    });
+
+    it("treats concordia action turns as direct simulation turns instead of exact-response turns", async () => {
+      const provider = createMockProvider("primary", {
+        chat: vi.fn().mockResolvedValue(
+          mockResponse({
+            content: "checks the live gold quote and places a bid for 2 contracts at 2453.",
+          }),
+        ),
+      });
+      const executor = new ChatExecutor({
+        providers: [provider],
+        toolHandler: vi.fn().mockResolvedValue("unused"),
+        plannerEnabled: true,
+        allowedTools: ["desktop.text_editor", "execute_with_agent"],
+      });
+
+      const result = await executor.execute(
+        createParams({
+          message: {
+            ...createMessage(
+              [
+                "[Concordia Action Request]",
+                "Agent: Alex",
+                "Reply with one short plain-text description of your immediate next action.",
+                "Be specific and concrete.",
+                "Do not include your name, quotation marks, or any explanation.",
+                "",
+                "What would Alex do next? Give one specific, concrete action that Alex personally takes right now.",
+              ].join("\n"),
+            ),
+            channel: "concordia",
+            metadata: {
+              turn_contract: "concordia_simulation_turn",
+              type: "concordia_agent_turn",
+            },
+          },
+        }),
+      );
+
+      expect(result.content).toBe(
+        "checks the live gold quote and places a bid for 2 contracts at 2453.",
+      );
+      expect(result.plannerSummary?.routeReason).toBe("concordia_simulation_turn");
+      expect(provider.chat).toHaveBeenCalledTimes(1);
+      expect((provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]).toMatchObject({
+        toolChoice: "none",
+        toolRouting: { allowedToolNames: [] },
+      });
+    });
+
     it("does not suppress tools for delegated child-memory turns that explicitly require execute_with_agent", async () => {
       const provider = createMockProvider("primary", {
         chat: vi.fn().mockResolvedValue(

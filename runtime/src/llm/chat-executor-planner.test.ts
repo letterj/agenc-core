@@ -876,6 +876,26 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
     expect(decision.reason).toContain("artifact_spec_execution_request");
   });
 
+  it("routes concordia simulation turns through the direct non-planner path using metadata, not prompt regex", () => {
+    const decision = assessPlannerDecision(
+      true,
+      [
+        "[Concordia Action Request]",
+        "Agent: Alex",
+        "Reply with one short plain-text description of your immediate next action.",
+        "",
+        "What would Alex do next?",
+      ].join("\n"),
+      [],
+      {
+        turn_contract: "concordia_simulation_turn",
+      },
+    );
+
+    expect(decision.shouldPlan).toBe(false);
+    expect(decision.reason).toBe("concordia_simulation_turn");
+  });
+
   it("extracts required subagent steps from the compact 'plan required' prompt shape", () => {
     const requirements = extractExplicitSubagentOrchestrationRequirements(
       "Subagent context audit SG3. Sub-agent orchestration plan required: " +

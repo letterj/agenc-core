@@ -8,6 +8,8 @@ import { DailyLogManager } from "../memory/structured.js";
 import { MemoryTraceLogger } from "../memory/trace-logger.js";
 import type { Logger } from "../utils/logger.js";
 
+const DEFAULT_CONCORDIA_GM_MODEL = "grok-4-1-fast-non-reasoning";
+
 export interface ConcordiaMemoryHostServices {
   readonly memoryBackend: MemoryBackend;
   readonly identityManager: AgentIdentityManager;
@@ -20,6 +22,12 @@ export interface ConcordiaMemoryHostServices {
 
 export interface ConcordiaRuntimeHostServices {
   readonly llm: {
+    readonly provider?: string;
+    readonly apiKey?: string;
+    readonly model?: string;
+    readonly baseUrl?: string;
+  };
+  readonly defaults?: {
     readonly provider?: string;
     readonly apiKey?: string;
     readonly model?: string;
@@ -51,6 +59,14 @@ export function createChannelHostServices(params: {
         provider: params.llmConfig.provider,
         apiKey: params.llmConfig.apiKey,
         model: params.llmConfig.model,
+        baseUrl: params.llmConfig.baseUrl,
+      },
+      defaults: {
+        provider: params.llmConfig.provider,
+        apiKey: params.llmConfig.apiKey,
+        model: params.llmConfig.provider === "grok"
+          ? DEFAULT_CONCORDIA_GM_MODEL
+          : params.llmConfig.model,
         baseUrl: params.llmConfig.baseUrl,
       },
     } satisfies ConcordiaRuntimeHostServices;

@@ -36,6 +36,12 @@ describe("createChannelHostServices", () => {
       model: "grok-4.20-beta-0309-reasoning",
       baseUrl: "https://api.x.ai/v1",
     });
+    expect(services?.concordia_runtime?.defaults).toEqual({
+      provider: "grok",
+      apiKey: "test-key",
+      model: "grok-4-1-fast-non-reasoning",
+      baseUrl: "https://api.x.ai/v1",
+    });
   });
 
   it("returns undefined when memory is unavailable", () => {
@@ -69,6 +75,9 @@ describe("createChannelHostServices", () => {
 
     expect(services?.concordia_runtime?.llm.provider).toBe("grok");
     expect(services?.concordia_runtime?.llm.apiKey).toBe("test-key");
+    expect(services?.concordia_runtime?.defaults?.model).toBe(
+      "grok-4-1-fast-non-reasoning",
+    );
     expect(services?.concordia_memory).toBeUndefined();
   });
 });

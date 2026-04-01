@@ -457,7 +457,8 @@ export async function executeToolCallLoop(
 ): Promise<void> {
   const suppressToolsForDialogueTurn =
     !ctx.plannerDecision.shouldPlan &&
-    (ctx.plannerDecision.reason === "exact_response_turn" ||
+    (ctx.plannerDecision.reason === "concordia_simulation_turn" ||
+      ctx.plannerDecision.reason === "exact_response_turn" ||
       ctx.plannerDecision.reason === "dialogue_memory_turn" ||
       ctx.plannerDecision.reason === "dialogue_recall_turn");
   const initialContractGuidance = callbacks.resolveActiveToolContractGuidance(ctx, {

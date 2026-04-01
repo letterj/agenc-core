@@ -50,7 +50,11 @@ import type { RuntimeFaultInjector } from "../eval/fault-injection.js";
 function shouldBypassStreamingForModelCall(
   options: LLMChatOptions | undefined,
   callPhase: ChatCallUsageRecord["phase"] | undefined,
+  disableStreaming: boolean | undefined,
 ): boolean {
+  if (disableStreaming === true) {
+    return true;
+  }
   const isExplicitToolTurn =
     options?.toolChoice === "required" ||
     (typeof options?.toolChoice === "object" &&
@@ -96,6 +100,7 @@ export interface CallWithFallbackOptions {
   callIndex?: number;
   callPhase?: ChatCallUsageRecord["phase"];
   faultInjector?: RuntimeFaultInjector;
+  disableStreaming?: boolean;
 }
 
 // ============================================================================
@@ -191,7 +196,11 @@ export async function callWithFallback(
   let lastError: Error | undefined;
   const transport =
     onStreamChunk !== undefined &&
-    !shouldBypassStreamingForModelCall(baseChatOptions, options?.callPhase)
+    !shouldBypassStreamingForModelCall(
+      baseChatOptions,
+      options?.callPhase,
+      options?.disableStreaming,
+    )
       ? "chat_stream"
       : "chat";
 

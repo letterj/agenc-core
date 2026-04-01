@@ -10,6 +10,7 @@ export interface SimulationSetupConfig {
   maxSteps: number;
   gmModel: string;
   gmProvider: string;
+  engineType: "sequential" | "simultaneous";
   agents: AgentFormData[];
 }
 
@@ -32,8 +33,9 @@ const PRESETS: Record<string, SimulationSetupConfig> = {
     premise:
       "It is morning in the medieval town of Thornfield. The market square is bustling with activity. Three residents begin their day.",
     maxSteps: 20,
-    gmModel: "grok-4.20-beta-0309-reasoning",
+    gmModel: "grok-4-1-fast-non-reasoning",
     gmProvider: "grok",
+    engineType: "simultaneous",
     agents: [
       {
         id: "elena",
@@ -63,8 +65,9 @@ const PRESETS: Record<string, SimulationSetupConfig> = {
     premise:
       "Four traders gather at the commodities exchange. Gold prices have been volatile. Each trader has different information and different risk tolerance.",
     maxSteps: 25,
-    gmModel: "grok-4.20-beta-0309-reasoning",
+    gmModel: "grok-4-1-fast-non-reasoning",
     gmProvider: "grok",
+    engineType: "simultaneous",
     agents: [
       {
         id: "alex",
@@ -101,8 +104,9 @@ const PRESETS: Record<string, SimulationSetupConfig> = {
     premise:
       "Three AI researchers share a lab at a prestigious university. A major conference deadline is in two weeks. They have overlapping research interests but limited compute budget.",
     maxSteps: 20,
-    gmModel: "grok-4.20-beta-0309-reasoning",
+    gmModel: "grok-4-1-fast-non-reasoning",
     gmProvider: "grok",
+    engineType: "simultaneous",
     agents: [
       {
         id: "dr-chen",
@@ -131,11 +135,11 @@ const PRESETS: Record<string, SimulationSetupConfig> = {
 
 // Chat-capable Grok models (source: xAI docs, March 2026)
 const GROK_MODELS = [
-  { id: "grok-4.20-beta-0309-reasoning", label: "Grok 4.20 Reasoning (2M ctx)", default: true },
+  { id: "grok-4-1-fast-non-reasoning", label: "Grok 4.1 Fast Non-Reasoning (2M ctx)", default: true },
+  { id: "grok-4.20-beta-0309-reasoning", label: "Grok 4.20 Reasoning (2M ctx)" },
   { id: "grok-4.20-beta-0309-non-reasoning", label: "Grok 4.20 Non-Reasoning (2M ctx)" },
   { id: "grok-4.20-multi-agent-beta-0309", label: "Grok 4.20 Multi-Agent (2M ctx)" },
   { id: "grok-4-1-fast-reasoning", label: "Grok 4.1 Fast Reasoning (2M ctx)" },
-  { id: "grok-4-1-fast-non-reasoning", label: "Grok 4.1 Fast Non-Reasoning (2M ctx)" },
   { id: "grok-code-fast-1", label: "Grok Code Fast (256K ctx)" },
   { id: "grok-3", label: "Grok 3 (131K ctx)" },
   { id: "grok-3-mini", label: "Grok 3 Mini (131K ctx)" },
@@ -148,8 +152,9 @@ export function SimulationSetup({ onLaunch, loading, bridgeUrl = "http://localho
     worldId: "",
     premise: "",
     maxSteps: 20,
-    gmModel: "grok-4.20-beta-0309-reasoning",
+    gmModel: "grok-4-1-fast-non-reasoning",
     gmProvider: "grok",
+    engineType: "simultaneous",
     agents: [],
   });
   const [agentCount, setAgentCount] = useState(3);
@@ -305,6 +310,10 @@ export function SimulationSetup({ onLaunch, loading, bridgeUrl = "http://localho
                     </option>
                   ))}
                 </select>
+                <div className="mt-1 text-[11px] text-green-700">
+                  Default uses a faster 2M-context model for better turn cadence. Switch to a
+                  reasoning model only if you want slower but more deliberate GM behavior.
+                </div>
               </div>
             </div>
           </div>

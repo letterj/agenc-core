@@ -198,6 +198,7 @@ export function resolveLegacyCompletionCompatibility(input: {
   const analysis = analyzeLegacyCompletionTurn(input.ctx);
   const plannerRouteReason = input.ctx.plannerSummaryState.routeReason;
   if (
+    plannerRouteReason === "concordia_simulation_turn" ||
     plannerRouteReason === "exact_response_turn" ||
     plannerRouteReason === "dialogue_memory_turn"
   ) {
@@ -205,7 +206,7 @@ export function resolveLegacyCompletionCompatibility(input: {
       allowed: true,
       compatibilityClass: "plan_only",
       reason:
-        "Legacy completion remains allowed for exact-response and dialogue-memory turns.",
+        "Legacy completion remains allowed for direct Concordia/exact-response/dialogue-memory turns.",
     };
   }
 

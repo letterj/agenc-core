@@ -53,6 +53,7 @@ import {
   sanitizeDelegatedAssistantEnvironmentSummary,
 } from "../utils/delegated-scope-trust.js";
 import { buildWorkflowRecoveryStateLines } from "./chat-executor-recovery.js";
+import { hasConcordiaSimulationTurnContract } from "./chat-executor-turn-contracts.js";
 
 // ============================================================================
 // JSON parsing helpers (used by planner + verifier)
@@ -349,7 +350,17 @@ export function reconcileVerifiedFileWorkflowContent(
   return content;
 }
 
-function extractExactResponseLiteral(messageText: string): string | undefined {
+function extractExactResponseLiteral(
+  messageText: string,
+  metadata?: Readonly<Record<string, unknown>>,
+): string | undefined {
+  if (
+    hasConcordiaSimulationTurnContract(metadata) ||
+    /^\[Concordia (?:Action|Speech|Choice|Numeric) Request\]/.test(messageText)
+  ) {
+    return undefined;
+  }
+
   const directiveMatch =
     /\b(?:return|reply|respond|output|answer)(?:\s+with)?\s+exactly(?:\s+as)?\s+/i.exec(
       messageText,
@@ -434,11 +445,12 @@ export function reconcileExactResponseContract(
   toolCalls: readonly ToolCallRecord[],
   messageText: string,
   options?: {
+    readonly metadata?: Readonly<Record<string, unknown>>;
     readonly forceLiteralWhenNoToolEvidence?: boolean;
   },
 ): string {
   if (!content) return content;
-  const literal = extractExactResponseLiteral(messageText);
+  const literal = extractExactResponseLiteral(messageText, options?.metadata);
   if (!literal) return content;
 
   const trimmed = content.trim();

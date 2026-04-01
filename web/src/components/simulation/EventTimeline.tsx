@@ -91,7 +91,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
       {/* Event list */}
       <div
         ref={containerRef}
-        className="flex-1 overflow-y-auto p-1 space-y-0.5"
+        className="flex-1 overflow-x-hidden overflow-y-auto p-1 space-y-0.5"
       >
         {filtered.map((event, i) => (
           <EventCard key={i} event={event} />
@@ -109,30 +109,32 @@ function EventCard({ event }: { event: SimulationEvent }) {
   const color = EVENT_COLORS[event.type] ?? "text-green-600";
   const label = EVENT_LABELS[event.type] ?? event.type.slice(0, 3).toUpperCase();
   const time = new Date(event.timestamp * 1000).toLocaleTimeString();
+  const content = event.content ?? event.resolved_event ?? "";
 
   return (
     <div
-      className="hover:bg-green-950 cursor-pointer px-1"
+      className="min-w-0 w-full hover:bg-green-950 cursor-pointer px-1"
       onClick={() => setExpanded(!expanded)}
     >
-      <div className="flex gap-2">
+      <div className="grid w-full grid-cols-[4.5rem_2.5rem_2.75rem_auto_minmax(0,1fr)] items-start gap-x-2 gap-y-0.5">
         <span className="text-green-800 w-16 shrink-0">{time}</span>
         <span className={`${color} w-6 shrink-0 font-bold`}>{label}</span>
         <span className="text-green-500 w-4 shrink-0">#{event.step}</span>
         {event.agent_name && (
           <span className="text-green-300 shrink-0">{event.agent_name}:</span>
         )}
-        <span className="text-green-500 truncate">
-          {event.content ?? event.resolved_event ?? ""}
+        {!event.agent_name && <span className="shrink-0" />}
+        <span className="min-w-0 whitespace-pre-wrap break-words text-green-500">
+          {content}
         </span>
       </div>
       {expanded && event.resolved_event && event.content !== event.resolved_event && (
-        <div className="ml-24 text-green-600 mt-0.5">
+        <div className="ml-24 mt-0.5 whitespace-pre-wrap break-words text-green-600">
           Resolved: {event.resolved_event}
         </div>
       )}
       {expanded && event.metadata && (
-        <div className="ml-24 text-green-800 mt-0.5">
+        <div className="ml-24 mt-0.5 whitespace-pre-wrap break-words text-green-800">
           {JSON.stringify(event.metadata, null, 0).slice(0, 200)}
         </div>
       )}

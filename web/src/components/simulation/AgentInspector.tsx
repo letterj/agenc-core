@@ -125,7 +125,9 @@ export function AgentInspector({ agentId, agent, onClose }: AgentInspectorProps)
                       [{mem.role}]{" "}
                       {new Date(mem.timestamp).toLocaleTimeString()}
                     </span>
-                    <div className="text-green-500 truncate">{mem.content}</div>
+                    <div className="text-green-500 whitespace-pre-wrap break-words">
+                      {mem.content}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -137,7 +139,7 @@ export function AgentInspector({ agentId, agent, onClose }: AgentInspectorProps)
             <Section title="KNOWN WORLD FACTS">
               <div className="space-y-1">
                 {agent.worldFacts.map((fact, i) => (
-                  <div key={i} className="text-xs text-green-500">
+                  <div key={i} className="text-xs whitespace-pre-wrap break-words text-green-500">
                     <span className="text-green-700">[{fact.observedBy}]</span>{" "}
                     {fact.content}
                     {fact.confirmations > 0 && (

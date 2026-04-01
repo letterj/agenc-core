@@ -42,7 +42,7 @@ export function SimulationViewer({
     bridgeUrl,
     controlUrl,
     agentIds,
-    pollIntervalMs: phase === "running" ? 2000 : 10000,
+    pollIntervalMs: phase === "running" ? 750 : 3000,
   });
 
   const handleLaunch = useCallback(
@@ -68,6 +68,7 @@ export function SimulationViewer({
             max_steps: config.maxSteps,
             gm_model: config.gmModel,
             gm_provider: config.gmProvider,
+            engine_type: config.engineType,
           }),
         });
 
@@ -157,6 +158,10 @@ export function SimulationViewer({
             <span className="text-green-600">
               {launchConfig.agents.length} agents
             </span>
+            <span className="text-green-800">|</span>
+            <span className="text-green-600">
+              Engine: {launchConfig.engineType}
+            </span>
           </>
         )}
         {phase === "finished" && (
@@ -179,7 +184,7 @@ export function SimulationViewer({
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Agent cards */}
-        <div className="w-72 shrink-0 border-r border-green-800 overflow-y-auto p-2">
+        <div className="w-64 xl:w-72 shrink-0 border-r border-green-800 overflow-y-auto p-2">
           <div className="text-green-600 text-xs mb-2 font-bold tracking-wider">
             AGENTS ({Object.keys(state.agentStates).length})
           </div>

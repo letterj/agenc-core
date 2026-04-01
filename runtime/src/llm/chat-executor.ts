@@ -50,6 +50,7 @@ import {
   resolveModelRoute,
   type ModelRoutingPolicy,
 } from "./model-routing-policy.js";
+import { isConcordiaSimulationTurnMessage } from "./chat-executor-turn-contracts.js";
 import {
   resolveDelegationDecisionConfig,
   type ResolvedDelegationDecisionConfig,
@@ -733,6 +734,7 @@ export class ChatExecutor {
       ctx.allToolCalls,
       ctx.messageText,
       {
+        metadata: ctx.message.metadata,
         forceLiteralWhenNoToolEvidence:
           plannerSummary?.routeReason === "exact_response_turn" ||
           plannerSummary?.routeReason === "dialogue_memory_turn",
@@ -944,6 +946,12 @@ export class ChatExecutor {
     ctx: ExecutionContext,
     phase: ChatCallUsageRecord["phase"],
   ): RuntimeRunClass {
+    if (
+      isConcordiaSimulationTurnMessage(ctx.message) &&
+      (phase === "initial" || phase === "tool_followup")
+    ) {
+      return "child";
+    }
     return ctx.defaultRunClass ?? this.defaultRunClass ?? mapPhaseToRunClass(phase);
   }
 
@@ -2017,6 +2025,9 @@ export class ChatExecutor {
       selectedProviderRouteKey: routingDecision.route.selectedProviderRouteKey,
       phase: input.phase,
     });
+    const disableStreaming =
+      ctx.plannerDecision.reason === "exact_response_turn" ||
+      ctx.plannerDecision.reason === "dialogue_memory_turn";
     const structuredOutput =
       requestedStructuredOutput &&
       routingDecision.route.selectedProviderName === "grok"
@@ -2116,6 +2127,7 @@ export class ChatExecutor {
               callPhase: input.phase,
             }
             : {}),
+          ...(disableStreaming ? { disableStreaming: true } : {}),
           providersOverride: routingDecision.route.providers,
         },
       );
@@ -2287,6 +2299,7 @@ export class ChatExecutor {
       this.plannerEnabled,
       messageText,
       history,
+      params.message.metadata,
     );
     const plannerArtifactDirectPath =
       plannerDecision.reason === "plan_generation_direct_path" ||

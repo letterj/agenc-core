@@ -61,7 +61,7 @@ export function WorldStatePanel({ agentStates, worldId }: WorldStatePanelProps) 
       {worldFacts.length > 0 && (
         <div className="mt-1">
           {worldFacts.slice(0, 5).map((f, i) => (
-            <div key={i} className="text-green-600 truncate">
+            <div key={i} className="text-green-600 whitespace-pre-wrap break-words">
               [{f.observedBy}] {f.content}
               {f.confirmations > 0 && (
                 <span className="text-green-800">

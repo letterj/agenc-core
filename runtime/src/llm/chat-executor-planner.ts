@@ -94,6 +94,7 @@ import {
   MIN_DELEGATION_TIMEOUT_MS,
 } from "../gateway/delegation-timeout.js";
 import type { HostToolingProfile } from "../gateway/host-tooling.js";
+import { hasConcordiaSimulationTurnContract } from "./chat-executor-turn-contracts.js";
 import { collectDirectModeShellControlTokens } from "../tools/system/command-line.js";
 import {
   buildDelegationExecutionContext,
@@ -304,6 +305,7 @@ export function assessPlannerDecision(
   plannerEnabled: boolean,
   messageText: string,
   history: readonly LLMMessage[],
+  metadata?: Readonly<Record<string, unknown>>,
 ): PlannerDecision {
   if (!plannerEnabled) {
     return {
@@ -316,6 +318,14 @@ export function assessPlannerDecision(
   const signals = collectPlannerRequestSignals(messageText, history);
   let score = 0;
   const reasons: string[] = [];
+
+  if (hasConcordiaSimulationTurnContract(metadata)) {
+    return {
+      score,
+      shouldPlan: false,
+      reason: "concordia_simulation_turn",
+    };
+  }
 
   if (signals.hasMultiStepCue) {
     score += 3;

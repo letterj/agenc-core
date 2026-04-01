@@ -130,4 +130,24 @@ describe("callWithFallback", () => {
     expect(provider.chatStream).toHaveBeenCalledOnce();
     expect(provider.chat).not.toHaveBeenCalled();
   });
+
+  it("uses non-stream chat when streaming is explicitly disabled", async () => {
+    const provider = createMockProvider();
+    const onStreamChunk = vi.fn();
+
+    await callWithFallback(
+      createDeps(provider),
+      [{ role: "user", content: "reply with exactly ACK" }],
+      onStreamChunk,
+      undefined,
+      {
+        callPhase: "initial",
+        toolChoice: "none",
+        disableStreaming: true,
+      },
+    );
+
+    expect(provider.chat).toHaveBeenCalledOnce();
+    expect(provider.chatStream).not.toHaveBeenCalled();
+  });
 });
