@@ -60,3 +60,10 @@
 - **What worked:** promoting natural-language “create N agents” requests into a typed orchestration contract prevented single-child collapse, and materializing synthesis outputs plus inherited workspace-inspection evidence let the final documentation writer satisfy the contract without redundant repo crawls
 - **What didn't:** manually restarting the raw `daemon.js` entrypoint made the runtime look worse by bypassing the supported detached log lifecycle, so the daemon had to be relaunched through `agenc-runtime start` before the live logs were trustworthy again
 - **Rule added to CLAUDE.md:** yes, restart the daemon through the supported CLI instead of hand-launching the raw daemon entrypoint
+
+## PR #146: fix(runtime): restore concordia world-scoped host services
+- **Date:** 2026-04-01
+- **Files changed:** runtime Concordia host-service resolver, channel host/message wiring, memory graph mutation surface, targeted host-service tests, runtime tech-debt notes
+- **What worked:** moving Concordia memory ownership onto a world-scoped resolver restored the planned architecture cleanly, and the targeted runtime tests now lock the resolver/cache behavior to a runtime-owned contract instead of the old ad hoc daemon-global bag
+- **What didn't:** `runtime/src/plugins/channel-host-services.ts` still carries too much semantic-memory bootstrap and adapter logic in one place, and some of that setup overlaps with the existing memory retriever factory path
+- **Rule added to CLAUDE.md:** no

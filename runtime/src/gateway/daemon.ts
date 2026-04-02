@@ -3247,10 +3247,8 @@ export class DaemonManager {
       defaultForegroundMaxToolRounds: this._defaultForegroundMaxToolRounds,
       buildChannelHostServices: (config) =>
         createChannelHostServices({
-          memoryBackend: this._memoryBackend,
+          config,
           logger: this.logger,
-          workspacePath: this._resolveActiveHostWorkspacePath(config),
-          llmConfig: config.llm,
         }),
       buildSystemPrompt: (config, options) =>
         this._buildSystemPrompt(config, options),

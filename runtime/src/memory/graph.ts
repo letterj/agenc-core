@@ -226,6 +226,26 @@ export class MemoryGraph {
     return edge ?? null;
   }
 
+  async updateEdge(
+    id: string,
+    update: Partial<Pick<MemoryGraphEdge, "type" | "weight" | "metadata" | "validFrom" | "validUntil">>,
+  ): Promise<MemoryGraphEdge | null> {
+    const existing = await this.getEdge(id);
+    if (!existing) {
+      return null;
+    }
+    const merged: MemoryGraphEdge = {
+      ...existing,
+      ...update,
+      id: existing.id,
+      fromId: existing.fromId,
+      toId: existing.toId,
+      createdAt: existing.createdAt,
+    };
+    await this.backend.set(this.edgeKey(id), merged);
+    return merged;
+  }
+
   async listNodes(sessionId?: string): Promise<MemoryGraphNode[]> {
     if (sessionId) {
       const ids = await this.backend.get<string[]>(

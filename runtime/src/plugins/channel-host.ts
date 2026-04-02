@@ -209,6 +209,7 @@ export class HostedChannelPlugin<
       attachments: message.attachments?.map(toOutboundAttachment),
       is_partial: message.isPartial,
       tts: message.tts,
+      metadata: message.metadata,
     });
   }
 

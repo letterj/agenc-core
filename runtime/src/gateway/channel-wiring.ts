@@ -421,7 +421,11 @@ export async function wireExternalChannel(
 
     const sendChannelText = async (content: string): Promise<void> => {
       const formatted = formatForChannel(content, channelName);
-      await channel.send({ sessionId: msg.sessionId, content: formatted });
+      await channel.send({
+        sessionId: msg.sessionId,
+        content: formatted,
+        metadata: msg.metadata,
+      });
     };
     if (
       await deps.handleTextChannelApprovalCommand({
@@ -508,7 +512,11 @@ export async function wireExternalChannel(
         result.content || "(no response)",
         channelName,
       );
-      await channel.send({ sessionId: msg.sessionId, content: formatted });
+      await channel.send({
+        sessionId: msg.sessionId,
+        content: formatted,
+        metadata: msg.metadata,
+      });
 
       if (deps.memoryBackend) {
         try {
@@ -556,7 +564,11 @@ export async function wireExternalChannel(
         error: toErrorMessage(error),
       });
       const errMsg = formatForChannel(failure.userMessage, channelName);
-      await channel.send({ sessionId: msg.sessionId, content: errMsg });
+      await channel.send({
+        sessionId: msg.sessionId,
+        content: errMsg,
+        metadata: msg.metadata,
+      });
     } finally {
       unregisterTextApproval();
     }
