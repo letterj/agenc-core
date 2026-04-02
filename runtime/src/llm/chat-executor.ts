@@ -2434,8 +2434,12 @@ export class ChatExecutor {
     // Build messages array with explicit section tags for prompt budgeting.
     this.pushMessage(ctx, { role: "system", content: ctx.systemPrompt }, "system_anchor");
 
-    const enableSkillContext = params.contextInjection?.skills !== false;
-    const enableMemoryContext = params.contextInjection?.memory !== false;
+    const isConcordiaTurn = isConcordiaSimulationTurnMessage(ctx.message);
+    const enableSkillContext =
+      params.contextInjection?.skills !== false && !isConcordiaTurn;
+    const enableIdentityContext = !isConcordiaTurn;
+    const enableMemoryContext =
+      params.contextInjection?.memory !== false && !isConcordiaTurn;
 
     // Context injection — skill, identity, memory, and learning (all best-effort)
     if (enableSkillContext) {
@@ -2452,7 +2456,7 @@ export class ChatExecutor {
     // Phase 5.4: inject agent identity (personality, beliefs, traits) after skills
     // but before memory/learning so the agent's persona frames retrieved context.
     // Identity is always injected (not gated on hasHistory) since it defines who the agent is.
-    if (this.identityProvider) {
+    if (enableIdentityContext && this.identityProvider) {
       await this.injectContext(
         ctx,
         this.identityProvider,

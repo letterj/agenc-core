@@ -87,6 +87,7 @@ describe("createChannelHostServices", () => {
     expect(world?.socialMemory).toBeDefined();
     expect(world?.graph).toBeDefined();
     expect(world?.sharedMemory).toBeDefined();
+    expect(world?.lifecycle).toBeDefined();
   });
 
   it("caches the same world context and isolates different worlds", async () => {

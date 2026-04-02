@@ -16,6 +16,9 @@ import { CuratedMemoryManager, DailyLogManager } from "../memory/structured.js";
 import { SqliteVectorBackend } from "../memory/sqlite/vector-backend.js";
 import { MemoryTraceLogger } from "../memory/trace-logger.js";
 import { resolveWorldVectorDbPath } from "../memory/world-db-resolver.js";
+import { runReflection } from "../memory/reflection.js";
+import { runConsolidation, runRetention } from "../memory/consolidation.js";
+import { createSingleLLMProvider } from "../gateway/llm-provider-manager.js";
 import type { MemoryBackend } from "../memory/types.js";
 import type { Logger } from "../utils/logger.js";
 
@@ -64,6 +67,26 @@ export interface ConcordiaWorldMemoryHostServices {
     ): string;
   };
   readonly graph: {
+    upsertNode(input: {
+      content: string;
+      sessionId?: string;
+      tags?: string[];
+      entityName?: string;
+      entityType?: string;
+      workspaceId?: string;
+      metadata?: Record<string, unknown>;
+      provenance: Array<{
+        type: string;
+        sourceId: string;
+        description?: string;
+        metadata?: Record<string, unknown>;
+      }>;
+    }): Promise<{
+      id: string;
+      content: string;
+      entityName?: string;
+      entityType?: string;
+    }>;
     findByEntity(
       name: string,
       workspaceId?: string,
@@ -130,6 +153,25 @@ export interface ConcordiaWorldMemoryHostServices {
       message: string,
       sessionId: string,
     ): Promise<ConcordiaRetrieverResult>;
+  };
+  readonly lifecycle?: {
+    reflectAgent(input: {
+      agentId: string;
+      sessionId: string;
+      workspaceId?: string;
+    }): Promise<boolean>;
+    consolidate(input?: {
+      workspaceId?: string;
+    }): Promise<{
+      processed: number;
+      consolidated: number;
+      skippedDuplicates: number;
+      durationMs: number;
+    } | null>;
+    retain(): Promise<{
+      expiredDeleted: number;
+      logsDeleted: number;
+    }>;
   };
   readonly vectorDbPath?: string;
 }
@@ -275,6 +317,13 @@ async function createConcordiaWorldContext(params: {
     baseUrl: params.config.memory?.embeddingBaseUrl,
     model: params.config.memory?.embeddingModel,
   });
+  const reflectionProviderPromise = params.config.llm
+    ? createSingleLLMProvider(params.config.llm, [], params.logger)
+    : Promise.resolve(null);
+  const vectorStore = new SqliteVectorBackend({
+    dbPath: vectorDbPath,
+    dimension: embeddingProvider.dimension,
+  });
 
   let ingestionEngine:
     | ConcordiaWorldMemoryHostServices["ingestionEngine"]
@@ -282,10 +331,6 @@ async function createConcordiaWorldContext(params: {
   let retriever: ConcordiaWorldMemoryHostServices["retriever"] | undefined;
 
   if (embeddingProvider.name !== "noop") {
-    const vectorStore = new SqliteVectorBackend({
-      dbPath: vectorDbPath,
-      dimension: embeddingProvider.dimension,
-    });
     const semanticRetriever = new SemanticMemoryRetriever({
       vectorBackend: vectorStore,
       embeddingProvider,
@@ -336,6 +381,47 @@ async function createConcordiaWorldContext(params: {
     };
   }
 
+  const lifecycle: ConcordiaWorldMemoryHostServices["lifecycle"] = {
+    async reflectAgent(input) {
+      const llmProvider = await reflectionProviderPromise;
+      if (!llmProvider) {
+        return false;
+      }
+      const recentHistory = await worldBackend.getThread(input.sessionId, 20);
+      const result = await runReflection({
+        llmProvider,
+        identityManager,
+        agentId: input.agentId,
+        workspaceId: input.workspaceId ?? params.workspaceId,
+        recentHistory: recentHistory.map((entry) => ({
+          role: entry.role,
+          content: entry.content,
+        })),
+        logger: params.logger,
+      });
+      return result !== null;
+    },
+    consolidate(input) {
+      return runConsolidation(
+        {
+          memoryBackend: worldBackend,
+          vectorStore,
+          embeddingProvider,
+          graph,
+          logger: params.logger,
+        },
+        input?.workspaceId ?? params.workspaceId,
+      );
+    },
+    retain() {
+      return runRetention({
+        memoryBackend: worldBackend,
+        logManager: runtimeDailyLogManager,
+        logger: params.logger,
+      });
+    },
+  };
+
   return {
     memoryBackend: worldBackend,
     identityManager,
@@ -372,6 +458,7 @@ async function createConcordiaWorldContext(params: {
     },
     ingestionEngine,
     retriever,
+    lifecycle,
     vectorDbPath,
   };
 }
@@ -430,6 +517,29 @@ function createGraphAdapter(
   graph: MemoryGraph,
 ): ConcordiaWorldMemoryHostServices["graph"] {
   return {
+    async upsertNode(input) {
+      const node = await graph.upsertNode({
+        content: input.content,
+        sessionId: input.sessionId,
+        tags: input.tags,
+        entityName: input.entityName,
+        entityType: input.entityType,
+        workspaceId: input.workspaceId,
+        metadata: input.metadata,
+        provenance: input.provenance.map((source) => ({
+          type: source.type as Parameters<MemoryGraph["upsertNode"]>[0]["provenance"][number]["type"],
+          sourceId: source.sourceId,
+          description: source.description,
+          metadata: source.metadata,
+        })),
+      });
+      return {
+        id: node.id,
+        content: node.content,
+        entityName: node.entityName,
+        entityType: node.entityType,
+      };
+    },
     async findByEntity(name, workspaceId) {
       const result = await graph.findByEntity(name, workspaceId);
       return result.nodes.map((node) => ({

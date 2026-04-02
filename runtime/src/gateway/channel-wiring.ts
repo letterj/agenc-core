@@ -30,6 +30,12 @@ import {
   SessionManager,
   clearStatefulContinuationMetadata,
 } from "./session.js";
+import {
+  buildDaemonMemoryEntryOptions,
+  resolveChannelWorkspaceId,
+  resolveIngestHistoryRole,
+  shouldPersistToDaemonMemory,
+} from "./channel-message-memory.js";
 import type { ChannelPlugin } from "./channel.js";
 import type { Gateway } from "./gateway.js";
 import { TelegramChannel } from "../channels/telegram/plugin.js";
@@ -131,7 +137,6 @@ function isIngestOnlyChannelMessage(msg: GatewayMessage): boolean {
     msg.metadata?.ingestOnly === true
   );
 }
-
 
 async function stopExternalChannelRegistry(
   channels: ExternalChannelRegistry,
@@ -266,7 +271,7 @@ export async function wireTelegram(
       channel: "telegram",
       senderId: msg.senderId,
       scope: msg.scope,
-      workspaceId: "default",
+      workspaceId: resolveChannelWorkspaceId(msg),
     });
     const unregisterTextApproval = deps.registerTextApprovalDispatcher(
       msg.sessionId,
@@ -298,6 +303,7 @@ export async function wireTelegram(
         memoryBackend: deps.memoryBackend,
         includeTraceArtifacts: true,
         includePlannerSummaryInTrace: true,
+        persistToDaemonMemory: true,
         buildToolRoutingDecision: (sessionId, content, history) =>
           deps.buildToolRoutingDecision(sessionId, content, history),
         recordToolRoutingOutcome: (sessionId, summary) => {
@@ -319,24 +325,6 @@ export async function wireTelegram(
         deps.logger.debug("Telegram reply sent successfully");
       } catch (sendErr) {
         deps.logger.error("Telegram send failed:", sendErr);
-      }
-
-      // Persist to memory
-      if (deps.memoryBackend) {
-        try {
-          await deps.memoryBackend.addEntry({
-            sessionId: msg.sessionId,
-            role: "user",
-            content: msg.content,
-          });
-          await deps.memoryBackend.addEntry({
-            sessionId: msg.sessionId,
-            role: "assistant",
-            content: result.content,
-          });
-        } catch {
-          // non-critical
-        }
       }
     } catch (error) {
       const failure = summarizeLLMFailureForSurface(error);
@@ -446,25 +434,27 @@ export async function wireExternalChannel(
       channel: channelName,
       senderId: msg.senderId,
       scope: msg.scope,
-      workspaceId: "default",
+      workspaceId: resolveChannelWorkspaceId(msg),
     });
 
     if (isIngestOnlyChannelMessage(msg)) {
       clearStatefulContinuationMetadata(session.metadata);
       sessionMgr.appendMessage(session.id, {
-        role: "user",
+        role: resolveIngestHistoryRole(msg),
         content: msg.content,
       });
 
-      if (deps.memoryBackend) {
+      if (deps.memoryBackend && shouldPersistToDaemonMemory(msg)) {
         try {
           await deps.memoryBackend.addEntry({
             sessionId: msg.sessionId,
             role: "user",
             content: msg.content,
-            metadata: msg.metadata,
-            workspaceId: session.workspaceId,
-            channel: channelName,
+            ...buildDaemonMemoryEntryOptions(
+              msg,
+              session.workspaceId,
+              channelName,
+            ),
           });
         } catch {
           /* non-critical */
@@ -501,6 +491,7 @@ export async function wireExternalChannel(
         traceConfig,
         turnTraceId,
         memoryBackend: deps.memoryBackend,
+        persistToDaemonMemory: channelName !== "concordia",
         buildToolRoutingDecision: (sessionId, content, history) =>
           deps.buildToolRoutingDecision(sessionId, content, history),
         recordToolRoutingOutcome: (sessionId, summary) => {
@@ -517,23 +508,6 @@ export async function wireExternalChannel(
         content: formatted,
         metadata: msg.metadata,
       });
-
-      if (deps.memoryBackend) {
-        try {
-          await deps.memoryBackend.addEntry({
-            sessionId: msg.sessionId,
-            role: "user",
-            content: msg.content,
-          });
-          await deps.memoryBackend.addEntry({
-            sessionId: msg.sessionId,
-            role: "assistant",
-            content: result.content,
-          });
-        } catch {
-          /* non-critical */
-        }
-      }
     } catch (error) {
       const failure = summarizeLLMFailureForSurface(error);
       if (traceConfig.enabled) {

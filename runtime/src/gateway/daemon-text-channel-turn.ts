@@ -15,6 +15,10 @@ import type { Session, SessionManager } from "./session.js";
 import type { ToolRoutingDecision } from "./tool-routing.js";
 import { resolveTurnMaxToolRounds } from "./tool-round-budget.js";
 import {
+  buildDaemonMemoryEntryOptions,
+  shouldPersistToDaemonMemory,
+} from "./channel-message-memory.js";
+import {
   buildSessionStatefulOptions,
   persistSessionStatefulContinuation,
 } from "./daemon-session-state.js";
@@ -60,6 +64,7 @@ export interface ExecuteTextChannelTurnParams {
     sessionId: string,
     summary: ChatToolRoutingSummary | undefined,
   ) => void;
+  readonly persistToDaemonMemory?: boolean;
 }
 
 export async function executeTextChannelTurn(
@@ -82,6 +87,7 @@ export async function executeTextChannelTurn(
     includePlannerSummaryInTrace = false,
     buildToolRoutingDecision,
     recordToolRoutingOutcome,
+    persistToDaemonMemory = shouldPersistToDaemonMemory(msg),
   } = params;
 
   const toolRoutingDecision = buildToolRoutingDecision(
@@ -321,17 +327,24 @@ export async function executeTextChannelTurn(
     content: result.content,
   });
 
-  if (memoryBackend) {
+  if (memoryBackend && persistToDaemonMemory) {
+    const persistenceOptions = buildDaemonMemoryEntryOptions(
+      msg,
+      session.workspaceId,
+      channelName,
+    );
     try {
       await memoryBackend.addEntry({
         sessionId: msg.sessionId,
         role: "user",
         content: msg.content,
+        ...persistenceOptions,
       });
       await memoryBackend.addEntry({
         sessionId: msg.sessionId,
         role: "assistant",
         content: result.content,
+        ...persistenceOptions,
       });
     } catch {
       // Non-critical memory persistence failures should not fail the chat turn.

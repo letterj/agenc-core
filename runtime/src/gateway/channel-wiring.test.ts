@@ -193,4 +193,153 @@ describe("wireExternalChannels", () => {
       { sessionId: "fixture:alice", content: "acknowledged" },
     ]);
   });
+
+  it("isolates Concordia history by world metadata and skips daemon memory persistence", async () => {
+    class FixtureChannel implements ChannelPlugin {
+      readonly name = "concordia";
+      context: ChannelContext | null = null;
+      sent: OutboundMessage[] = [];
+
+      async initialize(context: ChannelContext): Promise<void> {
+        this.context = context;
+      }
+
+      async start(): Promise<void> {
+        return;
+      }
+
+      async stop(): Promise<void> {
+        return;
+      }
+
+      async send(message: OutboundMessage): Promise<void> {
+        this.sent.push(message);
+      }
+
+      isHealthy(): boolean {
+        return this.context !== null;
+      }
+
+      async emit(message: GatewayMessage): Promise<void> {
+        await this.context?.onMessage(message);
+      }
+    }
+
+    const channel = new FixtureChannel();
+    const capturedHistories: Array<Array<{ role: string; content: string }>> = [];
+    const execute = vi.fn().mockImplementation(async (input: {
+      history?: Array<{ role: string; content: string }>;
+    }) => {
+      capturedHistories.push(
+        input.history?.map((entry) => ({ ...entry })) ?? [],
+      );
+      return {
+        content: "ack",
+        provider: "grok",
+        model: "grok-4-1-fast-non-reasoning",
+        usedFallback: false,
+        durationMs: 5,
+        compacted: false,
+        tokenUsage: undefined,
+        callUsage: [],
+        statefulSummary: undefined,
+        plannerSummary: undefined,
+        toolRoutingSummary: undefined,
+        stopReason: "completed",
+        stopReasonDetail: undefined,
+        toolCalls: [],
+      };
+    });
+    const addEntry = vi.fn().mockResolvedValue(undefined);
+
+    await wireExternalChannel(
+      channel,
+      "concordia",
+      makeConfig(),
+      { token: "abc" },
+      {
+        gateway: null,
+        logger: silentLogger,
+        chatExecutor: { execute } as never,
+        memoryBackend: { addEntry } as never,
+        defaultForegroundMaxToolRounds: 1,
+        buildChannelHostServices() {
+          return undefined;
+        },
+        async buildSystemPrompt() {
+          return "system prompt";
+        },
+        async handleTextChannelApprovalCommand() {
+          return false;
+        },
+        registerTextApprovalDispatcher() {
+          return () => {};
+        },
+        createTextChannelSessionToolHandler() {
+          return vi.fn() as never;
+        },
+        buildToolRoutingDecision() {
+          return undefined;
+        },
+        recordToolRoutingOutcome() {
+          return;
+        },
+      },
+    );
+
+    await channel.emit({
+      id: "obs-world-1",
+      channel: "concordia",
+      senderId: "alex",
+      senderName: "Alex",
+      sessionId: "concordia:world-1:alex",
+      content: "[Observation] World 1 only",
+      scope: "dm",
+      metadata: {
+        ingest_only: true,
+        history_role: "system",
+        workspace_id: "concordia-sim",
+        world_id: "world-1",
+        agent_id: "alex",
+      },
+    });
+
+    await channel.emit({
+      id: "act-world-1",
+      channel: "concordia",
+      senderId: "alex",
+      senderName: "Alex",
+      sessionId: "concordia:world-1:alex",
+      content: "Take your next action in world 1.",
+      scope: "dm",
+      metadata: {
+        turn_contract: "concordia_simulation_turn",
+        workspace_id: "concordia-sim",
+        world_id: "world-1",
+        agent_id: "alex",
+      },
+    });
+
+    await channel.emit({
+      id: "act-world-2",
+      channel: "concordia",
+      senderId: "alex",
+      senderName: "Alex",
+      sessionId: "concordia:world-2:alex",
+      content: "Take your next action in world 2.",
+      scope: "dm",
+      metadata: {
+        turn_contract: "concordia_simulation_turn",
+        workspace_id: "concordia-sim",
+        world_id: "world-2",
+        agent_id: "alex",
+      },
+    });
+
+    expect(capturedHistories).toEqual([
+      [{ role: "system", content: "[Observation] World 1 only" }],
+      [],
+    ]);
+    expect(addEntry).not.toHaveBeenCalled();
+  });
 });

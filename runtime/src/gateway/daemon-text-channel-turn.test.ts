@@ -170,16 +170,26 @@ describe("executeTextChannelTurn", () => {
       role: "assistant",
       content: "reply",
     });
-    expect(memoryBackend.addEntry).toHaveBeenNthCalledWith(1, {
-      sessionId: "session:test",
-      role: "user",
-      content: "hello",
-    });
-    expect(memoryBackend.addEntry).toHaveBeenNthCalledWith(2, {
-      sessionId: "session:test",
-      role: "assistant",
-      content: "reply",
-    });
+    expect(memoryBackend.addEntry).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sessionId: "session:test",
+        role: "user",
+        content: "hello",
+        channel: "telegram",
+        workspaceId: "default",
+      }),
+    );
+    expect(memoryBackend.addEntry).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionId: "session:test",
+        role: "assistant",
+        content: "reply",
+        channel: "telegram",
+        workspaceId: "default",
+      }),
+    );
     expect(
       session.metadata[SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY],
     ).toEqual({

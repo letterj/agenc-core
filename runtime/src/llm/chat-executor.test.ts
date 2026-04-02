@@ -7938,7 +7938,7 @@ describe("ChatExecutor", () => {
       expect(systemMessages[2].content).toContain("Recent Progress");
     });
 
-    it("does not inject persistent memory providers on a fresh session", async () => {
+    it("still injects cross-session semantic memory but skips session-scoped providers on a fresh session", async () => {
       const memoryRetriever = { retrieve: vi.fn().mockResolvedValue("Memory") };
       const learningProvider = { retrieve: vi.fn().mockResolvedValue("Learning") };
       const progressProvider = { retrieve: vi.fn().mockResolvedValue("Progress") };
@@ -7952,7 +7952,7 @@ describe("ChatExecutor", () => {
 
       await executor.execute(createParams({ history: [] }));
 
-      expect(memoryRetriever.retrieve).not.toHaveBeenCalled();
+      expect(memoryRetriever.retrieve).toHaveBeenCalledWith("hello", "session-1");
       expect(learningProvider.retrieve).not.toHaveBeenCalled();
       expect(progressProvider.retrieve).not.toHaveBeenCalled();
     });
