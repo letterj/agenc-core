@@ -414,9 +414,7 @@ export default function App() {
           )}
           {currentView === 'simulation' && (
             <SimulationViewer
-              eventWsUrl="ws://localhost:3201"
               bridgeUrl="http://localhost:3200"
-              controlUrl="http://localhost:3202"
             />
           )}
         </main>

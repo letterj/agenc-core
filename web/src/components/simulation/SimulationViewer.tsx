@@ -19,28 +19,24 @@ import { AgentInspector } from "./AgentInspector";
 type SimPhase = "setup" | "running" | "finished";
 
 interface SimulationViewerProps {
-  eventWsUrl?: string;
   bridgeUrl?: string;
-  controlUrl?: string;
   agentIds?: string[];
 }
 
 export function SimulationViewer({
-  eventWsUrl = "ws://localhost:3201",
   bridgeUrl = "http://localhost:3200",
-  controlUrl = "http://localhost:3202",
   agentIds: initialAgentIds = [],
 }: SimulationViewerProps) {
   const [phase, setPhase] = useState<SimPhase>("setup");
   const [agentIds, setAgentIds] = useState<string[]>(initialAgentIds);
+  const [simulationId, setSimulationId] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
   const [inspectedAgent, setInspectedAgent] = useState<string | null>(null);
   const [launchConfig, setLaunchConfig] = useState<SimulationSetupConfig | null>(null);
 
   const { state, play, pause, step, stop } = useSimulation({
-    eventWsUrl,
+    simulationId,
     bridgeUrl,
-    controlUrl,
     agentIds,
     pollIntervalMs: phase === "running" ? 750 : 3000,
   });
@@ -52,7 +48,7 @@ export function SimulationViewer({
       try {
         // POST to bridge /launch. The plugin bridge will spawn the Python
         // runner, and the runner will call back into bridge /setup.
-        const resp = await fetch(`${bridgeUrl}/launch`, {
+        const resp = await fetch(`${bridgeUrl}/simulations`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -76,13 +72,19 @@ export function SimulationViewer({
           throw new Error(`Setup failed: ${resp.status}`);
         }
 
+        const payload = (await resp.json()) as {
+          simulation_id: string;
+        };
+
         setAgentIds(config.agents.map((a) => a.id));
+        setSimulationId(payload.simulation_id);
         setPhase("running");
 
         // Auto-play
-        await fetch(`${controlUrl}/simulation/play`, { method: "POST" }).catch(
-          () => {},
-        );
+        await fetch(
+          `${bridgeUrl}/simulations/${encodeURIComponent(payload.simulation_id)}/play`,
+          { method: "POST" },
+        ).catch(() => {});
       } catch (err) {
         console.error("Launch failed:", err);
         alert(`Failed to launch simulation: ${err}`);
@@ -90,7 +92,7 @@ export function SimulationViewer({
         setLaunching(false);
       }
     },
-    [bridgeUrl, controlUrl],
+    [bridgeUrl],
   );
 
   const handleStop = useCallback(async () => {
@@ -100,14 +102,18 @@ export function SimulationViewer({
 
   // Auto-finish detection: when simulation stops running after having started
   useEffect(() => {
-    if (phase === "running" && !state.status.running && state.status.step > 0) {
+    if (
+      phase === "running" &&
+      ["stopped", "finished", "failed", "archived", "deleted"].includes(state.status.status)
+    ) {
       setPhase("finished");
     }
-  }, [phase, state.status.running, state.status.step]);
+  }, [phase, state.status.status]);
 
   const handleNewSimulation = useCallback(() => {
     setPhase("setup");
     setAgentIds([]);
+    setSimulationId(null);
     setLaunchConfig(null);
     setInspectedAgent(null);
   }, []);

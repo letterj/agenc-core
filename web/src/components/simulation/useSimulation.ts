@@ -1,29 +1,29 @@
 /**
- * React hook for real-time simulation state.
+ * React hook for bridge-owned simulation state.
  *
- * Connects to:
- * 1. Python EventServer WebSocket (port 3201) for simulation events
- * 2. Bridge HTTP API for agent state and control
+ * Connects to the Concordia bridge's per-simulation APIs:
+ * 1. Server-sent events for replay + live event streaming
+ * 2. Bridge HTTP for agent state and lifecycle control
  *
- * Phase 4 of the CONCORDIA_TODO.MD implementation plan.
+ * Phase 3 of the CONCORDIA_TODO.MD implementation plan.
  */
 
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
-// ============================================================================
-// Types
-// ============================================================================
-
 export interface SimulationEvent {
+  event_id?: string;
   type: string;
   step: number;
-  timestamp: number;
+  timestamp?: number;
+  simulation_id: string;
+  world_id: string;
+  workspace_id: string;
   agent_name?: string;
   content?: string;
-  action_spec?: Record<string, unknown>;
-  resolved_event?: string;
-  scene?: string;
-  metadata?: Record<string, unknown>;
+  action_spec?: Record<string, unknown> | null;
+  resolved_event?: string | null;
+  scene?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface AgentState {
@@ -46,12 +46,31 @@ export interface AgentState {
 }
 
 export interface SimulationStatus {
+  simulation_id: string;
+  world_id: string;
+  workspace_id: string;
+  status:
+    | "launching"
+    | "running"
+    | "paused"
+    | "stopping"
+    | "stopped"
+    | "finished"
+    | "failed"
+    | "archived"
+    | "deleted";
+  reason: string | null;
+  error: string | null;
   step: number;
-  max_steps: number;
+  max_steps: number | null;
   running: boolean;
   paused: boolean;
-  world_id: string;
   agent_count: number;
+  started_at: number | null;
+  ended_at: number | null;
+  updated_at: number;
+  last_step_outcome: string | null;
+  terminal_reason: string | null;
 }
 
 export interface SimulationState {
@@ -63,34 +82,44 @@ export interface SimulationState {
 }
 
 type SimAction =
+  | { type: "RESET" }
   | { type: "ADD_EVENT"; event: SimulationEvent }
   | { type: "SET_AGENT_STATE"; agentId: string; state: AgentState }
   | { type: "SET_STATUS"; status: SimulationStatus }
   | { type: "SET_CONNECTED"; connected: boolean }
-  | { type: "SET_ERROR"; error: string | null }
-  | { type: "CLEAR" };
+  | { type: "SET_ERROR"; error: string | null };
 
-// ============================================================================
-// Reducer
-// ============================================================================
+const initialStatus: SimulationStatus = {
+  simulation_id: "",
+  world_id: "",
+  workspace_id: "",
+  status: "launching",
+  reason: null,
+  error: null,
+  step: 0,
+  max_steps: null,
+  running: false,
+  paused: false,
+  agent_count: 0,
+  started_at: null,
+  ended_at: null,
+  updated_at: 0,
+  last_step_outcome: null,
+  terminal_reason: null,
+};
 
 const initialState: SimulationState = {
   events: [],
   agentStates: {},
-  status: {
-    step: 0,
-    max_steps: 0,
-    running: false,
-    paused: false,
-    world_id: "",
-    agent_count: 0,
-  },
+  status: initialStatus,
   connected: false,
   error: null,
 };
 
 function reducer(state: SimulationState, action: SimAction): SimulationState {
   switch (action.type) {
+    case "RESET":
+      return initialState;
     case "ADD_EVENT":
       return {
         ...state,
@@ -107,141 +136,256 @@ function reducer(state: SimulationState, action: SimAction): SimulationState {
       return { ...state, connected: action.connected };
     case "SET_ERROR":
       return { ...state, error: action.error };
-    case "CLEAR":
-      return initialState;
     default:
       return state;
   }
 }
 
-// ============================================================================
-// Hook
-// ============================================================================
-
 export function useSimulation(config: {
-  eventWsUrl?: string;
+  simulationId?: string | null;
   bridgeUrl?: string;
-  controlUrl?: string;
   agentIds?: string[];
   pollIntervalMs?: number;
 }) {
   const {
-    eventWsUrl = "ws://localhost:3201",
+    simulationId = null,
     bridgeUrl = "http://localhost:3200",
-    controlUrl = "http://localhost:3202",
     agentIds = [],
     pollIntervalMs = 2000,
   } = config;
 
   const [state, dispatch] = useReducer(reducer, initialState);
-  const wsRef = useRef<WebSocket | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastEventIdRef = useRef<string | null>(null);
+  const seenEventIdsRef = useRef<Set<string>>(new Set());
 
-  // WebSocket connection for events with auto-reconnect
   useEffect(() => {
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let alive = true;
-
-    function connect() {
-      if (!alive) return;
-      try {
-        ws = new WebSocket(eventWsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          dispatch({ type: "SET_CONNECTED", connected: true });
-          dispatch({ type: "SET_ERROR", error: null });
-        };
-        ws.onclose = () => {
-          dispatch({ type: "SET_CONNECTED", connected: false });
-          // Auto-reconnect after 2s
-          if (alive) {
-            reconnectTimer = setTimeout(connect, 2000);
-          }
-        };
-        ws.onerror = () => {
-          // onclose will fire after onerror, triggering reconnect
-        };
-
-        ws.onmessage = (msg) => {
-          try {
-            const event: SimulationEvent = JSON.parse(msg.data);
-            dispatch({ type: "ADD_EVENT", event });
-          } catch {
-            // Ignore malformed events
-          }
-        };
-      } catch {
-        if (alive) {
-          reconnectTimer = setTimeout(connect, 2000);
-        }
-      }
+    lastEventIdRef.current = null;
+    seenEventIdsRef.current.clear();
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
     }
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    dispatch({ type: "RESET" });
+  }, [simulationId]);
+
+  useEffect(() => {
+    if (!simulationId) {
+      dispatch({ type: "SET_CONNECTED", connected: false });
+      return;
+    }
+
+    let disposed = false;
+    let reconnectDelayMs = 1000;
+
+    const connect = () => {
+      if (disposed) {
+        return;
+      }
+
+      const streamUrl = new URL(
+        `/simulations/${encodeURIComponent(simulationId)}/events/stream`,
+        bridgeUrl,
+      );
+      if (lastEventIdRef.current) {
+        streamUrl.searchParams.set("cursor", lastEventIdRef.current);
+      }
+
+      const source = new EventSource(streamUrl.toString());
+      eventSourceRef.current = source;
+
+      source.onopen = () => {
+        if (disposed) {
+          return;
+        }
+        reconnectDelayMs = 1000;
+        dispatch({ type: "SET_CONNECTED", connected: true });
+        dispatch({ type: "SET_ERROR", error: null });
+      };
+
+      source.onerror = () => {
+        dispatch({ type: "SET_CONNECTED", connected: false });
+        source.close();
+        eventSourceRef.current = null;
+        if (disposed) {
+          return;
+        }
+        reconnectTimerRef.current = setTimeout(connect, reconnectDelayMs);
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, 10_000);
+      };
+
+      source.onmessage = (message) => {
+        if (disposed) {
+          return;
+        }
+        try {
+          const event = JSON.parse(message.data) as SimulationEvent;
+          const eventId = event.event_id ?? message.lastEventId ?? null;
+          if (eventId) {
+            if (seenEventIdsRef.current.has(eventId)) {
+              return;
+            }
+            seenEventIdsRef.current.add(eventId);
+            lastEventIdRef.current = eventId;
+            event.event_id = eventId;
+          }
+          dispatch({ type: "ADD_EVENT", event });
+        } catch {
+          // Ignore malformed stream payloads.
+        }
+      };
+    };
 
     connect();
 
     return () => {
-      alive = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (ws) ws.close();
-      wsRef.current = null;
+      disposed = true;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
     };
-  }, [eventWsUrl]);
+  }, [bridgeUrl, simulationId]);
 
-  // Poll agent states
   useEffect(() => {
-    if (agentIds.length === 0) return;
+    if (!simulationId) {
+      return;
+    }
 
-    const interval = setInterval(async () => {
-      for (const agentId of agentIds) {
+    let disposed = false;
+    const controllers = new Set<AbortController>();
+
+    const pollStatus = async () => {
+      const controller = new AbortController();
+      controllers.add(controller);
+      try {
+        const resp = await fetch(
+          `${bridgeUrl}/simulations/${encodeURIComponent(simulationId)}/status`,
+          { signal: controller.signal },
+        );
+        if (!resp.ok || disposed) {
+          return;
+        }
+        const status = (await resp.json()) as SimulationStatus;
+        dispatch({ type: "SET_STATUS", status });
+      } catch {
+        if (!disposed) {
+          dispatch({ type: "SET_CONNECTED", connected: false });
+        }
+      } finally {
+        controllers.delete(controller);
+      }
+    };
+
+    void pollStatus();
+    const interval = setInterval(() => {
+      void pollStatus();
+    }, pollIntervalMs);
+
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+      for (const controller of controllers) {
+        controller.abort();
+      }
+      controllers.clear();
+    };
+  }, [bridgeUrl, pollIntervalMs, simulationId]);
+
+  useEffect(() => {
+    if (!simulationId || agentIds.length === 0) {
+      return;
+    }
+
+    let disposed = false;
+    const controllers = new Set<AbortController>();
+
+    const pollAgentStates = async () => {
+      await Promise.all(agentIds.map(async (agentId) => {
+        const controller = new AbortController();
+        controllers.add(controller);
         try {
-          const resp = await fetch(`${bridgeUrl}/agent/${agentId}/state`);
-          if (resp.ok) {
-            const agentState: AgentState = await resp.json();
-            dispatch({ type: "SET_AGENT_STATE", agentId, state: agentState });
+          const resp = await fetch(
+            `${bridgeUrl}/simulations/${encodeURIComponent(simulationId)}/agents/${encodeURIComponent(agentId)}/state`,
+            { signal: controller.signal },
+          );
+          if (!resp.ok || disposed) {
+            return;
           }
+          const agentState = (await resp.json()) as AgentState;
+          dispatch({ type: "SET_AGENT_STATE", agentId, state: agentState });
         } catch {
           // Non-blocking
+        } finally {
+          controllers.delete(controller);
         }
-      }
+      }));
+    };
+
+    void pollAgentStates();
+    const interval = setInterval(() => {
+      void pollAgentStates();
     }, pollIntervalMs);
 
-    return () => clearInterval(interval);
-  }, [bridgeUrl, agentIds, pollIntervalMs]);
-
-  // Poll simulation status
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const resp = await fetch(`${controlUrl}/simulation/status`);
-        if (resp.ok) {
-          const status: SimulationStatus = await resp.json();
-          dispatch({ type: "SET_STATUS", status });
-        }
-      } catch {
-        // Non-blocking
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+      for (const controller of controllers) {
+        controller.abort();
       }
-    }, pollIntervalMs);
+      controllers.clear();
+    };
+  }, [agentIds, bridgeUrl, pollIntervalMs, simulationId]);
 
-    return () => clearInterval(interval);
-  }, [controlUrl, pollIntervalMs]);
+  const sendControlCommand = useCallback(async (command: "play" | "pause" | "step" | "stop") => {
+    if (!simulationId) {
+      return;
+    }
+    try {
+      const resp = await fetch(
+        `${bridgeUrl}/simulations/${encodeURIComponent(simulationId)}/${command}`,
+        { method: "POST" },
+      );
+      if (!resp.ok) {
+        throw new Error(`Control command failed: ${resp.status}`);
+      }
+      const payload = await resp.json() as { simulation?: SimulationStatus };
+      if (payload.simulation) {
+        dispatch({ type: "SET_STATUS", status: payload.simulation });
+      }
+      dispatch({ type: "SET_ERROR", error: null });
+    } catch (error) {
+      dispatch({
+        type: "SET_ERROR",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [bridgeUrl, simulationId]);
 
-  // Control functions
   const play = useCallback(async () => {
-    await fetch(`${controlUrl}/simulation/play`, { method: "POST" }).catch(() => {});
-  }, [controlUrl]);
+    await sendControlCommand("play");
+  }, [sendControlCommand]);
 
   const pause = useCallback(async () => {
-    await fetch(`${controlUrl}/simulation/pause`, { method: "POST" }).catch(() => {});
-  }, [controlUrl]);
+    await sendControlCommand("pause");
+  }, [sendControlCommand]);
 
   const step = useCallback(async () => {
-    await fetch(`${controlUrl}/simulation/step`, { method: "POST" }).catch(() => {});
-  }, [controlUrl]);
+    await sendControlCommand("step");
+  }, [sendControlCommand]);
 
   const stop = useCallback(async () => {
-    await fetch(`${controlUrl}/simulation/stop`, { method: "POST" }).catch(() => {});
-  }, [controlUrl]);
+    await sendControlCommand("stop");
+  }, [sendControlCommand]);
 
   return { state, play, pause, step, stop };
 }
