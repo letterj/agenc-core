@@ -28,11 +28,15 @@ const DEFAULT_MAP: MapConfig = {
 };
 
 export function getMapConfig(worldId: string): MapConfig {
-  return SCENARIO_MAPS[worldId] ?? DEFAULT_MAP;
+  if (SCENARIO_MAPS[worldId]) return SCENARIO_MAPS[worldId];
+  const prefix = Object.keys(SCENARIO_MAPS).find((key) => worldId.startsWith(key));
+  if (prefix) return SCENARIO_MAPS[prefix];
+  return DEFAULT_MAP;
 }
 
 export function hasCustomMap(worldId: string): boolean {
-  return worldId in SCENARIO_MAPS;
+  return worldId in SCENARIO_MAPS ||
+    Object.keys(SCENARIO_MAPS).some((key) => worldId.startsWith(key));
 }
 
 export function getAvailableMapIds(): string[] {

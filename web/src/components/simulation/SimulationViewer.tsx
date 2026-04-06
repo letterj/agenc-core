@@ -29,7 +29,7 @@ export function SimulationViewer({
   onBackToDashboard,
 }: SimulationViewerProps) {
   const [inspectedAgent, setInspectedAgent] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('timeline');
+  const [viewMode, setViewMode] = useState<ViewMode>('town');
   const initialStatus = useMemo(() => buildSimulationStatus(simulation), [simulation]);
   const { state, play, pause, step, stop } = useSimulation({
     simulationId: simulation.simulation_id,
