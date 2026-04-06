@@ -32,7 +32,7 @@ import {
 import { executeDelegationTool } from "./tool-handler-factory-delegation.js";
 import type { PolicyEvaluationScope } from "../policy/types.js";
 import type { SessionCredentialBroker } from "../policy/session-credentials.js";
-import { buildArtifactContract, isArtifactAccessAllowed, type ArtifactAccessMode } from "../workflow/artifact-contract.js";
+import { type ArtifactAccessMode } from "../workflow/artifact-contract.js";
 import { buildCompensationState, captureFilesystemSnapshot } from "../workflow/compensation.js";
 import type { EffectLedger } from "../workflow/effect-ledger.js";
 import {
@@ -869,12 +869,6 @@ function enforceSubAgentExecutionEnvelope(params: {
     executionContext.allowedWriteRoots ?? [],
     workspaceRoot,
   );
-  const artifactContract = buildArtifactContract({
-    requiredSourceArtifacts:
-      executionContext.requiredSourceArtifacts ??
-      executionContext.inputArtifacts,
-    targetArtifacts: executionContext.targetArtifacts,
-  });
   const explicitlyWritableArtifacts = collectExplicitWritableExecutionArtifacts(
     executionContext,
     workspaceRoot,

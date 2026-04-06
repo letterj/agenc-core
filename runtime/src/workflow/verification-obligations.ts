@@ -139,14 +139,9 @@ export function deriveVerificationObligations(
   const requiresMutationEvidence =
     completionContract?.taskClass === "review_required"
       ? false
-      : completionContract
-        ? isMutationLikeVerificationMode(verificationMode) ||
-          stepKind === "delegated_write" ||
-          stepKind === "delegated_scaffold" ||
-          targetArtifacts.length > 0
-        : isMutationLikeVerificationMode(verificationMode) ||
-          stepKind === "delegated_write" ||
-          stepKind === "delegated_scaffold";
+      : isMutationLikeVerificationMode(verificationMode) ||
+        stepKind === "delegated_write" ||
+        stepKind === "delegated_scaffold";
   const placeholdersAllowed = completionContract?.placeholdersAllowed ?? false;
   const partialCompletionAllowed =
     completionContract?.partialCompletionAllowed ?? false;

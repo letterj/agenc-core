@@ -135,6 +135,8 @@ export type SubagentFailureOutcome = {
   readonly durationMs?: number;
   readonly toolCallCount?: number;
   readonly tokenUsage?: LLMUsage;
+  /** Original subagent output preserved when an acceptance probe converts a completed outcome to failed. */
+  readonly originalOutput?: string;
 };
 
 export interface CuratedSection {

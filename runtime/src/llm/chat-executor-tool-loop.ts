@@ -15,7 +15,7 @@ import type { PromptBudgetSection } from "./prompt-budget.js";
 import type { LLMRetryPolicyMatrix, LLMPipelineStopReason } from "./policy.js";
 import type { DelegationOutputValidationCode } from "../utils/delegation-validation.js";
 import type { ToolContractGuidance } from "./chat-executor-contract-guidance.js";
-import { buildArtifactContract, type ArtifactAccessMode } from "../workflow/artifact-contract.js";
+import { type ArtifactAccessMode } from "../workflow/artifact-contract.js";
 import type { ExecutionEnvelope } from "../workflow/execution-envelope.js";
 import {
   isPathWithinAnyRoot,
@@ -305,12 +305,6 @@ function enforceTopLevelExecutionEnvelope(params: {
     mode === "read" ? envelope.allowedReadRoots ?? [] : envelope.allowedWriteRoots ?? [],
     workspaceRoot,
   );
-  const artifactContract = buildArtifactContract({
-    requiredSourceArtifacts:
-      envelope.requiredSourceArtifacts ?? envelope.inputArtifacts,
-    targetArtifacts: envelope.targetArtifacts,
-  });
-
   for (const key of pathKeys) {
     const rawValue = params.args[key];
     if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
@@ -1053,12 +1047,20 @@ export async function executeToolCallLoop(
         "tool_followup",
       );
     if (planOnlyAction === "failed") break;
+    if (planOnlyAction === "continue") {
+      // Gate pushed a correction; skip remaining gates this round to avoid
+      // conflicting instructions reaching the model simultaneously.
+      continue;
+    }
     const evidenceAction =
       await callbacks.enforceRequiredToolEvidenceBeforeCompletion(
         ctx,
         "tool_followup",
       );
     if (evidenceAction === "failed") break;
+    if (evidenceAction === "continue") {
+      continue;
+    }
     const continuationAction =
       await callbacks.enforceWorkflowContinuationBeforeCompletion(
         ctx,

@@ -328,7 +328,7 @@ function buildDelegatedBudgetFinalizationInstruction(params: {
   );
 }
 
-const MAX_PLAN_ONLY_EXECUTION_CORRECTIONS = 1;
+const MAX_PLAN_ONLY_EXECUTION_CORRECTIONS = 2;
 const MAX_PARTIAL_CONTINUATION_CORRECTIONS = 1;
 
 function buildPlanOnlyExecutionRetryInstruction(
@@ -759,6 +759,10 @@ export class ChatExecutor {
       completedRequestMilestoneIds: ctx.completedRequestMilestoneIds,
       updatedAt: Date.now(),
       contractFingerprint: ctx.turnExecutionContract.contractFingerprint,
+      verifier: {
+        performed: ctx.plannerSummaryState.subagentVerification.performed,
+        overall: ctx.plannerSummaryState.subagentVerification.overall,
+      },
     });
 
     ctx.finalContent = reconcileTerminalFailureContent({
@@ -885,6 +889,10 @@ export class ChatExecutor {
         overall: ctx.plannerSummaryState.subagentVerification.overall,
       },
     });
+    const verifier = {
+      performed: ctx.plannerSummaryState.subagentVerification.performed,
+      overall: ctx.plannerSummaryState.subagentVerification.overall,
+    };
     return deriveWorkflowProgressSnapshot({
       stopReason: ctx.stopReason,
       completionState,
@@ -896,6 +904,7 @@ export class ChatExecutor {
       completedRequestMilestoneIds: ctx.completedRequestMilestoneIds,
       updatedAt: Date.now(),
       contractFingerprint: ctx.turnExecutionContract.contractFingerprint,
+      verifier,
     });
   }
 

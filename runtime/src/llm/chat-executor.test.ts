@@ -1899,6 +1899,12 @@ describe("ChatExecutor", () => {
               content:
                 "**Plan**\n1. Write the code\n2. Compile it\n3. Verify it\n\nStarting execution.",
             }),
+          )
+          .mockResolvedValueOnce(
+            mockResponse({
+              content:
+                "**Plan**\n1. Write main.c\n2. Build it\n3. Test it\n\nStarting execution.",
+            }),
           ),
       });
 
@@ -1920,7 +1926,7 @@ describe("ChatExecutor", () => {
         }),
       );
 
-      expect(provider.chat).toHaveBeenCalledTimes(2);
+      expect(provider.chat).toHaveBeenCalledTimes(3);
       expect(result.stopReason).toBe("validation_error");
       expect(result.stopReasonDetail).toContain("plan without grounded tool work");
       expect(result.content).toContain("plan without grounded tool work");
