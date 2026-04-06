@@ -4112,6 +4112,11 @@ function validateContradictoryCompletionClaim(
   if (isReviewerDelegatedTask(spec)) {
     return undefined;
   }
+  // When the completion contract allows partial completion, don't reject
+  // honest partial progress reports as "contradictory."
+  if (spec.executionContext?.completionContract?.partialCompletionAllowed) {
+    return undefined;
+  }
   const stringValues = [
     output,
     ...collectStringValues(parsedOutput),
@@ -4170,8 +4175,14 @@ function validateBlockedPhaseOutput(
   spec: DelegationContractSpec,
   output: string,
   parsedOutput: Record<string, unknown> | undefined,
+  toolCalls?: readonly DelegationValidationToolCall[],
 ): DelegationOutputValidationResult | undefined {
   if (isReviewerDelegatedTask(spec)) {
+    return undefined;
+  }
+  // When the completion contract allows partial completion, don't reject
+  // honest partial progress reports as "blocked."
+  if (spec.executionContext?.completionContract?.partialCompletionAllowed) {
     return undefined;
   }
   const stringValues = [
@@ -4395,6 +4406,7 @@ export function validateDelegatedOutputContract(params: {
     spec,
     output,
     parsedOutput,
+    toolCalls,
   );
   if (blockedPhaseFailure) return blockedPhaseFailure;
 

@@ -77,7 +77,7 @@ export function inferCompatibilityCompletionContract(params: {
     return {
       taskClass: "artifact_only",
       placeholdersAllowed: false,
-      partialCompletionAllowed: false,
+      partialCompletionAllowed: true,
       placeholderTaxonomy,
     };
   }
