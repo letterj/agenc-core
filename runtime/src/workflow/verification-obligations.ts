@@ -44,7 +44,6 @@ export interface VerificationObligations {
   readonly requiresWorkspaceInspectionEvidence: boolean;
   readonly requiresMutationEvidence: boolean;
   readonly requiresSourceArtifactReads: boolean;
-  readonly requiresTargetAuthorization: boolean;
   readonly allowsGroundedNoop: boolean;
   readonly placeholdersAllowed: boolean;
   readonly partialCompletionAllowed: boolean;
@@ -187,7 +186,6 @@ export function deriveVerificationObligations(
       requiresWorkspaceInspectionEvidence ||
       requiresMutationEvidence ||
       requiredSourceArtifacts.length > 0,
-    requiresTargetAuthorization: targetArtifacts.length > 0,
     allowsGroundedNoop,
     placeholdersAllowed,
     partialCompletionAllowed,

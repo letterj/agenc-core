@@ -1196,7 +1196,7 @@ describe("ChatExecutor", () => {
         }),
       );
 
-      expect(provider.chat).toHaveBeenCalledTimes(3);
+      expect(provider.chat).toHaveBeenCalledTimes(2);
       expect(result.stopReason).toBe("validation_error");
       expect(result.stopReasonDetail).toContain(
         "child reported no tool calls",
@@ -1466,7 +1466,7 @@ describe("ChatExecutor", () => {
           )
           .mockResolvedValueOnce(
             mockResponse({
-              content: "Implemented src/main.c successfully.",
+              content: "Created src/main.c with the requested entrypoint.",
             }),
           ),
       });
@@ -1479,7 +1479,7 @@ describe("ChatExecutor", () => {
       const result = await executor.execute(
         createParams({
           message: createMessage(
-            "In /tmp/phase9-direct only, implement src/main.c and finish when the implementation is done.",
+            "In /tmp/phase9-direct only, create src/main.c with an int main entrypoint and finish when the file is written.",
           ),
           runtimeContext: {
             workspaceRoot: "/tmp/phase9-direct",
@@ -1656,7 +1656,7 @@ describe("ChatExecutor", () => {
           )
           .mockResolvedValueOnce(
             mockResponse({
-              content: "Implemented src/main.c successfully.",
+              content: "Created src/main.c with the requested entrypoint.",
             }),
           ),
       });
@@ -1668,7 +1668,7 @@ describe("ChatExecutor", () => {
       const directResult = await directExecutor.execute(
         createParams({
           message: createMessage(
-            "In /tmp/phase9-parity only, implement src/main.c and finish only when the implementation is complete.",
+            "In /tmp/phase9-parity only, create src/main.c with an int main entrypoint and finish only when the file is written.",
           ),
           runtimeContext: {
             workspaceRoot: "/tmp/phase9-parity",
@@ -1721,7 +1721,7 @@ describe("ChatExecutor", () => {
       const plannerResult = await plannerExecutor.execute(
         createParams({
           message: createMessage(
-            "In /tmp/phase9-parity only, implement src/main.c and finish only when the implementation is complete.",
+            "In /tmp/phase9-parity only, create src/main.c with an int main entrypoint and finish only when the file is written.",
           ),
           runtimeContext: {
             workspaceRoot: "/tmp/phase9-parity",
@@ -13877,29 +13877,16 @@ describe("ChatExecutor", () => {
       expect(toolHandler).toHaveBeenNthCalledWith(2, "system.listDir", {
         path: workspaceRoot,
       });
+      // With targetArtifacts advisory-only, the sidecar write to plan_gaps.md
+      // is no longer blocked; it executes as the 3rd tool call.
       expect(toolHandler).toHaveBeenNthCalledWith(3, "system.writeFile", {
+        path: `${workspaceRoot}/plan_gaps.md`,
+        content: "# Findings\n",
+      });
+      expect(toolHandler).toHaveBeenNthCalledWith(4, "system.writeFile", {
         path: targetArtifact,
         content: "# Plan\n\n## Missing Gaps Closed\n",
       });
-      expect(
-        toolHandler.mock.calls.some(
-          ([name, args]) =>
-            name === "system.writeFile" &&
-            (args as { path?: string }).path === `${workspaceRoot}/plan_gaps.md`,
-        ),
-      ).toBe(false);
-      expect(events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "tool_rejected",
-            phase: "tool_followup",
-            payload: expect.objectContaining({
-              tool: "system.writeFile",
-              error: expect.stringContaining("target artifacts"),
-            }),
-          }),
-        ]),
-      );
       expect(result.callUsage[0]?.phase).toBe("initial");
     expect(
       result.callUsage.slice(1).every((entry) => entry.phase === "tool_followup"),
@@ -16506,7 +16493,7 @@ describe("ChatExecutor", () => {
 
     it("refines the traced mixed implementation plan into a single-owner workflow before execution", async () => {
       const events: Record<string, unknown>[] = [];
-      const workspaceRoot = "/home/tetsuo/git/AgenC";
+      const workspaceRoot = "/tmp/phase9-mixed-impl";
       const toolHandler = vi.fn().mockResolvedValue("unexpected inline execution");
       const refinedSingleOwnerPlan = mockResponse({
         content: safeJson({
@@ -16840,7 +16827,7 @@ describe("ChatExecutor", () => {
         createParams({
           message: {
             ...createMessage(
-              "Can you go through @PLAN.md and implement it in full. Make sure each phase is fully tested and working before moving on.",
+              `Can you go through @${workspaceRoot}/PLAN.md and implement it in full. Make sure each phase is fully tested and working before moving on.`,
             ),
             metadata: undefined,
           } as GatewayMessage,

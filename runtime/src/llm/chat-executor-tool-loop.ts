@@ -15,7 +15,7 @@ import type { PromptBudgetSection } from "./prompt-budget.js";
 import type { LLMRetryPolicyMatrix, LLMPipelineStopReason } from "./policy.js";
 import type { DelegationOutputValidationCode } from "../utils/delegation-validation.js";
 import type { ToolContractGuidance } from "./chat-executor-contract-guidance.js";
-import { buildArtifactContract, isArtifactAccessAllowed, type ArtifactAccessMode } from "../workflow/artifact-contract.js";
+import { buildArtifactContract, type ArtifactAccessMode } from "../workflow/artifact-contract.js";
 import type { ExecutionEnvelope } from "../workflow/execution-envelope.js";
 import {
   isPathWithinAnyRoot,
@@ -319,17 +319,6 @@ function enforceTopLevelExecutionEnvelope(params: {
     const normalizedPath = normalizeEnvelopePath(rawValue, workspaceRoot);
     if (allowedRoots.length > 0 && !isPathWithinAnyRoot(normalizedPath, allowedRoots)) {
       return `Path ${normalizedPath} is outside the execution envelope roots for this turn`;
-    }
-    if (
-      mode !== "read" &&
-      artifactContract.targetArtifacts.length > 0 &&
-      !isArtifactAccessAllowed({
-        contract: artifactContract,
-        path: normalizedPath,
-        mode,
-      })
-    ) {
-      return `Write path ${normalizedPath} is not permitted by the execution envelope target artifacts`;
     }
   }
 
