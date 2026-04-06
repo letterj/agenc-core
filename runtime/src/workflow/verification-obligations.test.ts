@@ -20,7 +20,6 @@ describe("verification-obligations", () => {
       verificationMode: "mutation_required",
       requiresMutationEvidence: true,
       requiresSourceArtifactReads: true,
-      requiresTargetAuthorization: true,
       requiresBuildVerification: true,
       requiresBehaviorVerification: true,
       requiresReviewVerification: false,

@@ -2490,7 +2490,7 @@ describe("createSessionToolHandler", () => {
     });
   });
 
-  it("blocks delegated child writes inside the workspace when the target artifact contract does not authorize the path", async () => {
+  it("allows delegated child writes inside the workspace even when target artifact contract does not list the path (advisory only)", async () => {
     const baseHandler = vi.fn(async () => JSON.stringify({ ok: true }));
     const subAgentManager = {
       getInfo: vi.fn(() => ({
@@ -2530,11 +2530,8 @@ describe("createSessionToolHandler", () => {
       content: "# nope\n",
     });
 
-    expect(baseHandler).not.toHaveBeenCalled();
-    expect(JSON.parse(result)).toEqual({
-      error:
-        'Delegated write path "/tmp/workspace/README.md" is not permitted by the execution envelope target artifacts',
-    });
+    expect(baseHandler).toHaveBeenCalled();
+    expect(JSON.parse(result)).toEqual({ ok: true });
   });
 
   it("blocks delegated child rewrites of repo-local verification harnesses unless explicitly writable", async () => {

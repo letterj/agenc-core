@@ -896,17 +896,6 @@ function enforceSubAgentExecutionEnvelope(params: {
     }
     if (
       mode !== "read" &&
-      artifactContract.targetArtifacts.length > 0 &&
-      !isArtifactAccessAllowed({
-        contract: artifactContract,
-        path: resolvedPath,
-        mode,
-      })
-    ) {
-      return `Delegated ${mode} path "${resolvedPath}" is not permitted by the execution envelope target artifacts`;
-    }
-    if (
-      mode !== "read" &&
       isRepoLocalVerificationHarnessPath(resolvedPath, workspaceRoot) &&
       !explicitlyWritableArtifacts.some((artifactPath) =>
         artifactPath === resolvedPath || isPathWithinRoot(resolvedPath, artifactPath)

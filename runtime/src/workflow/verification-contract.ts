@@ -7,7 +7,6 @@ import {
   extractDelegationTokens,
   getAcceptanceVerificationCategories,
 } from "../utils/delegation-validation.js";
-import { isArtifactAccessAllowed } from "./artifact-contract.js";
 import type { PlaceholderTaxonomy } from "./completion-contract.js";
 import { isPathWithinRoot, normalizeEnvelopePath } from "./path-normalization.js";
 import {
@@ -74,7 +73,6 @@ interface RuntimeArtifactEvidence {
   readonly readArtifactContents: ReadonlyMap<string, readonly string[]>;
   readonly inspectedWorkspaceArtifacts: ReadonlySet<string>;
   readonly mutatedArtifacts: ReadonlySet<string>;
-  readonly unauthorizedMutations: readonly string[];
   readonly successfulToolCalls: number;
   readonly authoredContent: readonly string[];
   readonly evidenceCorpus: readonly string[];
@@ -248,20 +246,6 @@ function evaluateArtifactStateChannel(params: {
   readonly targetReadSatisfied: boolean;
   readonly missingMutationTargets: readonly string[];
 }): RuntimeVerificationChannelDecision {
-  if (
-    params.obligations.requiresTargetAuthorization &&
-    params.evidence.unauthorizedMutations.length > 0
-  ) {
-    return verificationChannelFail({
-      channel: "artifact_state",
-      code: "missing_file_artifact_evidence",
-      message:
-        "Execution mutated artifacts outside the verification contract: " +
-        params.evidence.unauthorizedMutations.slice(0, 3).join(", "),
-      evidence: params.evidence.unauthorizedMutations.slice(0, 3),
-    });
-  }
-
   if (params.obligations.requiresSourceArtifactReads) {
     const missingSourceArtifacts =
       params.obligations.artifactContract.requiredSourceArtifacts.filter((artifact) =>
@@ -589,7 +573,6 @@ function collectRuntimeArtifactEvidence(params: {
   const readArtifactContents = new Map<string, string[]>();
   const inspectedWorkspaceArtifacts = new Set<string>();
   const mutatedArtifacts = new Set<string>();
-  const unauthorizedMutations = new Set<string>();
   const authoredContent: string[] = [];
   const evidenceCorpus: string[] = [];
   let successfulBuild = false;
@@ -654,16 +637,6 @@ function collectRuntimeArtifactEvidence(params: {
         if (isLikelyGeneratedBehaviorHarnessPath(path)) {
           generatedBehaviorHarness = true;
         }
-        if (
-          params.obligations.requiresTargetAuthorization &&
-          !isArtifactAccessAllowed({
-            contract: params.obligations.artifactContract,
-            path,
-            mode: "write",
-          })
-        ) {
-          unauthorizedMutations.add(path);
-        }
       }
       authoredContent.push(...collectAuthoredContent(toolCall));
     }
@@ -683,16 +656,6 @@ function collectRuntimeArtifactEvidence(params: {
     }
     for (const path of collectShellMutationPaths(effectMetadata)) {
       mutatedArtifacts.add(path);
-      if (
-        params.obligations.requiresTargetAuthorization &&
-        !isArtifactAccessAllowed({
-          contract: params.obligations.artifactContract,
-          path,
-          mode: "write",
-        })
-      ) {
-        unauthorizedMutations.add(path);
-      }
     }
     authoredContent.push(...collectAuthoredContent(toolCall));
   }
@@ -702,7 +665,6 @@ function collectRuntimeArtifactEvidence(params: {
     readArtifactContents,
     inspectedWorkspaceArtifacts,
     mutatedArtifacts,
-    unauthorizedMutations: [...unauthorizedMutations],
     successfulToolCalls,
     authoredContent,
     evidenceCorpus,

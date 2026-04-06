@@ -891,7 +891,7 @@ export function buildPlannerMessages(
         "- `execution_context.role` is required whenever reviewer/writer/validator identity matters; do not expect the runtime to infer required reviewer identity from step names.\n" +
         "- `execution_context.artifactRelations` is the typed source of truth for read dependencies, write ownership, and verification subjects.\n" +
         "- `execution_context.requiredSourceArtifacts` names the exact source artifacts the child must ground on before writing derived files.\n" +
-        "- `execution_context.targetArtifacts` names the only files or directories the child may mutate in this phase.\n" +
+        "- `execution_context.targetArtifacts` lists the expected output files or directories for this phase (advisory; the child may create additional files within the workspace).\n" +
         "- Never emit placeholder literals like `/abs/path` or `<actual-workspace-root>` in executable steps. Use the real canonical workspace root for this turn.\n" +
         "- For deterministic_tool steps, put all tool parameters inside `args`. Do not place tool parameters like `cwd` or `timeoutMs` at the step root.\n" +
         "- Each subagent_task must stay narrowly scoped to one phase of work. Do not combine research, setup, implementation, and validation into one delegated step.\n" +
