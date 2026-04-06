@@ -743,7 +743,10 @@ export function parseSubagentVerifierDecision(
     }
     const obj = entry as Record<string, unknown>;
     const name = parsePlannerRequiredString(obj.name);
-    if (!name || !stepsByName.has(name)) continue;
+    if (!name) continue;
+    // Accept step names that don't exactly match work items — the model
+    // may use its own naming for verifier-generated step assessments.
+    // The name is still required for tracking but doesn't gate acceptance.
     const verdictRaw = obj.verdict;
     if (
       verdictRaw !== "pass" &&
@@ -759,14 +762,23 @@ export function parseSubagentVerifierDecision(
         : confidence;
     const retryable =
       typeof obj.retryable === "boolean" ? obj.retryable : true;
-    const issues = Array.isArray(obj.issues)
+    const rawIssues = Array.isArray(obj.issues)
       ? obj.issues
           .filter((issue): issue is string => typeof issue === "string")
           .map((issue) => issue.trim())
-          .filter(isPlannerVerifierIssueCode)
+          .filter((issue) => issue.length > 0)
       : [];
+    // Separate typed issue codes from free-text descriptions.
+    // Both are kept — typed codes drive cleanup-mode routing while
+    // free-text descriptions are preserved for summaries and diagnostics.
+    const issues = rawIssues.filter(isPlannerVerifierIssueCode);
+    const freeTextIssues = rawIssues.filter((i) => !isPlannerVerifierIssueCode(i));
     const summary = parsePlannerOptionalString(obj.summary) ??
-      (issues.length > 0 ? issues.join("; ") : "verifier assessment");
+      (issues.length > 0
+        ? issues.join("; ")
+        : freeTextIssues.length > 0
+          ? freeTextIssues.join("; ")
+          : "verifier assessment");
     assessments.push({
       name,
       verdict: verdictRaw,
