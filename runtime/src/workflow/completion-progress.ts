@@ -5,7 +5,10 @@ import {
   resolveWorkflowRequestCompletionStatus,
   type WorkflowRequestMilestone,
 } from "./request-completion.js";
-import type { WorkflowCompletionState } from "./completion-state.js";
+import type {
+  PlannerVerificationSnapshot,
+  WorkflowCompletionState,
+} from "./completion-state.js";
 import {
   deriveVerificationObligations,
   type WorkflowVerificationContract,
@@ -72,6 +75,7 @@ export function deriveWorkflowProgressSnapshot(params: {
   readonly completedRequestMilestoneIds?: readonly string[];
   readonly updatedAt: number;
   readonly contractFingerprint?: string;
+  readonly verifier?: PlannerVerificationSnapshot;
 }): WorkflowProgressSnapshot | undefined {
   const mergedContract = mergeVerificationContract({
     verificationContract: params.verificationContract,
@@ -120,7 +124,10 @@ export function deriveWorkflowProgressSnapshot(params: {
   const satisfiedRequirements = new Set<WorkflowProgressRequirement>(
     reusableEvidence.map((entry) => entry.requirement),
   );
-  if (params.completionState === "completed") {
+  if (
+    params.completionState === "completed" &&
+    (!params.verifier || params.verifier.overall === "pass")
+  ) {
     satisfiedRequirements.add("workflow_verifier_pass");
   }
   if (requestCompletion && requestCompletion.remainingMilestones.length === 0) {

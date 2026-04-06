@@ -1090,6 +1090,7 @@ export class GrokProvider implements LLMProvider {
       streamIterator = stream[Symbol.asyncIterator]();
       let streamEventIndex = 0;
       const streamOpenedAt = Date.now();
+      let receivedTerminalEvent = false;
 
       while (true) {
         const remainingStreamMs = Number.isFinite(streamDeadlineAt)
@@ -1101,7 +1102,7 @@ export class GrokProvider implements LLMProvider {
         ) {
           throw createStreamTimeoutError(
             this.name,
-            streamTimeout.timeoutMs ?? 0,
+            streamTimeout.timeoutMs ?? options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           );
         }
         const iterResult = await nextStreamChunkWithTimeout(
@@ -1162,6 +1163,7 @@ export class GrokProvider implements LLMProvider {
         }
 
         if (event.type === "response.completed") {
+          receivedTerminalEvent = true;
           const response = event.response ?? {};
           streamResponseMeta = {
             ...(streamResponseMeta ?? {}),
@@ -1208,6 +1210,7 @@ export class GrokProvider implements LLMProvider {
         }
 
         if (event.type === "response.failed") {
+          receivedTerminalEvent = true;
           const failedResponse =
             event.response && typeof event.response === "object"
               ? (event.response as Record<string, unknown>)
@@ -1236,6 +1239,14 @@ export class GrokProvider implements LLMProvider {
             new LLMProviderError(this.name, "Provider returned status failed");
           break;
         }
+      }
+
+      if (!receivedTerminalEvent && finishReason === "stop") {
+        finishReason = "error";
+        responseError = responseError ?? new LLMProviderError(
+          this.name,
+          "Stream closed without a response.completed or response.failed event",
+        );
       }
 
       const toolCalls = Array.from(toolCallAccum.values());
@@ -2172,7 +2183,7 @@ export class GrokProvider implements LLMProvider {
     const parsedError = this.extractResponseError(response, finishReason);
 
     return {
-      content: this.extractOutputText(response),
+      content: this.extractOutputText(response) ?? "",
       toolCalls,
       usage: this.parseUsage(response),
       model: String(response.model ?? this.config.model),
@@ -2241,7 +2252,7 @@ export class GrokProvider implements LLMProvider {
     };
   }
 
-  private extractOutputText(response: Record<string, unknown>): string {
+  private extractOutputText(response: Record<string, unknown>): string | undefined {
     const direct = response.output_text;
     if (typeof direct === "string") return direct;
 
@@ -2249,7 +2260,10 @@ export class GrokProvider implements LLMProvider {
       ? (response.output as Array<Record<string, unknown>>)
       : [];
     const chunks: string[] = [];
+    let hasReasoningItems = false;
     for (const item of output) {
+      if (!item || typeof item !== "object") continue;
+      if (item.type === "reasoning") hasReasoningItems = true;
       if (item.type !== "message") continue;
       const content = Array.isArray(item.content)
         ? (item.content as Array<Record<string, unknown>>)
@@ -2263,7 +2277,7 @@ export class GrokProvider implements LLMProvider {
         }
       }
     }
-    return chunks.join("");
+    return chunks.length > 0 ? chunks.join("") : (hasReasoningItems ? undefined : "");
   }
 
   private extractStructuredOutputResult(
@@ -2275,6 +2289,7 @@ export class GrokProvider implements LLMProvider {
       return undefined;
     }
     const rawText = this.extractOutputText(response);
+    if (rawText === undefined) return undefined;
     return parseStructuredOutputText(rawText, schema.name, schema.schema);
   }
 
@@ -2318,6 +2333,7 @@ export class GrokProvider implements LLMProvider {
       : [];
     const available = output.some(
       (item) =>
+        item && typeof item === "object" &&
         item.type === "reasoning" &&
         typeof item.encrypted_content === "string" &&
         item.encrypted_content.length > 0,
@@ -2361,6 +2377,7 @@ export class GrokProvider implements LLMProvider {
       ? (response.output as Array<Record<string, unknown>>)
       : [];
     for (const item of output) {
+      if (!item || typeof item !== "object") continue;
       if (item.type !== "message") continue;
       const content = Array.isArray(item.content)
         ? (item.content as Array<Record<string, unknown>>)
@@ -2389,6 +2406,7 @@ export class GrokProvider implements LLMProvider {
       : [];
     const calls: LLMProviderNativeServerToolCall[] = [];
     for (const item of output) {
+      if (!item || typeof item !== "object") continue;
       if (
         item.type !== "web_search_call" &&
         item.type !== "x_search_call" &&

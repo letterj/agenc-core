@@ -161,7 +161,7 @@ const NARRATIVE_FILE_CLAIM_RE =
 const FILE_MUTATION_CLAIM_RE =
   /\b(?:created|wrote|written|saved|updated|modified|edited|patched|generated|implemented|scaffolded)\b/i;
 const FILE_ARTIFACT_RE =
-  /(?:^|[\s`'"])(?:\/[^\s`'"]+|\.{1,2}\/[^\s`'"]+|[a-z0-9_.-]+\.[a-z0-9]{1,10})(?=$|[\s`'"])/i;
+  /(?:^|[\s`'"])(?:\/[^\s`'"]+|\.{1,2}\/[^\s`'"]+|[a-z0-9_.-]+\.[a-z0-9]{1,20})(?=$|[\s`'"])/i;
 const EXPLICIT_FILE_ARTIFACT_RE =
   /(?:^|[\s`'"])(?:\/[^\s`'"]*?\.[a-z0-9]{1,10}|\.{1,2}\/[^\s`'"]*?\.[a-z0-9]{1,10}|[a-z0-9_.-]+\.[a-z0-9]{1,10})(?=$|[\s`'"])/i;
 const EXPLICIT_FILE_ARTIFACT_GLOBAL_RE =
@@ -297,7 +297,7 @@ const SETUP_TASK_RE =
 const TEST_ARTIFACT_TARGET_RE =
   /\b(?:vitest|jest|mocha|ava|tap|tests?\/|__tests__\/|spec(?:s)?\/|[a-z0-9_.-]+\.test\.[a-z0-9]+|[a-z0-9_.-]+\.spec\.[a-z0-9]+)(?=$|[\s,.;:!?)]|`|'|")/i;
 const DELEGATED_COMPLETION_CLAIM_RE =
-  /\b(?:done|complete(?:d)?|finished|implemented|created|written|ready|passes?|passing|succeeds?|successful(?:ly)?|meets?(?: the)? acceptance criteria|matches?(?: the)? acceptance criteria)\b/i;
+  /\b(?:done|complete(?:d)?|finished|implemented|created|written|ready|delivered|fulfilled|resolved|meets?(?: the)? acceptance criteria|matches?(?: the)? acceptance criteria)\b/i;
 const DELEGATED_INCOMPLETE_WORK_CONTEXT_RE =
   /\bincomplete\b(?=[^.\n]{0,48}\b(?:implementation|work|phase|deliverable|coverage|logic|support|tests?|validation|integration|migration|module|component|feature|api|ui|fix(?:es)?|follow[- ]?up|todo|stub|remaining|missing|unsupported|unverified)\b)|\b(?:implementation|work|phase|deliverable|coverage|logic|support|tests?|validation|integration|migration|module|component|feature|api|ui|fix(?:es)?|follow[- ]?up|todo|stub|remaining|missing|unsupported|unverified)\b[^.\n]{0,24}\bincomplete\b/i;
 const DELEGATED_UNRESOLVED_WORK_RE = new RegExp(
@@ -337,7 +337,7 @@ const DELEGATED_BLOCKED_PHASE_RE = new RegExp(
 const DELEGATED_BENIGN_PHASE_TRANSITION_RE =
   /\bready for next phase\b|\bno sibling steps?\b|\bfinal deliverable synthesized\b/gi;
 const DELEGATED_SCOPED_EXCLUSION_RE =
-  /\b(?:blocked|cannot|can't|unable)\b[^.\n]{0,80}\b(?:because|since|per)\b[^.\n]{0,80}\b(?:phase scope|scope of this phase|this phase only|current phase only|out of scope|outside the scope|next phase|sibling phase|sibling step|another phase|separate phase)\b|\b(?:out of scope|outside the scope|next phase|sibling phase|sibling step|separate phase)\b[^.\n]{0,80}\b(?:not part of|belongs to|deferred from)\b/i;
+  /\b(?:blocked|cannot|can't|unable)\b[^.\n]{0,80}\b(?:because|since|per)\b[^.\n]{0,80}\b(?:phase scope|scope of this phase|this phase only|current phase only|out of scope|outside the scope|beyond the scope|outside this phase|next phase|sibling phase|sibling step|another phase|separate phase|separate task|later phase|subsequent phase)\b|\b(?:out of scope|outside the scope|beyond the scope|outside this phase|next phase|sibling phase|sibling step|separate phase|separate task|in a follow-up|next iteration|future work|later phase|subsequent phase)\b[^.\n]{0,80}\b(?:not part of|belongs to|deferred from)\b/i;
 const DELEGATION_EXPECTED_PLACEHOLDER_RE =
   /\b(?:placeholder(?:s)?|stub(?:s)?|scaffold(?:ing)?|skeleton|boilerplate)\b/i;
 const DELEGATED_ALLOWABLE_PLACEHOLDER_RE =
@@ -884,7 +884,8 @@ export function specRequiresFileMutationEvidence(
   }
 
   if (taskIntent === "implementation") {
-    return hasCodeTarget || hasExplicitFileTarget || primary.trim().length > 0;
+    return hasCodeTarget || hasExplicitFileTarget || capabilityProfile.hasFileWrite ||
+      (hasFileAction && hasTestArtifactTarget);
   }
 
   if (taskIntent === "documentation") {

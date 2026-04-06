@@ -140,7 +140,8 @@ export function preflightDelegatedLocalFileScope(params: {
   if (
     workspaceRoot &&
     workingDirectory &&
-    workspaceRoot !== workingDirectory
+    !isPathWithinRoot(workingDirectory, workspaceRoot) &&
+    !isPathWithinRoot(workspaceRoot, workingDirectory)
   ) {
     addUniqueIssue(issues, {
       code: "workspace_root_mismatch",

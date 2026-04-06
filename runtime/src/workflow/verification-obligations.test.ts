@@ -215,7 +215,7 @@ describe("verification-obligations", () => {
       requiresMutationEvidence: true,
       placeholderTaxonomy: "documentation",
       placeholdersAllowed: false,
-      partialCompletionAllowed: false,
+      partialCompletionAllowed: true,
       completionContract: {
         taskClass: "artifact_only",
         placeholderTaxonomy: "documentation",

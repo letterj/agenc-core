@@ -18,7 +18,6 @@ import type {
   PipelineResult,
   PipelineStep,
 } from "../workflow/pipeline.js";
-import type { WorkflowGraphEdge } from "../workflow/types.js";
 import { canonicalizePipelinePlannerExecutionContexts } from "../workflow/migrations.js";
 import type {
   SubAgentConfig,
@@ -48,6 +47,7 @@ import {
 import { sleep } from "../utils/async.js";
 import {
   type DelegationOutputValidationCode,
+  DELEGATION_OUTPUT_VALIDATION_CODES,
   resolveDelegatedChildToolScope,
   specRequiresSuccessfulToolEvidence,
 } from "../utils/delegation-validation.js";
@@ -1001,6 +1001,7 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
     const retryAttempts = createRetryAttemptTracker();
     let attempt = 0;
     let lastFailure: SubagentFailureOutcome | null = null;
+    let previousFailureMessage: string | undefined;
     const failureHistory: SubagentFailureOutcome[] = [];
     let taskPrompt = subagentTask.taskPrompt;
 
@@ -1070,7 +1071,11 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
         if (acceptanceProbeFailure) {
           attemptOutcome = {
             status: "failed",
-            failure: acceptanceProbeFailure,
+            failure: {
+              ...acceptanceProbeFailure,
+              message: `${acceptanceProbeFailure.message} (original output preserved for diagnostics)`,
+              originalOutput: attemptOutcome.output,
+            },
           };
         }
       }
@@ -1280,9 +1285,14 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
           };
         }
       }
+      const isRepeatedFailure =
+        previousFailureMessage !== undefined &&
+        lastFailure.message === previousFailureMessage;
+      previousFailureMessage = lastFailure.message;
       const retryRule = SUBAGENT_RETRY_POLICY[lastFailure.failureClass];
       const retriesUsed = retryAttempts[lastFailure.failureClass];
       const shouldRetry =
+        !isRepeatedFailure &&
         lastFailure.validationCode !== "blocked_phase_output" &&
         retriesUsed < retryRule.maxRetries;
       const retryAttempt = retriesUsed + 1;
@@ -1743,8 +1753,13 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
         );
       const initialFailureClass = classifySubagentFailureResult(result);
       const validationCode = result.validationCode;
+      const isKnownValidationError =
+        validationCode !== undefined &&
+        (DELEGATION_OUTPUT_VALIDATION_CODES as readonly string[]).includes(
+          validationCode,
+        );
       const failureClass =
-        validationCode !== undefined ||
+        isKnownValidationError ||
           initialFailureClass === "malformed_result_contract"
           ? "malformed_result_contract"
           : initialFailureClass;

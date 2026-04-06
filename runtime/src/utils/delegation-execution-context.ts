@@ -318,7 +318,7 @@ function normalizeParentRoots(
   return filtered.length > 0 ? filtered : [parentWorkspaceRoot];
 }
 
-function normalizeRequestedReadRoots(
+function normalizeRequestedRoots(
   roots: readonly string[] | undefined,
   childWorkspaceRoot: string,
 ): readonly string[] | undefined {
@@ -395,16 +395,25 @@ export function deriveDelegatedExecutionEnvelopeFromParent(params: {
   // correct it to the parent workspace root instead of hard-failing.
   // The model's intent is to work in the session workspace; it sometimes
   // hallucinates a different path from its context window.
-  const childWorkspaceRoot =
+  const workspaceRootCorrected = Boolean(
     requestedWorkspaceRoot &&
-    isPathWithinRoot(requestedWorkspaceRoot, parentWorkspaceRoot)
+    !isPathWithinRoot(requestedWorkspaceRoot, parentWorkspaceRoot),
+  );
+  const childWorkspaceRoot =
+    requestedWorkspaceRoot && !workspaceRootCorrected
       ? requestedWorkspaceRoot
       : parentWorkspaceRoot;
 
-  const requestedReadRoots = normalizeRequestedReadRoots(
-    requestedContext?.allowedReadRoots,
-    childWorkspaceRoot,
-  );
+  // When the workspace root was corrected, the requested read/write roots and
+  // artifacts were specified against the hallucinated workspace path.  They are
+  // no longer meaningful relative to the corrected workspace, so we discard
+  // them and let the derivation fall through to parent defaults.
+  const requestedReadRoots = workspaceRootCorrected
+    ? undefined
+    : normalizeRequestedRoots(
+        requestedContext?.allowedReadRoots,
+        childWorkspaceRoot,
+      );
   if (
     requestedReadRoots?.some(
       (path) =>
@@ -425,10 +434,12 @@ export function deriveDelegatedExecutionEnvelopeFromParent(params: {
     });
   }
 
-  const requestedWriteRoots = normalizeRequestedReadRoots(
-    requestedContext?.allowedWriteRoots,
-    childWorkspaceRoot,
-  );
+  const requestedWriteRoots = workspaceRootCorrected
+    ? undefined
+    : normalizeRequestedRoots(
+        requestedContext?.allowedWriteRoots,
+        childWorkspaceRoot,
+      );
   if (
     requestedWriteRoots?.some(
       (path) =>
@@ -449,10 +460,12 @@ export function deriveDelegatedExecutionEnvelopeFromParent(params: {
     });
   }
 
-  const inputArtifacts = normalizeRequestedArtifacts(
-    requestedContext?.inputArtifacts,
-    childWorkspaceRoot,
-  );
+  const inputArtifacts = workspaceRootCorrected
+    ? undefined
+    : normalizeRequestedArtifacts(
+        requestedContext?.inputArtifacts,
+        childWorkspaceRoot,
+      );
   if (
     inputArtifacts?.some(
       (path) =>
@@ -473,10 +486,12 @@ export function deriveDelegatedExecutionEnvelopeFromParent(params: {
     });
   }
 
-  const requiredSourceArtifacts = normalizeRequestedArtifacts(
-    requestedContext?.requiredSourceArtifacts ?? requestedContext?.inputArtifacts,
-    childWorkspaceRoot,
-  );
+  const requiredSourceArtifacts = workspaceRootCorrected
+    ? undefined
+    : normalizeRequestedArtifacts(
+        requestedContext?.requiredSourceArtifacts ?? requestedContext?.inputArtifacts,
+        childWorkspaceRoot,
+      );
   if (
     requiredSourceArtifacts?.some(
       (path) =>
@@ -497,10 +512,12 @@ export function deriveDelegatedExecutionEnvelopeFromParent(params: {
     });
   }
 
-  const targetArtifacts = normalizeRequestedArtifacts(
-    requestedContext?.targetArtifacts,
-    childWorkspaceRoot,
-  );
+  const targetArtifacts = workspaceRootCorrected
+    ? undefined
+    : normalizeRequestedArtifacts(
+        requestedContext?.targetArtifacts,
+        childWorkspaceRoot,
+      );
   if (
     targetArtifacts?.some(
       (path) =>
