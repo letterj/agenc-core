@@ -2700,14 +2700,17 @@ describe("DaemonManager", () => {
   });
 
   it("disables host execution deny lists when yolo mode is enabled", async () => {
+    // Baseline: pick a command that's still in the (pruned) default
+    // deny list. `socat` is a reverse-shell vector and stays denied
+    // even after the prune.
     const baseline = new DaemonManager({ configPath: "/tmp/config.json" });
     const baselineRegistry = await (baseline as any).createToolRegistry({
       desktop: { enabled: false },
     });
     const baselineHandler = baselineRegistry.createToolHandler();
     const denied = await baselineHandler("system.bash", {
-      command: process.execPath,
-      args: ["-e", "process.stdout.write('blocked')"],
+      command: "socat",
+      args: ["-"],
     });
     expect(denied).toContain("is denied");
 
@@ -2719,6 +2722,9 @@ describe("DaemonManager", () => {
       desktop: { enabled: false },
     });
     const handler = registry.createToolHandler();
+    // In yolo mode the deny list is disabled, so any command — even
+    // one that was on the pruned default deny list — is allowed.
+    // Use the node interpreter so we get a deterministic stdout.
     const allowed = await handler("system.bash", {
       command: process.execPath,
       args: ["-e", "process.stdout.write('yolo-ok')"],
