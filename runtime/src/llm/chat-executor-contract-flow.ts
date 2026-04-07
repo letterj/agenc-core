@@ -39,9 +39,6 @@ import {
 } from "./chat-executor-routing-state.js";
 import { didToolCallFail } from "./chat-executor-tool-utils.js";
 import {
-  plannerRequestImplementsFromArtifact,
-  plannerRequestNeedsGroundedPlanArtifact,
-  plannerRequestNeedsPlanArtifactExecution,
   requestRequiresToolGroundedExecution,
 } from "./chat-executor-planner.js";
 import { hasConcordiaSimulationTurnContract } from "./chat-executor-turn-contracts.js";
@@ -612,9 +609,12 @@ function synthesizeDirectImplementationWorkflowContext(
   if (hasConcordiaSimulationTurnContract(ctx.messageMetadata)) {
     return undefined;
   }
+  // Read intent from the model-emitted planIntent surfaced via planner
+  // summary state instead of re-running a regex classifier on messageText.
+  const plannerPlanIntent = ctx.plannerSummaryState?.plannerPlanIntent;
   if (
-    plannerRequestNeedsGroundedPlanArtifact(ctx.messageText) ||
-    plannerRequestNeedsPlanArtifactExecution(ctx.messageText)
+    plannerPlanIntent === "grounded_plan_generation" ||
+    plannerPlanIntent === "edit_artifact"
   ) {
     return undefined;
   }
@@ -756,9 +756,8 @@ function analyzeLegacyCompletionTurn(
   const mutatesSourceLikeArtifacts = mutatedArtifacts.some((artifact) =>
     SOURCE_LIKE_PATH_RE.test(artifact),
   );
-  const implementsFromArtifact = plannerRequestImplementsFromArtifact(
-    ctx.messageText,
-  );
+  const implementsFromArtifact =
+    ctx.plannerSummaryState?.plannerPlanIntent === "implement_from_artifact";
   const likelyImplementationRequest =
     (
       LIKELY_IMPLEMENTATION_REQUEST_RE.test(ctx.messageText) ||

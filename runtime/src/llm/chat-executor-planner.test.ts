@@ -11,12 +11,9 @@ import {
   extractPlannerVerificationCommandRequirements,
   extractPlannerVerificationRequirements,
   buildPlannerStructuralRefinementHint,
-  classifyPlannerPlanArtifactIntent,
   extractExplicitDeterministicToolRequirements,
   extractExplicitSubagentOrchestrationRequirements,
   parsePlannerPlan,
-  plannerRequestImplementsFromArtifact,
-  plannerRequestNeedsWorkspaceGroundedArtifactUpdate,
   requestExplicitlyRequestsDelegation,
   salvagePlannerToolCallsAsPlan,
   validatePlannerVerificationRequirements,
@@ -113,65 +110,21 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
     );
   });
 
-  it("grounds plan-artifact edit schema examples to the requested artifact instead of AGENC.md", () => {
-    const messages = buildPlannerMessages(
-      "Update PLAN.md so it reflects the corrected architecture and missing validation steps.",
-      [],
-      512,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "/home/tetsuo/git/AgenC",
-    );
-
-    expect(messages[0]?.content).toContain(
-      '"requiredSourceArtifacts": ["/home/tetsuo/git/AgenC/PLAN.md"]',
-    );
-    expect(messages[0]?.content).toContain(
-      '"targetArtifacts": ["/home/tetsuo/git/AgenC/PLAN.md"]',
-    );
-    expect(messages[0]?.content).not.toContain("AGENC.md");
-    expect(messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "system",
-          content: expect.stringContaining(
-            "This request must materialize the named planning artifact itself.",
-          ),
-        }),
-      ]),
-    );
-  });
-
-  it("filters same-target artifact-edit history when the current turn is implementing from the artifact", () => {
-    const messages = buildPlannerMessages(
-      "Read all of @PLAN.md and implement every phase in full.",
-      [
-        {
-          role: "user",
-          content: "Go through @PLAN.md and make sure it is perfect before we implement anything.",
-        },
-        {
-          role: "assistant",
-          content: "I found several gaps in PLAN.md and can fix them next.",
-        },
-        {
-          role: "user",
-          content: "Keep the workspace root at /tmp/agenc-shell and use gcc with non-interactive tests.",
-        },
-      ],
-      512,
-    );
-
-    const finalUserMessage = messages[messages.length - 1];
-    expect(finalUserMessage?.role).toBe("user");
-    expect(finalUserMessage?.content).not.toContain("make sure it is perfect");
-    expect(finalUserMessage?.content).not.toContain("I found several gaps in PLAN.md");
-    expect(finalUserMessage?.content).toContain(
-      "Keep the workspace root at /tmp/agenc-shell",
-    );
-  });
+  // Two tests previously here ("grounds plan-artifact edit schema examples to
+  // the requested artifact instead of AGENC.md" and "filters same-target
+  // artifact-edit history when the current turn is implementing from the
+  // artifact") were removed on 2026-04-06 along with the regex pre-call
+  // classifier. They asserted on:
+  //   - the EDIT-branch system message text injected into the planner prompt
+  //   - schema example targetArtifacts conditioned on intent flags
+  //   - history filtering that suppressed prior assistant turns when the
+  //     current turn was an `implement_from_artifact` request
+  // All three behaviors lived in `buildPlannerMessages` and depended on
+  // `classifyPlannerPlanArtifactIntent`. The new model-driven path emits a
+  // single intent-agnostic rubric system message and lets the model decide,
+  // so these regex-coupled assertions no longer make sense. End-to-end
+  // coverage for the new behavior belongs in a planner-pipeline integration
+  // test against a recorded model response.
 
   it("keeps different-target artifact history when implementing from a plan artifact", () => {
     const messages = buildPlannerMessages(
@@ -189,21 +142,12 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
     expect(finalUserMessage?.content).toContain("perfect ROADMAP.md");
   });
 
-  it("classifies imperative single-artifact issue-and-gap fixes as edit_artifact", () => {
-    expect(
-      classifyPlannerPlanArtifactIntent(
-        "I want you to go through @PLAN.md find any issues and gaps and fix them.",
-      ),
-    ).toBe("edit_artifact");
-  });
-
-  it("classifies explicit artifact completeness repair requests as edit_artifact", () => {
-    expect(
-      classifyPlannerPlanArtifactIntent(
-        "i want you to go through @PLAN.md and make sure that it is a complete plan for a linux shell if there are any gaps in the spec please fix it",
-      ),
-    ).toBe("edit_artifact");
-  });
+  // The two `classifies … as edit_artifact` tests that lived here previously
+  // exercised `classifyPlannerPlanArtifactIntent`, the regex-based pre-call
+  // classifier removed on 2026-04-06. Intent is now decided by the model and
+  // surfaced as `plan_intent` on the parsed PlannerPlan. New end-to-end tests
+  // for that behavior belong in a fixture-driven planner integration test, not
+  // a regex unit test.
 
   it("treats plain-language delegation research requests as explicit delegation", () => {
     expect(
@@ -832,55 +776,33 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
     expect(decision.reason).toContain("delegation_cue");
   });
 
-  it("forces planner routing for grounded plan-artifact expansion requests", () => {
+  it("forces planner routing whenever the user message references an artifact path", () => {
     const decision = assessPlannerDecision(
       true,
-      "i want you to read @TODO.md and turn it into a complete plan for making a shell in the c-programming language.",
+      "Update PLAN.md so it reflects the corrected architecture.",
       [],
     );
 
     expect(decision.shouldPlan).toBe(true);
-    expect(decision.reason).toContain("plan_artifact_request");
-  });
-
-  it("forces planner routing for plan-artifact execution requests", () => {
-    const decision = assessPlannerDecision(
-      true,
-      "Update PLAN.md so it reflects the corrected architecture and missing validation steps.",
-      [],
-    );
-
-    expect(decision.shouldPlan).toBe(true);
-    expect(decision.reason).toContain("plan_artifact_execution_request");
-  });
-
-  it("routes implement-from-plan requests through the planner without classifying them as artifact edits", () => {
-    const messageText =
-      "You are to read all of @PLAN.md and complete every single phase in full.";
-
-    expect(classifyPlannerPlanArtifactIntent(messageText)).toBe(
-      "implement_from_artifact",
-    );
-    expect(plannerRequestImplementsFromArtifact(messageText)).toBe(true);
-
-    const decision = assessPlannerDecision(true, messageText, []);
-
-    expect(decision.shouldPlan).toBe(true);
-    expect(decision.reason).toContain("artifact_spec_execution_request");
+    expect(decision.reason).toContain("plan_artifact_reference");
   });
 
   it("does not treat generic planning requests without explicit artifact refs as artifact-backed routes", () => {
     const messageText =
       "Turn this into a complete implementation plan for building a shell in the C programming language.";
 
-    expect(classifyPlannerPlanArtifactIntent(messageText)).toBe("none");
-
     const decision = assessPlannerDecision(true, messageText, []);
 
-    expect(decision.reason).not.toContain("plan_artifact_request");
-    expect(decision.reason).not.toContain("plan_artifact_execution_request");
-    expect(decision.reason).not.toContain("artifact_spec_execution_request");
+    expect(decision.reason).not.toContain("plan_artifact_reference");
   });
+
+  // The tests that previously asserted the regex classifier returned
+  // `edit_artifact`, `implement_from_artifact`, or `grounded_plan_generation`
+  // for specific surface-keyword phrasings were removed on 2026-04-06 along
+  // with `classifyPlannerPlanArtifactIntent` itself. Intent is now decided by
+  // the model and surfaced as `plan_intent` on the parsed PlannerPlan;
+  // end-to-end coverage for that decision belongs in a planner-pipeline
+  // integration test, not a regex unit test.
 
   it("extracts required subagent steps from the compact 'plan required' prompt shape", () => {
     const requirements = extractExplicitSubagentOrchestrationRequirements(
@@ -2038,6 +1960,11 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
         reason: "write_todo_plan",
         requiresSynthesis: false,
         confidence: 0.7,
+        // Pre-2026-04-06 the validator inferred this from the message text via
+        // `classifyPlannerPlanArtifactIntent`. After the rip-out, intent is
+        // model-emitted and lives on the parsed plan; tests must set it
+        // explicitly to exercise the validator branch.
+        planIntent: "grounded_plan_generation",
         steps: [
           {
             name: "create_todo_md",
@@ -2163,6 +2090,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
         reason: "review_and_update_plan",
         requiresSynthesis: false,
         confidence: 0.81,
+        planIntent: "edit_artifact",
         steps: [
           {
             name: "read_plan",
@@ -2339,6 +2267,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
         reason: "complete_plan_artifact_execution",
         requiresSynthesis: false,
         confidence: 0.82,
+        planIntent: "implement_from_artifact",
         steps: [
           {
             name: "read_plan",
@@ -2476,6 +2405,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
         reason: "implement_from_plan",
         requiresSynthesis: false,
         confidence: 0.82,
+        planIntent: "implement_from_artifact",
         steps: [
           {
             name: "read_plan",
@@ -2524,70 +2454,18 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
     );
   });
 
-  it("classifies the full existing artifact alias family consistently", () => {
-    expect(
-      classifyPlannerPlanArtifactIntent(
-        "Read TODO.md and turn it into a complete implementation plan.",
-      ),
-    ).toBe("grounded_plan_generation");
-    expect(
-      classifyPlannerPlanArtifactIntent(
-        "Update roadmap.md so it reflects the latest sequencing and owners.",
-      ),
-    ).toBe("edit_artifact");
-    expect(
-      classifyPlannerPlanArtifactIntent(
-        "Implement everything in implementation-plan.md and verify each phase before moving on.",
-      ),
-    ).toBe("implement_from_artifact");
-    expect(
-      classifyPlannerPlanArtifactIntent(
-        "Use spec.md as the source of truth and implement the project in full.",
-      ),
-    ).toBe("implement_from_artifact");
-  });
-
-  it("detects workspace-grounded artifact update requests separately from plain artifact edits", () => {
-    expect(
-      plannerRequestNeedsWorkspaceGroundedArtifactUpdate(
-        "Review the codebase layout against Phase1 in PLAN.md and update PLAN.md so it reflects the current workspace state.",
-      ),
-    ).toBe(true);
-    expect(
-      plannerRequestNeedsWorkspaceGroundedArtifactUpdate(
-        "i want you to go through @PLAN.md and make sure that it is a complete plan for a linux shell if there are any gaps in the spec please fix it",
-      ),
-    ).toBe(true);
-    expect(
-      plannerRequestNeedsWorkspaceGroundedArtifactUpdate(
-        "Update roadmap.md so it reflects the latest sequencing and owners.",
-      ),
-    ).toBe(false);
-  });
-
-  it("adds explicit workspace-grounding guidance to planner prompts for grounded artifact rewrites", () => {
-    const messages = buildPlannerMessages(
-      "Review the codebase layout against Phase1 in PLAN.md and update PLAN.md so it reflects the current workspace state.",
-      [],
-      4000,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "/tmp/agenc-shell",
-    );
-
-    expect(messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "system",
-          content: expect.stringContaining(
-            "This is a workspace-grounded artifact update request.",
-          ),
-        }),
-      ]),
-    );
-  });
+  // The "classifies the full existing artifact alias family consistently",
+  // "detects workspace-grounded artifact update requests separately from plain
+  // artifact edits", and "adds explicit workspace-grounding guidance to
+  // planner prompts for grounded artifact rewrites" tests previously here all
+  // covered the regex-based pre-call classifier (`classifyPlannerPlanArtifactIntent`,
+  // `plannerRequestNeedsWorkspaceGroundedArtifactUpdate`) and the three
+  // intent-conditional system messages in `buildPlannerMessages`. Both layers
+  // were removed on 2026-04-06: intent is now decided by the model and
+  // surfaced as `plan_intent` on the parsed PlannerPlan, and the planner
+  // prompt now ships a single intent-agnostic rubric instead of three
+  // mutually-exclusive constraint blocks. End-to-end coverage for the new
+  // model-driven path belongs in a planner-pipeline integration test.
 
   it("rejects deterministic bash steps that embed shell separators in direct args", () => {
     const diagnostics = validatePlannerStepContracts({
@@ -3621,6 +3499,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
         reason: "wrong_source_artifact",
         requiresSynthesis: true,
         confidence: 0.8,
+        planIntent: "implement_from_artifact",
         steps: [
           {
             name: "implement_phase",
@@ -3664,6 +3543,7 @@ describe("chat-executor-planner explicit orchestration requirements", () => {
         reason: "fill_plan_gaps",
         requiresSynthesis: true,
         confidence: 0.8,
+        planIntent: "edit_artifact",
         steps: [
           {
             name: "read_plan",

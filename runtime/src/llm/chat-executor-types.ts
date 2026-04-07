@@ -675,10 +675,29 @@ export type PlannerStepIntent =
   | PlannerSubAgentTaskStepIntent
   | PlannerSynthesisStepIntent;
 
+export type PlannerPlanArtifactIntent =
+  | "none"
+  | "grounded_plan_generation"
+  | "edit_artifact"
+  | "implement_from_artifact";
+
 export interface PlannerPlan {
   reason?: string;
   requiresSynthesis?: boolean;
   confidence?: number;
+  /**
+   * The model-emitted classification of how the user wants the named planning
+   * artifact to be treated. Replaces the old regex-based pre-call classifier
+   * (`classifyPlannerPlanArtifactIntent`). The model decides this from full
+   * context (user message, recent conversation, workspace state) instead of a
+   * surface-level regex match against the user's literal words.
+   *
+   * - `edit_artifact`: user wants the named planning file modified in place
+   * - `implement_from_artifact`: user wants the work the plan describes built
+   * - `grounded_plan_generation`: user wants a new plan written from scratch
+   * - `none`: no planning-artifact intent applies (default)
+   */
+  planIntent?: PlannerPlanArtifactIntent;
   steps: PlannerStepIntent[];
   edges: readonly WorkflowGraphEdge[];
   workflowContract?: WorkflowContract;
@@ -734,6 +753,14 @@ export interface MutablePlannerSummaryState {
   deterministicStepsExecuted: number;
   diagnostics: PlannerDiagnostic[];
   subagentVerification: MutablePlannerVerificationSummary;
+  /**
+   * Model-emitted plan-artifact intent classification, propagated from
+   * `PlannerPlan.planIntent`. Replaces the regex-based pre-call classifier
+   * that used to live in `chat-executor-planner.ts`. Downstream contract
+   * flow and turn-execution code reads this instead of re-running a regex
+   * against the user message.
+   */
+  plannerPlanIntent?: PlannerPlanArtifactIntent;
 }
 
 export interface PlannerPipelineVerifierLoopInput {

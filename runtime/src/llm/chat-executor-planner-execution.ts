@@ -53,7 +53,6 @@ import {
   buildExplicitSubagentOrchestrationFailureMessage,
   extractRecoverablePlannerParseDiagnostics,
   isHighRiskSubagentPlan,
-  plannerRequestImplementsFromArtifact,
   pipelineResultToToolCalls,
 } from "./chat-executor-planner.js";
 import { normalizePlannerResponse } from "./chat-executor-planner-normalization.js";
@@ -1204,6 +1203,10 @@ export async function executePlannerPath(
     });
 
     ctx.plannerSummaryState.plannedSteps = plannerPlan.steps.length;
+    // Propagate the model-emitted plan_intent to the summary state so
+    // downstream contract-flow and turn-execution code can read it instead
+    // of re-running a regex classifier against the user message text.
+    ctx.plannerSummaryState.plannerPlanIntent = plannerPlan.planIntent;
     ctx.plannedSubagentSteps = plannerPlan.steps.filter(
       (step) => step.stepType === "subagent_task",
     ).length;
@@ -1315,9 +1318,10 @@ export async function executePlannerPath(
       );
     ctx.plannerImplementationFallbackBlocked =
       plannerImplementationFallbackBlocked;
-    const planArtifactExecutionRequest = plannerRequestImplementsFromArtifact(
-      ctx.messageText,
-    );
+    // Read intent from the model-emitted planIntent on the parsed plan
+    // instead of re-running a regex classifier on messageText.
+    const planArtifactExecutionRequest =
+      plannerPlan.planIntent === "implement_from_artifact";
     const delegationVetoReason = delegationDecision?.reason;
     const shouldRefineDelegationVeto =
       planArtifactExecutionRequest &&
