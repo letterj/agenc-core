@@ -11,21 +11,21 @@
  * @module
  */
 
-export type TurnExecutionClass =
+type TurnExecutionClass =
   | "dialogue"
   | "artifact_update"
   | "workflow_implementation"
   | "research"
   | "concordia_simulation";
 
-export type TurnExecutionOwnerMode =
+type TurnExecutionOwnerMode =
   | "none"
   | "artifact_owner"
   | "workflow_owner"
   | "research_owner"
   | "concordia_owner";
 
-export type TurnDelegationPolicy =
+type TurnDelegationPolicy =
   | "forbid"
   | "direct_owner"
   | "planner_allowed";

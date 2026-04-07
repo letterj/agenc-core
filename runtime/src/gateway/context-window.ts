@@ -102,7 +102,7 @@ interface ResolvedContextWindow {
   readonly source: LLMContextWindowSource;
 }
 
-export interface KnownGrokModelEntry {
+interface KnownGrokModelEntry {
   readonly id: string;
   readonly contextWindowTokens: number;
   readonly aliases: readonly string[];

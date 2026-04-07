@@ -218,7 +218,7 @@ async function executeCoordinatorDelegation(
   });
 }
 
-export interface ExecuteCoordinatorModeToolParams
+interface ExecuteCoordinatorModeToolParams
   extends ExecuteDelegationToolParams {}
 
 export async function executeCoordinatorModeTool(

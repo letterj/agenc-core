@@ -38,14 +38,14 @@ export function createAutoCompactTrackingState(): AutoCompactTrackingState {
   };
 }
 
-export interface AutocompactInput {
+interface AutocompactInput {
   readonly messages: readonly LLMMessage[];
   readonly state: AutoCompactTrackingState;
   readonly thresholdTokens?: number;
   readonly lastResponseUsage?: LLMUsage;
 }
 
-export interface AutocompactResult {
+interface AutocompactResult {
   readonly action: "noop" | "autocompacted";
   readonly messages: readonly LLMMessage[];
   readonly state: AutoCompactTrackingState;
@@ -109,30 +109,11 @@ void COMPACT_BOUNDARY_SUBTYPE;
  * Called by the runtime after a successful summarization to clear the
  * `compacted` flag and bump the consecutive-failure counter back to 0.
  */
-export function markAutocompactComplete(
-  state: AutoCompactTrackingState,
-): AutoCompactTrackingState {
-  return {
-    ...state,
-    compacted: false,
-    consecutiveFailures: 0,
-  };
-}
-
 /**
  * Called by the runtime when a summarization attempt fails. Three
  * consecutive failures should trip the circuit breaker and force the
  * caller to surface a hard error rather than retrying indefinitely.
  */
-export function markAutocompactFailure(
-  state: AutoCompactTrackingState,
-): AutoCompactTrackingState {
-  return {
-    ...state,
-    consecutiveFailures: state.consecutiveFailures + 1,
-  };
-}
-
 function newTurnId(): string {
   // Lightweight non-crypto random — turn IDs are diagnostic, not security.
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;

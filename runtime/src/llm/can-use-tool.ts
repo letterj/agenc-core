@@ -37,12 +37,12 @@ export type PermissionResult =
       readonly reason?: string;
     };
 
-export interface RuleSuggestion {
+interface RuleSuggestion {
   readonly description: string;
   readonly rule: string;
 }
 
-export interface CanUseToolContext {
+interface CanUseToolContext {
   readonly sessionId?: string;
   readonly chainId?: string;
   readonly depth?: number;
@@ -59,25 +59,8 @@ export type CanUseToolFn = (
  * (chat-executor, sub-agent) supply their own at construction time;
  * this only fires when nobody plumbs a real implementation through.
  */
-export const allowAllCanUseTool: CanUseToolFn = async () => ({
-  behavior: "allow" as const,
-});
-
 /**
  * Compose multiple canUseTool functions into one. The first non-allow
  * decision wins. Useful for stacking the built-in policy check on top
  * of a user-provided interactive approver.
  */
-export function composeCanUseTool(
-  ...layers: readonly CanUseToolFn[]
-): CanUseToolFn {
-  return async (toolCall, context) => {
-    for (const layer of layers) {
-      const decision = await layer(toolCall, context);
-      if (decision.behavior !== "allow") {
-        return decision;
-      }
-    }
-    return { behavior: "allow" as const };
-  };
-}

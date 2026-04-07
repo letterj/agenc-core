@@ -28,7 +28,7 @@ const BUILD_OR_TEST_OBLIGATION_RE =
 const LOCAL_INSPECTION_TEXT_RE =
   /\b(?:catalog|check|explore|find|git status|inspect|inventory|list|locate|ls|map|read|readme|review|status|survey|trace|understand)\b/i;
 
-export type DelegationAdmissionShape =
+type DelegationAdmissionShape =
   | "repo_exploration"
   | "test_triage"
   | "independent_parallel_branches"
@@ -61,7 +61,7 @@ export interface DelegationStepAdmission {
   readonly verifierObligations: readonly string[];
 }
 
-export interface DelegationAdmissionDecision {
+interface DelegationAdmissionDecision {
   readonly allowed: boolean;
   readonly reason: DelegationAdmissionReason;
   readonly shape: DelegationAdmissionShape | null;
@@ -70,7 +70,7 @@ export interface DelegationAdmissionDecision {
   readonly diagnostics: Readonly<Record<string, number | boolean | string>>;
 }
 
-export interface DelegationAdmissionInput {
+interface DelegationAdmissionInput {
   readonly messageText: string;
   readonly totalSteps: number;
   readonly synthesisSteps: number;

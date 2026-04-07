@@ -44,7 +44,7 @@ export interface PromptBudgetConfig {
   readonly maxRuntimeHints?: number;
 }
 
-export interface PromptBudgetModelProfile {
+interface PromptBudgetModelProfile {
   readonly contextWindowTokens: number;
   readonly maxOutputTokens: number;
   readonly safetyMarginTokens: number;
@@ -96,7 +96,7 @@ export interface PromptBudgetPlan {
   readonly caps: PromptBudgetCaps;
 }
 
-export interface PromptBudgetAllocationResult {
+interface PromptBudgetAllocationResult {
   readonly messages: LLMMessage[];
   readonly diagnostics: PromptBudgetDiagnostics;
 }

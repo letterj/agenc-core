@@ -13,14 +13,14 @@ import type {
   DelegationOutputValidationResult,
 } from "../utils/delegation-validation.js";
 
-export const RUNTIME_VERIFICATION_CHANNEL_NAMES = [
+const RUNTIME_VERIFICATION_CHANNEL_NAMES = [
   "artifact_state",
   "placeholder_stub",
   "executable_outcome",
   "rubric",
 ] as const;
 
-export type RuntimeVerificationChannelName =
+type RuntimeVerificationChannelName =
   typeof RUNTIME_VERIFICATION_CHANNEL_NAMES[number];
 
 export interface RuntimeVerificationDiagnostic {
@@ -28,7 +28,7 @@ export interface RuntimeVerificationDiagnostic {
   readonly message: string;
 }
 
-export interface RuntimeVerificationChannelDecision {
+interface RuntimeVerificationChannelDecision {
   readonly channel: RuntimeVerificationChannelName;
   readonly ok: boolean;
   readonly message: string;

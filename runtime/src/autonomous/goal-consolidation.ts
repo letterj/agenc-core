@@ -1,7 +1,7 @@
 import type { GoalStoreInput, StrategicGoalPriority, StrategicGoalRecord } from "./goal-store.js";
 import { ACTIVE_GOAL_TTL_MS, isActiveGoalStatus, isTerminalGoalStatus } from "./goal-hygiene.js";
 
-export const GOAL_DUPLICATE_SUPPRESSION_MS = 24 * 60 * 60 * 1000;
+const GOAL_DUPLICATE_SUPPRESSION_MS = 24 * 60 * 60 * 1000;
 export const GOAL_REOPEN_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 
 const PRIORITY_WEIGHT: Record<StrategicGoalPriority, number> = {
@@ -11,7 +11,7 @@ const PRIORITY_WEIGHT: Record<StrategicGoalPriority, number> = {
   low: 1,
 };
 
-export interface GoalConsolidationMatch {
+interface GoalConsolidationMatch {
   readonly kind:
     | "exact_active"
     | "fuzzy_active"
@@ -21,7 +21,7 @@ export interface GoalConsolidationMatch {
   readonly goal: StrategicGoalRecord;
 }
 
-export interface GoalConsolidationResult {
+interface GoalConsolidationResult {
   readonly created: boolean;
   readonly accepted: boolean;
   readonly refreshedExisting?: StrategicGoalRecord;
@@ -39,7 +39,7 @@ export function normalizeGoalIdentity(title: string, description: string): strin
     .trim();
 }
 
-export function normalizeGoalWords(text: string): Set<string> {
+function normalizeGoalWords(text: string): Set<string> {
   return new Set(
     text
       .toLowerCase()

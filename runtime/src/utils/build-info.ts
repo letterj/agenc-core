@@ -14,7 +14,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-export interface BuildInfo {
+interface BuildInfo {
   readonly commit: string;
   readonly shortCommit: string;
   readonly buildTime: string;

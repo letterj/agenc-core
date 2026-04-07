@@ -7,7 +7,6 @@
  * @module
  */
 
-import type { LLMProviderEvidence } from "../llm/types.js";
 import type { DelegationExecutionContext } from "./delegation-execution-context.js";
 import {
   PROVIDER_NATIVE_FILE_SEARCH_TOOL,
@@ -63,9 +62,6 @@ export interface DelegationValidationToolCall {
   readonly isError?: boolean;
 }
 
-export interface DelegationValidationProviderEvidence
-  extends LLMProviderEvidence {}
-
 export const DELEGATION_OUTPUT_VALIDATION_CODES = [
   "empty_output",
   "empty_structured_payload",
@@ -95,15 +91,15 @@ export interface DelegationOutputValidationResult {
   readonly parsedOutput?: Record<string, unknown>;
 }
 
-export interface DelegatedChildToolAllowlistRefinement {
+interface DelegatedChildToolAllowlistRefinement {
   readonly allowedTools: readonly string[];
   readonly removedLowSignalBrowserTools: readonly string[];
   readonly blockedReason?: string;
 }
 
-export type DelegatedToolContractState = "exact" | "enriched" | "degraded";
+type DelegatedToolContractState = "exact" | "enriched" | "degraded";
 
-export interface DelegatedToolContractResolution {
+interface DelegatedToolContractResolution {
   readonly state: DelegatedToolContractState;
   readonly requestedSource: readonly string[];
   readonly requestedConcreteTools: readonly string[];
@@ -114,7 +110,7 @@ export interface DelegatedToolContractResolution {
   readonly requiredSubstitution: readonly string[];
 }
 
-export interface ResolvedDelegatedChildToolScope
+interface ResolvedDelegatedChildToolScope
   extends DelegatedChildToolAllowlistRefinement {
   readonly semanticFallback: readonly string[];
   readonly removedByPolicy: readonly string[];
@@ -587,7 +583,7 @@ function isDelegationToolNameLike(toolName: string): boolean {
     toolName.startsWith("agenc.subagent.");
 }
 
-export function specRequiresFileMutationEvidence(
+function specRequiresFileMutationEvidence(
   spec: DelegationContractSpec,
 ): boolean {
   const capabilityProfile = getDelegatedCapabilityProfile(spec);
@@ -1152,12 +1148,6 @@ export function resolveDelegatedChildToolScope(params: {
     },
   };
 }
-
-export type AcceptanceVerificationCategory =
-  | "build"
-  | "test"
-  | "inspection"
-  | "command";
 
 
 

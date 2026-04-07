@@ -42,7 +42,7 @@ export function extractExplicitSubagentOrchestrationRequirements(
   return undefined;
 }
 
-export interface ExplicitDeterministicToolRequirements {
+interface ExplicitDeterministicToolRequirements {
   readonly forcePlanner?: boolean;
   readonly toolNames?: readonly string[];
 }

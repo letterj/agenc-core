@@ -672,7 +672,7 @@ export function isNodeWorkspaceRelevant(texts: readonly string[]): boolean {
 /*  Workspace state guidance for prompts                               */
 /* ------------------------------------------------------------------ */
 
-export function collectPromptArtifactPackageDirectories(
+function collectPromptArtifactPackageDirectories(
   promptArtifactCandidates: readonly { path: string }[],
   workspaceRoot: string,
 ): readonly string[] {

@@ -258,7 +258,7 @@ interface ResolvedChildPromptBudget {
   readonly providerProfile?: LLMProviderExecutionProfile;
 }
 
-export interface SubAgentOrchestratorConfig {
+interface SubAgentOrchestratorConfig {
   readonly fallbackExecutor: DeterministicPipelineExecutor;
   readonly resolveSubAgentManager: () => SubAgentExecutionManager | null;
   readonly resolveLifecycleEmitter?: () => SubAgentLifecycleEmitter | null;

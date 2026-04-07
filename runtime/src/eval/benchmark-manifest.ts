@@ -14,7 +14,7 @@ import {
 
 export const BENCHMARK_MANIFEST_SCHEMA_VERSION = 1 as const;
 
-export type RiskTier = "low" | "medium" | "high";
+type RiskTier = "low" | "medium" | "high";
 
 export interface BenchmarkScenarioManifest {
   id: string;

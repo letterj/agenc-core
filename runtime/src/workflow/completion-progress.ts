@@ -21,7 +21,7 @@ export type WorkflowProgressRequirement =
   | "review_verification"
   | "request_milestones";
 
-export interface WorkflowProgressEvidence {
+interface WorkflowProgressEvidence {
   readonly requirement:
     | "build_verification"
     | "behavior_verification"

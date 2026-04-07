@@ -80,7 +80,7 @@ function prependPathEntry(
 // Side-effect result type
 // ============================================================================
 
-export interface ToolRegistrySideEffects {
+interface ToolRegistrySideEffects {
   registry: ToolRegistry;
   remoteJobManager: SystemRemoteJobManager;
   remoteSessionManager: SystemRemoteSessionManager;
@@ -93,7 +93,7 @@ export interface ToolRegistrySideEffects {
 // Deps interface
 // ============================================================================
 
-export interface ToolRegistryDeps {
+interface ToolRegistryDeps {
   readonly logger: Logger;
   readonly configPath: string;
   readonly yolo: boolean;

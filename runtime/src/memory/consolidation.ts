@@ -24,7 +24,7 @@ import type { MemoryGraph } from "./graph.js";
 import type { Logger } from "../utils/logger.js";
 
 /** Configuration for the consolidation pipeline. */
-export interface ConsolidationConfig {
+interface ConsolidationConfig {
   readonly memoryBackend: MemoryBackend;
   readonly vectorStore: VectorMemoryBackend;
   readonly embeddingProvider: EmbeddingProvider;
@@ -41,7 +41,7 @@ export interface ConsolidationConfig {
 }
 
 /** Result of a consolidation run. */
-export interface ConsolidationResult {
+interface ConsolidationResult {
   readonly processed: number;
   readonly consolidated: number;
   readonly skippedDuplicates: number;
@@ -227,7 +227,7 @@ export async function runConsolidation(
 }
 
 /** Retention configuration. */
-export interface RetentionConfig {
+interface RetentionConfig {
   readonly memoryBackend: MemoryBackend;
   readonly logger?: Logger;
   /** Max age for daily logs in ms. Default: 90 days. */
@@ -294,57 +294,8 @@ export async function runRetention(
  * Per edge case X7: uses incremental_vacuum, not full VACUUM (blocks writes).
  * Should be called periodically (e.g., every 24h).
  */
-export async function runSqliteVacuum(
-  memoryBackend: MemoryBackend,
-  logger?: Logger,
-): Promise<void> {
-  try {
-    // Try to access the underlying SQLite connection for VACUUM.
-    // This only works if the backend is SQLite-based.
-    const backend = memoryBackend as unknown as {
-      ensureDb?: () => Promise<{ pragma: (sql: string) => unknown }>;
-    };
-    if (typeof backend.ensureDb === "function") {
-      const db = await backend.ensureDb();
-      // Per edge case X7: incremental_vacuum is non-blocking
-      // Full VACUUM locks the database during the entire operation
-      db.pragma("incremental_vacuum(1000)");
-      logger?.info?.("SQLite incremental vacuum completed (1000 pages)");
-    }
-  } catch (err) {
-    logger?.debug?.("SQLite vacuum failed or not applicable (non-blocking)", err);
-  }
-}
-
 /**
  * Phase 4.5: Feed consolidation results into self-learning system.
  * After consolidation produces semantic facts, store them as learning
  * evidence that the self-learning heartbeat can reference.
  */
-export async function feedConsolidationToLearning(
-  result: ConsolidationResult,
-  memoryBackend: MemoryBackend,
-  workspaceId?: string,
-  logger?: Logger,
-): Promise<void> {
-  if (result.consolidated === 0) return;
-
-  const learningKey = workspaceId
-    ? `${workspaceId}:consolidation:latest`
-    : "consolidation:latest";
-
-  try {
-    await memoryBackend.set(learningKey, {
-      timestamp: Date.now(),
-      consolidated: result.consolidated,
-      processed: result.processed,
-      skippedDuplicates: result.skippedDuplicates,
-      durationMs: result.durationMs,
-    });
-    logger?.debug?.(
-      `Consolidation results stored for self-learning (key: ${learningKey})`,
-    );
-  } catch (err) {
-    logger?.debug?.("Failed to store consolidation results for self-learning", err);
-  }
-}

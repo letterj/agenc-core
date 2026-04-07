@@ -70,7 +70,7 @@ interface VectorRecord {
   norm: number;
 }
 
-export interface SqliteVectorBackendConfig extends SqliteBackendConfig {
+interface SqliteVectorBackendConfig extends SqliteBackendConfig {
   dimension?: number;
 }
 

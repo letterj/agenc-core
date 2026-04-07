@@ -19,15 +19,10 @@
 
 import type { LLMToolCall } from "./types.js";
 
-const DEFAULT_MAX_CONCURRENCY = 10;
-
 /** Predicate the dispatcher uses to decide whether a call can run in parallel. */
 export type IsConcurrencySafeFn = (toolCall: LLMToolCall) => boolean;
 
-/** Per-call execution function provided by the runtime. */
-export type RunOneToolFn<R> = (toolCall: LLMToolCall) => Promise<R>;
-
-export interface ToolBatch {
+interface ToolBatch {
   readonly isConcurrencySafe: boolean;
   readonly toolCalls: readonly LLMToolCall[];
 }
@@ -63,64 +58,3 @@ export function partitionToolCalls(
   return batches;
 }
 
-export interface RunToolsInput<R> {
-  readonly toolCalls: readonly LLMToolCall[];
-  readonly isConcurrencySafe: IsConcurrencySafeFn;
-  readonly runOne: RunOneToolFn<R>;
-  readonly maxConcurrency?: number;
-  readonly signal?: AbortSignal;
-}
-
-export interface ToolRunRecord<R> {
-  readonly toolCall: LLMToolCall;
-  readonly result: R;
-}
-
-export interface RunToolsResult<R> {
-  readonly records: readonly ToolRunRecord<R>[];
-  readonly batches: readonly ToolBatch[];
-}
-
-/**
- * Top-level dispatcher. Sequentially walks the partitioned batches:
- *  - parallel batches use `Promise.all` (with a concurrency cap if the
- *    batch is large enough)
- *  - serial batches dispatch one call, await it, then move on
- *
- * The order of `records` matches the original order of `toolCalls` so
- * the caller can append results to the message history in lockstep with
- * the model's `tool_calls` array.
- */
-export async function runTools<R>(
-  input: RunToolsInput<R>,
-): Promise<RunToolsResult<R>> {
-  const batches = partitionToolCalls(input.toolCalls, input.isConcurrencySafe);
-  const records: ToolRunRecord<R>[] = [];
-
-  for (const batch of batches) {
-    if (input.signal?.aborted) break;
-    if (batch.isConcurrencySafe && batch.toolCalls.length > 1) {
-      const cap = input.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY;
-      const results: ToolRunRecord<R>[] = [];
-      for (let i = 0; i < batch.toolCalls.length; i += cap) {
-        const slice = batch.toolCalls.slice(i, i + cap);
-        const settled = await Promise.all(
-          slice.map(async (toolCall) => ({
-            toolCall,
-            result: await input.runOne(toolCall),
-          })),
-        );
-        results.push(...settled);
-      }
-      records.push(...results);
-    } else {
-      for (const toolCall of batch.toolCalls) {
-        if (input.signal?.aborted) break;
-        const result = await input.runOne(toolCall);
-        records.push({ toolCall, result });
-      }
-    }
-  }
-
-  return { records, batches };
-}

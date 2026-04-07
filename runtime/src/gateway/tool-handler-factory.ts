@@ -2335,7 +2335,7 @@ async function runApprovalGate(params: {
 // Config
 // ============================================================================
 
-export interface SessionToolHandlerConfig {
+interface SessionToolHandlerConfig {
   /** Session ID for hook context and approval scoping. */
   sessionId: string;
   /** Base tool handler (from ToolRegistry). */

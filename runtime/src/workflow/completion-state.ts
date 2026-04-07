@@ -15,7 +15,7 @@ export interface PlannerVerificationSnapshot {
   readonly overall: "pass" | "retry" | "fail" | "skipped";
 }
 
-export interface CompletionStateToolCall {
+interface CompletionStateToolCall {
   readonly name: string;
   readonly args: Record<string, unknown>;
   readonly result: string;

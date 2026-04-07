@@ -22,7 +22,7 @@ export type RuntimeRunClass =
   | "verifier"
   | "child";
 
-export interface RuntimeRunBudget {
+interface RuntimeRunBudget {
   readonly runClass: RuntimeRunClass;
   readonly tokenCeiling: number;
   readonly latencyCeilingMs: number;
@@ -32,7 +32,7 @@ export interface RuntimeRunBudget {
   readonly downgradeLatencyRatio: number;
 }
 
-export interface RuntimeRouteTelemetry {
+interface RuntimeRouteTelemetry {
   readonly runClass: RuntimeRunClass;
   readonly phase: string;
   readonly provider: string;
@@ -42,7 +42,7 @@ export interface RuntimeRouteTelemetry {
   readonly reason?: string;
 }
 
-export interface RuntimeRunBudgetLedger {
+interface RuntimeRunBudgetLedger {
   readonly runClass: RuntimeRunClass;
   tokens: number;
   latencyMs: number;
@@ -76,7 +76,7 @@ export interface RuntimeEconomicsState {
   budgetViolationCount: number;
 }
 
-export interface RuntimeBudgetPressure {
+interface RuntimeBudgetPressure {
   readonly tokenRatio: number;
   readonly latencyRatio: number;
   readonly spendRatio: number;
@@ -84,7 +84,7 @@ export interface RuntimeBudgetPressure {
   readonly shouldDowngrade: boolean;
 }
 
-export interface RuntimeRunBudgetSummary {
+interface RuntimeRunBudgetSummary {
   readonly budget: RuntimeRunBudget;
   readonly usage: {
     readonly tokens: number;

@@ -87,7 +87,7 @@ function deriveEventRecord(input: ObservabilityEventInput): ObservabilityEventRe
   };
 }
 
-export interface ObservabilityServiceConfig {
+interface ObservabilityServiceConfig {
   readonly logger?: Logger;
   readonly dbPath?: string;
   readonly daemonLogPath?: string;
@@ -222,6 +222,3 @@ export function recordObservabilityTraceEvent(
   defaultObservabilityService?.recordEvent(input);
 }
 
-export function getDefaultObservabilityService(): ObservabilityService | null {
-  return defaultObservabilityService;
-}

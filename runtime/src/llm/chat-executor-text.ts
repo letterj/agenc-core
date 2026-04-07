@@ -404,7 +404,7 @@ export function normalizeHistoryForStatefulReconciliation(
 // Tool call serialization
 // ============================================================================
 
-export function estimateToolCallsChars(
+function estimateToolCallsChars(
   toolCalls: readonly LLMToolCall[] | undefined,
 ): number {
   if (!toolCalls || toolCalls.length === 0) return 0;
@@ -419,7 +419,7 @@ export { sanitizeToolCallsForReplay, sanitizeToolCallArgumentsForReplay };
 // JSON sanitization for prompts
 // ============================================================================
 
-export function sanitizeJsonForPrompt(
+function sanitizeJsonForPrompt(
   value: unknown,
   captureDataUrl: (url: string) => void,
 ): unknown {

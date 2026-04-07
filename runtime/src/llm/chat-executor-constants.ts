@@ -106,7 +106,6 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 0;
  */
 export const MAX_ADAPTIVE_TOOL_ROUNDS = 0;
 /** Default minimum verifier confidence for accepting subagent outputs. */
-export const DEFAULT_SUBAGENT_VERIFIER_MIN_CONFIDENCE = 0.65;
 /** Default max rounds for verifier/critique loops (initial round included). */
 export const DEFAULT_SUBAGENT_VERIFIER_MAX_ROUNDS = 2;
 /** Break no-progress loops after repeated semantically equivalent rounds. */

@@ -100,7 +100,7 @@ export interface CompactionResult {
   readonly artifactCount?: number;
 }
 
-export type SessionCompactionPhase = "before" | "after" | "error";
+type SessionCompactionPhase = "before" | "after" | "error";
 
 export interface SessionCompactionHookPayload {
   readonly phase: SessionCompactionPhase;
@@ -112,7 +112,7 @@ export interface SessionCompactionHookPayload {
   readonly error?: string;
 }
 
-export type SessionCompactionHook = (
+type SessionCompactionHook = (
   payload: SessionCompactionHookPayload,
 ) => Promise<void> | void;
 

@@ -7,7 +7,7 @@ import {
   normalizeWorkspaceRoot,
 } from "../workflow/path-normalization.js";
 
-export type DelegatedScopePreflightIssueCode =
+type DelegatedScopePreflightIssueCode =
   | "missing_execution_context"
   | "missing_workspace_root"
   | "workspace_root_mismatch"
@@ -20,13 +20,13 @@ export type DelegatedScopePreflightIssueCode =
   | "workspace_root_missing_for_required_sources"
   | "required_source_missing";
 
-export interface DelegatedScopePreflightIssue {
+interface DelegatedScopePreflightIssue {
   readonly code: DelegatedScopePreflightIssueCode;
   readonly message: string;
   readonly path?: string;
 }
 
-export type DelegatedScopePreflightResult =
+type DelegatedScopePreflightResult =
   | { ok: true }
   | {
       ok: false;

@@ -7,14 +7,14 @@
  * @module
  */
 
-export interface DelegatedContractTextShape {
+interface DelegatedContractTextShape {
   readonly task: string;
   readonly objective?: string;
   readonly inputContract?: string;
   readonly acceptanceCriteria?: readonly string[];
 }
 
-export const DELEGATION_MEMORIZED_TOKEN_PLACEHOLDER = "<memorized_token>";
+const DELEGATION_MEMORIZED_TOKEN_PLACEHOLDER = "<memorized_token>";
 
 const DELEGATION_SECRET_PLACEHOLDER = "the memorized token";
 const DELEGATION_SECRET_ASSIGNMENT_RE =

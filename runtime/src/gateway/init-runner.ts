@@ -5,7 +5,7 @@ import { access, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
 import type { ChatExecutorResult } from "../llm/chat-executor.js";
 
-export const INIT_GUIDE_FILENAME = "AGENC.md";
+const INIT_GUIDE_FILENAME = "AGENC.md";
 const MAX_FILE_EXCERPT_CHARS = 4_000;
 const MAX_ROOT_ENTRIES = 60;
 const MAX_SUBDIRECTORY_SAMPLES = 5;
@@ -18,7 +18,7 @@ const REQUIRED_SECTION_HEADINGS = [
   "## Commit & Pull Request Guidelines",
 ] as const;
 
-export interface ModelBackedProjectGuideParams {
+interface ModelBackedProjectGuideParams {
   readonly workspaceRoot: string;
   readonly sessionId: string;
   readonly force?: boolean;
@@ -36,7 +36,7 @@ export interface ModelBackedProjectGuideParams {
   }) => void;
 }
 
-export interface ModelBackedProjectGuideResult {
+interface ModelBackedProjectGuideResult {
   readonly status: "created" | "updated" | "skipped";
   readonly filePath: string;
   readonly content: string;

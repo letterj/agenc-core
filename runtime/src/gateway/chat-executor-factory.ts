@@ -55,7 +55,7 @@ export function buildPermissionRulesFromAllowDeny(input: {
 // Factory input
 // ---------------------------------------------------------------------------
 
-export interface CreateChatExecutorParams {
+interface CreateChatExecutorParams {
   /** LLM providers (if empty, returns null). */
   providers: LLMProvider[];
   /** Base tool handler from ToolRegistry. */

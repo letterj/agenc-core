@@ -253,7 +253,7 @@ function parseToolError(result: { content: string; isError?: boolean }): string 
 // Status handlers
 // ============================================================================
 
-export function handleStatusGet(
+function handleStatusGet(
   deps: WebChatDeps,
   _payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -359,7 +359,7 @@ function toggleTool(
   sendToolList(deps, id, send, responseType);
 }
 
-export function handleSkillsList(
+function handleSkillsList(
   deps: WebChatDeps,
   _payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -368,7 +368,7 @@ export function handleSkillsList(
   sendToolList(deps, id, send, 'skills.list');
 }
 
-export function handleSkillsToggle(
+function handleSkillsToggle(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -377,7 +377,7 @@ export function handleSkillsToggle(
   toggleTool(deps, payload, id, send, 'skills.list');
 }
 
-export function handleToolsList(
+function handleToolsList(
   deps: WebChatDeps,
   _payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -386,7 +386,7 @@ export function handleToolsList(
   sendToolList(deps, id, send, 'tools.list');
 }
 
-export function handleHooksList(
+function handleHooksList(
   deps: WebChatDeps,
   _payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -395,7 +395,7 @@ export function handleHooksList(
   sendHookList(deps, id, send);
 }
 
-export function handleToolsToggle(
+function handleToolsToggle(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -408,7 +408,7 @@ export function handleToolsToggle(
 // Marketplace handlers
 // ============================================================================
 
-export async function handleMarketSkillsList(
+async function handleMarketSkillsList(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -450,7 +450,7 @@ export async function handleMarketSkillsList(
   });
 }
 
-export async function handleMarketSkillsDetail(
+async function handleMarketSkillsDetail(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -511,7 +511,7 @@ export async function handleMarketSkillsDetail(
   });
 }
 
-export async function handleMarketSkillsPurchase(
+async function handleMarketSkillsPurchase(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -574,7 +574,7 @@ export async function handleMarketSkillsPurchase(
   }
 }
 
-export async function handleMarketSkillsRate(
+async function handleMarketSkillsRate(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -614,7 +614,7 @@ export async function handleMarketSkillsRate(
   }
 }
 
-export async function handleMarketGovernanceList(
+async function handleMarketGovernanceList(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -643,7 +643,7 @@ export async function handleMarketGovernanceList(
   });
 }
 
-export async function handleMarketGovernanceDetail(
+async function handleMarketGovernanceDetail(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -682,7 +682,7 @@ export async function handleMarketGovernanceDetail(
   });
 }
 
-export async function handleMarketGovernanceVote(
+async function handleMarketGovernanceVote(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -718,7 +718,7 @@ export async function handleMarketGovernanceVote(
   }
 }
 
-export async function handleMarketDisputesList(
+async function handleMarketDisputesList(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -747,7 +747,7 @@ export async function handleMarketDisputesList(
   });
 }
 
-export async function handleMarketDisputesDetail(
+async function handleMarketDisputesDetail(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -786,7 +786,7 @@ export async function handleMarketDisputesDetail(
   });
 }
 
-export async function handleMarketReputationSummary(
+async function handleMarketReputationSummary(
   deps: WebChatDeps,
   _payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -836,7 +836,7 @@ export async function handleMarketReputationSummary(
   });
 }
 
-export async function handleMarketReputationStake(
+async function handleMarketReputationStake(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -867,7 +867,7 @@ export async function handleMarketReputationStake(
   }
 }
 
-export async function handleMarketReputationDelegate(
+async function handleMarketReputationDelegate(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -948,7 +948,7 @@ export async function handleTasksList(
   await safeAsync(send, id, 'error', 'Failed to list tasks', () => sendTaskList(deps, id, send));
 }
 
-export async function handleTasksCreate(
+async function handleTasksCreate(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -998,7 +998,7 @@ export async function handleTasksCreate(
   }
 }
 
-export async function handleTasksCancel(
+async function handleTasksCancel(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1038,7 +1038,7 @@ export async function handleTasksCancel(
   }
 }
 
-export async function handleTasksClaim(
+async function handleTasksClaim(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1070,7 +1070,7 @@ export async function handleTasksClaim(
   }
 }
 
-export async function handleTasksComplete(
+async function handleTasksComplete(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1110,7 +1110,7 @@ export async function handleTasksComplete(
   }
 }
 
-export async function handleTasksDispute(
+async function handleTasksDispute(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1248,7 +1248,7 @@ function summarizeMaintenanceSync(
   };
 }
 
-export async function handleMemorySearch(
+async function handleMemorySearch(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1298,7 +1298,7 @@ export async function handleMemorySearch(
   }
 }
 
-export async function handleMemorySessions(
+async function handleMemorySessions(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1318,7 +1318,7 @@ export async function handleMemorySessions(
   }
 }
 
-export async function handleMaintenanceStatus(
+async function handleMaintenanceStatus(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1370,7 +1370,7 @@ export async function handleMaintenanceStatus(
 // Approval handlers
 // ============================================================================
 
-export async function handleApprovalRespond(
+async function handleApprovalRespond(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1417,7 +1417,7 @@ export async function handleApprovalRespond(
   });
 }
 
-export async function handlePolicySimulate(
+async function handlePolicySimulate(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1568,7 +1568,7 @@ function parseRawAgentAccount(data: Buffer): {
   };
 }
 
-export async function handleAgentsList(
+async function handleAgentsList(
   deps: WebChatDeps,
   _payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1628,7 +1628,7 @@ export async function handleAgentsList(
 // Desktop sandbox handlers
 // ============================================================================
 
-export async function handleDesktopList(
+async function handleDesktopList(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1665,7 +1665,7 @@ export async function handleDesktopList(
   });
 }
 
-export async function handleDesktopCreate(
+async function handleDesktopCreate(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1723,7 +1723,7 @@ export async function handleDesktopCreate(
   });
 }
 
-export async function handleDesktopAttach(
+async function handleDesktopAttach(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1772,7 +1772,7 @@ export async function handleDesktopAttach(
   });
 }
 
-export async function handleDesktopDestroy(
+async function handleDesktopDestroy(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1828,7 +1828,7 @@ function buildBackgroundRunErrorPayload(
     : { code, sessionId };
 }
 
-export async function handleRunsList(
+async function handleRunsList(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1864,7 +1864,7 @@ export async function handleRunsList(
   });
 }
 
-export async function handleRunInspect(
+async function handleRunInspect(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1911,7 +1911,7 @@ export async function handleRunInspect(
   });
 }
 
-export async function handleRunControl(
+async function handleRunControl(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -1973,7 +1973,7 @@ export async function handleRunControl(
   });
 }
 
-export async function handleObservabilitySummary(
+async function handleObservabilitySummary(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -2000,7 +2000,7 @@ export async function handleObservabilitySummary(
   });
 }
 
-export async function handleObservabilityTraces(
+async function handleObservabilityTraces(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -2039,7 +2039,7 @@ export async function handleObservabilityTraces(
   });
 }
 
-export async function handleObservabilityTrace(
+async function handleObservabilityTrace(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -2065,7 +2065,7 @@ export async function handleObservabilityTrace(
   });
 }
 
-export async function handleObservabilityArtifact(
+async function handleObservabilityArtifact(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -2102,7 +2102,7 @@ export async function handleObservabilityArtifact(
   });
 }
 
-export async function handleObservabilityLogs(
+async function handleObservabilityLogs(
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,
@@ -2162,7 +2162,7 @@ async function safeAsync(
 // Handler map
 // ============================================================================
 
-export type HandlerFn = (
+type HandlerFn = (
   deps: WebChatDeps,
   payload: Record<string, unknown> | undefined,
   id: string | undefined,

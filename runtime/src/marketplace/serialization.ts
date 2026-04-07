@@ -31,7 +31,7 @@ type MarketProgram =
   | ReturnType<typeof createProgram>
   | ReturnType<typeof createReadOnlyProgram>;
 
-export interface SerializedMarketplaceTask {
+interface SerializedMarketplaceTask {
   taskPda: string;
   taskId: string;
   status: string;
@@ -53,7 +53,7 @@ export interface SerializedMarketplaceTask {
   resultPreview?: string;
 }
 
-export interface SerializedMarketplaceSkill {
+interface SerializedMarketplaceSkill {
   skillPda: string;
   skillId: string;
   author: string;
@@ -72,7 +72,7 @@ export interface SerializedMarketplaceSkill {
   contentHash: string;
 }
 
-export interface SerializedMarketplaceProposalSummary {
+interface SerializedMarketplaceProposalSummary {
   proposalPda: string;
   proposer: string;
   proposalType: string;
@@ -89,7 +89,7 @@ export interface SerializedMarketplaceProposalSummary {
   executionAfter: number;
 }
 
-export interface SerializedMarketplaceProposalDetail
+interface SerializedMarketplaceProposalDetail
   extends SerializedMarketplaceProposalSummary {
   executedAt: number;
   votes: Array<{
@@ -100,7 +100,7 @@ export interface SerializedMarketplaceProposalDetail
   }>;
 }
 
-export interface SerializedMarketplaceDisputeSummary {
+interface SerializedMarketplaceDisputeSummary {
   disputePda: string;
   taskPda: string;
   initiator: string;
@@ -122,13 +122,13 @@ export interface SerializedMarketplaceDisputeSummary {
   rewardMint: string | null;
 }
 
-export interface SerializedMarketplaceDisputeDetail
+interface SerializedMarketplaceDisputeDetail
   extends SerializedMarketplaceDisputeSummary {
   disputeId: string;
   initiatorAuthority: string;
 }
 
-export interface SerializedMarketplaceDelegation {
+interface SerializedMarketplaceDelegation {
   amount: number;
   expiresAt: number;
   createdAt: number;
@@ -136,7 +136,7 @@ export interface SerializedMarketplaceDelegation {
   delegatee?: string;
 }
 
-export interface SerializedMarketplaceReputationSummary {
+interface SerializedMarketplaceReputationSummary {
   registered: boolean;
   authority?: string;
   agentPda?: string;
@@ -418,7 +418,7 @@ export function serializeMarketplaceDisputeDetail(
   };
 }
 
-export function buildMarketplaceReputationSummary(
+function buildMarketplaceReputationSummary(
   agentPda: PublicKey,
   agentId: Uint8Array,
   agent: ReturnType<typeof parseAgentState>,

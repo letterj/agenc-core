@@ -7,7 +7,7 @@ export interface WorkflowRequestCompletionContract {
   readonly requiredMilestones: readonly WorkflowRequestMilestone[];
 }
 
-export interface WorkflowRequestCompletionStatus {
+interface WorkflowRequestCompletionStatus {
   readonly requiredMilestones: readonly WorkflowRequestMilestone[];
   readonly satisfiedMilestoneIds: readonly string[];
   readonly remainingMilestones: readonly WorkflowRequestMilestone[];

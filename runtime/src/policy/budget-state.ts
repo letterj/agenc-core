@@ -12,17 +12,17 @@
  * @module
  */
 
-export interface SlidingWindowSample {
+interface SlidingWindowSample {
   readonly timestamp: number;
   readonly amount: number;
 }
 
-export interface SlidingWindowState {
+interface SlidingWindowState {
   readonly samples: readonly SlidingWindowSample[];
   readonly windowMs: number;
 }
 
-export function createSlidingWindow(windowMs: number): SlidingWindowState {
+function createSlidingWindow(windowMs: number): SlidingWindowState {
   return { samples: [], windowMs };
 }
 
@@ -39,7 +39,7 @@ export function recordSample(
   };
 }
 
-export function windowTotal(state: SlidingWindowState, nowMs: number): number {
+function windowTotal(state: SlidingWindowState, nowMs: number): number {
   const cutoff = nowMs - state.windowMs;
   let total = 0;
   for (const sample of state.samples) {
@@ -48,14 +48,14 @@ export function windowTotal(state: SlidingWindowState, nowMs: number): number {
   return total;
 }
 
-export interface BudgetLedger {
+interface BudgetLedger {
   readonly toolCallRate: SlidingWindowState;
   readonly tokenSpend: SlidingWindowState;
   readonly lamportSpend: SlidingWindowState;
   readonly runtimeMs: SlidingWindowState;
 }
 
-export function createBudgetLedger(config: {
+function createBudgetLedger(config: {
   rateWindowMs?: number;
   tokenWindowMs?: number;
   lamportWindowMs?: number;

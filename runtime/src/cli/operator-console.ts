@@ -27,7 +27,7 @@ export interface OperatorConsoleOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-export interface GatewayPidInfo {
+interface GatewayPidInfo {
   readonly pid: number;
   readonly port: number;
   readonly configPath: string;
@@ -75,7 +75,7 @@ export interface OperatorConsoleDeps {
   readonly createLogger: typeof createLogger;
 }
 
-export type DaemonEnsureDeps = Pick<
+type DaemonEnsureDeps = Pick<
   OperatorConsoleDeps,
   | "loadGatewayConfig"
   | "readPidFile"
