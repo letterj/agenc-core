@@ -427,6 +427,13 @@ export interface ChatExecutorConfig {
   readonly memoryRetriever?: MemoryRetriever;
   readonly allowedTools?: readonly string[];
   /**
+   * Cut 5.2: optional hook registry. When provided, the chat-executor
+   * fires PreToolUse / PostToolUse / PostToolUseFailure hooks at the
+   * tool dispatch boundary. With no registry the hook code paths
+   * short-circuit and behavior is unchanged.
+   */
+  readonly hookRegistry?: import("./hooks/index.js").HookRegistry;
+  /**
    * Maximum token budget per session. When cumulative usage meets or exceeds
    * this value, the executor attempts to compact conversation history by
    * summarizing older messages. If compaction fails, falls back to
