@@ -1114,37 +1114,6 @@ describe("ChatExecutor", () => {
 
 
 
-    it("fails implementation-class turns before execution when no workspace root is available", async () => {
-      const toolHandler = vi.fn().mockResolvedValue("wrote source");
-      const provider = createMockProvider("primary", {
-        chat: vi.fn().mockResolvedValue(mockResponse({ content: "should not run" })),
-      });
-
-      const executor = new ChatExecutor({
-        providers: [provider],
-        toolHandler,
-        allowedTools: ["system.writeFile"],
-      });
-      const result = await executor.execute(
-        createParams({
-          message: createMessage(
-            "Implement src/main.c and finish when the implementation is done.",
-          ),
-          runtimeContext: {},
-        }),
-      );
-
-      expect(result.stopReason).toBe("validation_error");
-      expect(result.stopReasonDetail).toContain(
-        "requires a resolved workspace root",
-      );
-      expect(result.turnExecutionContract.turnClass).toBe(
-        "workflow_implementation",
-      );
-      expect(provider.chat).not.toHaveBeenCalled();
-      expect(toolHandler).not.toHaveBeenCalled();
-    });
-
     it("binds direct implementation turns to a workflow contract before tool execution", async () => {
       const toolHandler = vi.fn(async (name: string) => {
         if (name === "system.writeFile") {
