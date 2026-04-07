@@ -2,6 +2,7 @@ import { createHash, verify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import {
   copyFile,
+  lstat,
   mkdir,
   mkdtemp,
   open,
@@ -34,6 +35,27 @@ export class RuntimeInstallError extends Error {
     this.name = "RuntimeInstallError";
     this.code = code;
   }
+}
+
+/**
+ * Remove a filesystem path regardless of whether it's a symlink, a
+ * regular file, or a directory. `fs.rm` with `recursive: true`
+ * follows symlinks to directories (removing the TARGET, not the
+ * link), so we `lstat` first and use `unlink` for the symlink case.
+ */
+async function removePathSafe(targetPath) {
+  let info;
+  try {
+    info = await lstat(targetPath);
+  } catch (error) {
+    if ((error && error.code) === "ENOENT") return;
+    throw error;
+  }
+  if (info.isSymbolicLink() || info.isFile()) {
+    await unlink(targetPath);
+    return;
+  }
+  await rm(targetPath, { recursive: true, force: true });
 }
 
 function sleep(ms) {
@@ -954,7 +976,7 @@ async function ensureFromSourceCurrentPointer({
   const statePath = path.join(runtimeHome, "install-state.json");
 
   await mkdir(path.dirname(releaseDir), { recursive: true });
-  await rm(releaseDir, { recursive: true, force: true });
+  await removePathSafe(releaseDir);
   await mkdir(path.dirname(releaseDir), { recursive: true });
 
   // The release dir is a directory containing a single symlink (`dist`)
@@ -963,7 +985,13 @@ async function ensureFromSourceCurrentPointer({
   // a symlink for the entire `dist` tree.
   await symlink(distRoot, releaseDir, "dir");
 
-  await rm(currentDir, { recursive: true, force: true });
+  // Use removePathSafe (lstat-based) so we delete the SYMLINK at
+  // `currentDir`, not the target it points at. The previous `rm
+  // recursive` call followed the symlink and either failed silently
+  // or removed the target dir contents while leaving the link intact,
+  // causing the from-source flag to silently keep pointing at a
+  // stale release.
+  await removePathSafe(currentDir);
   await symlink(releaseDir, currentDir, "dir");
 
   await mkdir(path.dirname(statePath), { recursive: true });
