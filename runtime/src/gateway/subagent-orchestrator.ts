@@ -127,10 +127,6 @@ import {
   deriveDelegatedExecutionEnvelopeFromParent,
   type DelegatedExecutionEnvelopeDerivationResult,
 } from "../utils/delegation-execution-context.js";
-import {
-  allowsUserMandatedSubagentCardinalityOverride,
-  extractRequiredSubagentOrchestrationRequirements,
-} from "../workflow/subagent-orchestration-requirements.js";
 import { CanonicalExecutionKernel } from "../workflow/execution-kernel.js";
 import {
   assessPlannerDependencySatisfaction,
@@ -609,16 +605,9 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
         step.stepType === "subagent_task",
     );
     if (subagentSteps.length === 0) return null;
-    const requiredOrchestration =
-      extractRequiredSubagentOrchestrationRequirements(
-        pipeline.plannerContext?.parentRequest ?? "",
-      );
-    const allowUserMandatedCardinality =
-      allowsUserMandatedSubagentCardinalityOverride(requiredOrchestration);
     if (
       hasRuntimeLimit(this.maxFanoutPerTurn) &&
-      subagentSteps.length > this.maxFanoutPerTurn &&
-      !allowUserMandatedCardinality
+      subagentSteps.length > this.maxFanoutPerTurn
     ) {
       return (
         `Planner emitted ${subagentSteps.length} subagent tasks but maxFanoutPerTurn ` +
