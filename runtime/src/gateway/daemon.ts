@@ -4737,7 +4737,7 @@ export class DaemonManager {
     _sessionId: string,
     _summary: ChatToolRoutingSummary | undefined,
   ): void {
-    // Cut 4.2: routing cache deleted; nothing to record.
+    // Tool routing decisions are static now; nothing to record per-turn.
   }
 
   private resolveLifecycleParentSessionId(

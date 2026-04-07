@@ -241,8 +241,6 @@ import {
   extractMessageText,
   truncateText,
   sanitizeFinalContent,
-  // Cut 2: reconcile* helpers no longer imported — finalContent
-  // post-processing chain removed.
   normalizeHistory,
   normalizeHistoryForStatefulReconciliation,
   toStatefulReconciliationMessage,
@@ -498,9 +496,9 @@ export class ChatExecutor {
 
     this.checkRequestTimeout(ctx, "finalization");
 
-    // Cut 2: derive the final completion state from stop reason + tool
-    // calls. The planner verifier/contract path is gone; the resolver
-    // collapses to defaults when given undefined contracts.
+    // Derive the final completion state from stop reason + tool calls.
+    // The runtime no longer carries verification or completion contracts
+    // through the chat-executor; both are passed as undefined.
     ctx.completionState = resolveWorkflowCompletionState({
       stopReason: ctx.stopReason,
       toolCalls: ctx.allToolCalls,
@@ -514,9 +512,6 @@ export class ChatExecutor {
     const plannerSummary: ChatPlannerSummary = ctx.plannerSummaryState;
 
     ctx.finalContent = sanitizeFinalContent(ctx.finalContent);
-    // Cut 4: resolveWorkflowVerificationContext always returned `{}`
-    // after the planner subsystem was deleted; the workflow contract
-    // fields here are now plumbed as undefined.
     const completionProgress = deriveWorkflowProgressSnapshot({
       stopReason: ctx.stopReason,
       completionState: ctx.completionState,
@@ -611,9 +606,6 @@ export class ChatExecutor {
       ctx.stopReasonDetail = detail;
     }
   }
-
-  // Cut 4: resolveWorkflowVerificationContext deleted (returned `{}`
-  // unconditionally after the planner-era contract flow was removed).
 
   private timeoutDetail(
     stage: string,

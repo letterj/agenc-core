@@ -52,10 +52,6 @@ import {
   type EconomicsScenarioRecord,
 } from "./economics-scorecard.js";
 import { buildRuntimeEconomicsPolicy } from "../llm/run-budget.js";
-// Cut 1.2: assessDelegationDecision deleted; this eval scenario was
-// exercising the deleted utility-scoring path. The negative-economics
-// branch is now handled by gateway/delegation-admission.ts at the
-// admission layer rather than a utility-score post-check.
 
 const DEFAULT_CONTEXT_BENCHMARK_TURNS = 24;
 const DEFAULT_DESKTOP_RUNS = 1;
@@ -302,11 +298,6 @@ async function runEconomicsBenchmark(): Promise<ReturnType<typeof computeEconomi
       latencyMs: 1,
     });
   }
-
-  // Cut 1.2: negative_economics_delegation_denial scenario deleted
-  // along with assessDelegationDecision. The same hard-rejection path
-  // is now exercised by the delegation-admission integration test
-  // (gateway/delegation-admission.test.ts).
 
   {
     const primary = createEconomicsProvider({
