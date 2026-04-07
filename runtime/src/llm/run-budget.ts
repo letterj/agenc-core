@@ -196,14 +196,6 @@ export function createRuntimeEconomicsState(): RuntimeEconomicsState {
   };
 }
 
-export function estimateSpendUnitsForUsage(_params: {
-  readonly usage: LLMUsage;
-  readonly provider?: string;
-  readonly model?: string;
-}): number {
-  return 0;
-}
-
 export function getRuntimeBudgetPressure(
   _policy: RuntimeEconomicsPolicy,
   _state: RuntimeEconomicsState,
@@ -232,32 +224,6 @@ export function recordRuntimeModelCall(_params: {
   readonly reason?: string;
 }): void {
   // no-op
-}
-
-export function recordRuntimeDenial(
-  _state: RuntimeEconomicsState,
-  _runClass: RuntimeRunClass,
-): void {
-  // no-op
-}
-
-export function buildDelegationBudgetSnapshot(
-  policy: RuntimeEconomicsPolicy,
-  _state: RuntimeEconomicsState,
-): DelegationBudgetSnapshot {
-  return {
-    mode: policy.mode,
-    childBudget: policy.budgets.child,
-    remainingTokens: Number.POSITIVE_INFINITY,
-    remainingLatencyMs: Number.POSITIVE_INFINITY,
-    remainingSpendUnits: Number.POSITIVE_INFINITY,
-    parentTokenRatio: 0,
-    parentLatencyRatio: 0,
-    parentSpendRatio: 0,
-    childFanoutSoftCap: policy.childFanoutSoftCap,
-    negativeDelegationMarginUnits: policy.negativeDelegationMarginUnits,
-    negativeDelegationMarginTokens: policy.negativeDelegationMarginTokens,
-  };
 }
 
 export function buildRuntimeEconomicsSummary(
