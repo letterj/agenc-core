@@ -13,8 +13,6 @@ import type {
 } from "./types.js";
 import type { PromptBudgetSection } from "./prompt-budget.js";
 import type { LLMRetryPolicyMatrix, LLMPipelineStopReason } from "./policy.js";
-import type { DelegationOutputValidationCode } from "../utils/delegation-validation.js";
-import type { ToolContractGuidance } from "./chat-executor-contract-guidance.js";
 import { type ArtifactAccessMode } from "../workflow/artifact-contract.js";
 import type { ExecutionEnvelope } from "../workflow/execution-envelope.js";
 import {
@@ -105,30 +103,6 @@ export interface ToolLoopCallbacks {
     recoveryHints: readonly RecoveryHint[],
   ): void;
   maybePushRuntimeInstruction(ctx: ExecutionContext, content: string): void;
-  resolveActiveToolContractGuidance(
-    ctx: ExecutionContext,
-    input?: {
-      readonly phase?: "initial" | "tool_followup" | "correction";
-      readonly allowedToolNames?: readonly string[];
-      readonly validationCode?: DelegationOutputValidationCode;
-    },
-  ): ToolContractGuidance | undefined;
-  enforceRequiredToolEvidenceBeforeCompletion(
-    ctx: ExecutionContext,
-    phase: "initial" | "tool_followup",
-  ): Promise<"continue" | "failed" | "not_required">;
-  enforcePlanOnlyExecutionBeforeCompletion(
-    ctx: ExecutionContext,
-    phase: "initial" | "tool_followup",
-  ): Promise<"continue" | "failed" | "not_required">;
-  enforceWorkflowContinuationBeforeCompletion(
-    ctx: ExecutionContext,
-    phase: "initial" | "tool_followup",
-  ): Promise<"continue" | "failed" | "not_required">;
-  finalizeDelegatedTurnAfterToolBudgetExhaustion(
-    ctx: ExecutionContext,
-    effectiveMaxToolRounds: number,
-  ): Promise<boolean>;
   callModelForPhase(
     ctx: ExecutionContext,
     input: {
@@ -713,52 +687,6 @@ export async function executeToolCallLoop(
   config: ToolLoopConfig,
   callbacks: ToolLoopCallbacks,
 ): Promise<void> {
-  const suppressToolsForDialogueTurn =
-    !ctx.plannerDecision.shouldPlan &&
-    (ctx.plannerDecision.reason === "concordia_simulation_turn" ||
-      ctx.plannerDecision.reason === "concordia_generate_agents_turn" ||
-      ctx.plannerDecision.reason === "exact_response_turn" ||
-      ctx.plannerDecision.reason === "dialogue_memory_turn" ||
-      ctx.plannerDecision.reason === "dialogue_recall_turn");
-  const initialContractGuidance = callbacks.resolveActiveToolContractGuidance(ctx, {
-    phase: "initial",
-  });
-  const dialogueToolSuppressed =
-    suppressToolsForDialogueTurn &&
-    initialContractGuidance?.routedToolNames === undefined &&
-    ctx.initialRoutedToolNames.length > 0;
-  if (initialContractGuidance) {
-    callbacks.emitExecutionTrace(ctx, {
-      type: "contract_guidance_resolved",
-      phase: "initial",
-      callIndex: ctx.callIndex + 1,
-      payload: {
-        source: initialContractGuidance.source,
-        routedToolNames: initialContractGuidance.routedToolNames ?? [],
-        toolChoice:
-          typeof initialContractGuidance.toolChoice === "string"
-            ? initialContractGuidance.toolChoice
-            : initialContractGuidance.toolChoice.name,
-        hasRuntimeInstruction: Boolean(initialContractGuidance.runtimeInstruction),
-      },
-    });
-  }
-  if (initialContractGuidance?.runtimeInstruction) {
-    callbacks.maybePushRuntimeInstruction(
-      ctx,
-      initialContractGuidance.runtimeInstruction,
-    );
-  }
-  const initialToolChoice =
-    initialContractGuidance?.toolChoice ??
-    (ctx.requiredToolEvidence
-      ? "required"
-      : suppressToolsForDialogueTurn
-        ? "none"
-        : undefined);
-  const initialRoutedToolNames =
-    initialContractGuidance?.routedToolNames ??
-    (suppressToolsForDialogueTurn ? [] : undefined);
   ctx.response = await callbacks.callModelForPhase(ctx, {
     phase: "initial",
     callMessages: ctx.messages,
@@ -770,57 +698,10 @@ export async function executeToolCallLoop(
     preparationDiagnostics: {
       plannerReason: ctx.plannerDecision.reason,
       plannerShouldPlan: ctx.plannerDecision.shouldPlan,
-      dialogueToolSuppressed,
-      ...(dialogueToolSuppressed
-        ? { preSuppressionRoutedToolNames: ctx.initialRoutedToolNames }
-        : {}),
     },
-    ...((initialToolChoice !== undefined || initialRoutedToolNames !== undefined)
-      ? {
-        ...(initialToolChoice !== undefined
-          ? { toolChoice: initialToolChoice }
-          : {}),
-        ...(initialRoutedToolNames !== undefined
-          ? { routedToolNames: initialRoutedToolNames }
-          : {}),
-        ...(initialContractGuidance?.persistRoutedToolNames === false
-          ? { persistRoutedToolNames: false }
-          : {}),
-      }
-      : {}),
     budgetReason:
       "Initial completion blocked by max model recalls per request budget",
   });
-  if (!suppressToolsForDialogueTurn) {
-  const initialPlanOnlyAction =
-    await callbacks.enforcePlanOnlyExecutionBeforeCompletion(ctx, "initial");
-  if (initialPlanOnlyAction === "failed" && !ctx.finalContent) {
-    ctx.finalContent = ctx.response?.content ?? ctx.finalContent;
-  }
-  if (initialPlanOnlyAction === "failed") {
-    return;
-  }
-
-  const initialEvidenceAction =
-    await callbacks.enforceRequiredToolEvidenceBeforeCompletion(ctx, "initial");
-  if (initialEvidenceAction === "failed" && !ctx.finalContent) {
-    ctx.finalContent = ctx.response?.content ?? ctx.finalContent;
-  }
-  if (initialEvidenceAction === "failed") {
-    return;
-  }
-  const initialContinuationAction =
-    await callbacks.enforceWorkflowContinuationBeforeCompletion(
-      ctx,
-      "initial",
-    );
-  if (initialContinuationAction === "failed" && !ctx.finalContent) {
-    ctx.finalContent = ctx.response?.content ?? ctx.finalContent;
-  }
-  if (initialContinuationAction === "failed") {
-    return;
-  }
-  }
 
   let rounds = 0;
   let effectiveMaxToolRounds = ctx.effectiveMaxToolRounds;
@@ -990,37 +871,6 @@ export async function executeToolCallLoop(
       }
     }
 
-    const followupContractGuidance = callbacks.resolveActiveToolContractGuidance(
-      ctx,
-      {
-        phase: "tool_followup",
-      },
-    );
-    if (followupContractGuidance) {
-      callbacks.emitExecutionTrace(ctx, {
-        type: "contract_guidance_resolved",
-        phase: "tool_followup",
-        callIndex: ctx.callIndex + 1,
-        payload: {
-          source: followupContractGuidance.source,
-          routedToolNames: followupContractGuidance.routedToolNames ?? [],
-          toolChoice:
-            typeof followupContractGuidance.toolChoice === "string"
-              ? followupContractGuidance.toolChoice
-              : followupContractGuidance.toolChoice.name,
-          hasRuntimeInstruction: Boolean(
-            followupContractGuidance.runtimeInstruction,
-          ),
-        },
-      });
-    }
-    if (followupContractGuidance?.runtimeInstruction) {
-      callbacks.maybePushRuntimeInstruction(
-        ctx,
-        followupContractGuidance.runtimeInstruction,
-      );
-    }
-
     // Re-call LLM.
     const nextResponse = await callbacks.callModelForPhase(ctx, {
       phase: "tool_followup",
@@ -1030,67 +880,11 @@ export async function executeToolCallLoop(
       statefulSessionId: ctx.sessionId,
       statefulResumeAnchor: ctx.stateful?.resumeAnchor,
       statefulHistoryCompacted: ctx.stateful?.historyCompacted,
-      ...(followupContractGuidance
-        ? {
-          toolChoice: followupContractGuidance.toolChoice,
-          ...(followupContractGuidance.routedToolNames
-            ? {
-              routedToolNames: followupContractGuidance.routedToolNames,
-              ...(followupContractGuidance.persistRoutedToolNames === false
-                ? { persistRoutedToolNames: false }
-                : {}),
-            }
-            : {}),
-        }
-        : {}),
       budgetReason:
         "Max model recalls exceeded while following up after tool calls",
     });
     if (!nextResponse) break;
     ctx.response = nextResponse;
-    if (!suppressToolsForDialogueTurn) {
-    const planOnlyAction =
-      await callbacks.enforcePlanOnlyExecutionBeforeCompletion(
-        ctx,
-        "tool_followup",
-      );
-    if (planOnlyAction === "failed") {
-      if (!ctx.finalContent) {
-        ctx.finalContent = ctx.response?.content ?? "Request could not be completed due to validation requirements.";
-      }
-      break;
-    }
-    if (planOnlyAction === "continue") {
-      // Gate pushed a correction; skip remaining gates this round to avoid
-      // conflicting instructions reaching the model simultaneously.
-      continue;
-    }
-    const evidenceAction =
-      await callbacks.enforceRequiredToolEvidenceBeforeCompletion(
-        ctx,
-        "tool_followup",
-      );
-    if (evidenceAction === "failed") {
-      if (!ctx.finalContent) {
-        ctx.finalContent = ctx.response?.content ?? "Request could not be completed due to validation requirements.";
-      }
-      break;
-    }
-    if (evidenceAction === "continue") {
-      continue;
-    }
-    const continuationAction =
-      await callbacks.enforceWorkflowContinuationBeforeCompletion(
-        ctx,
-        "tool_followup",
-      );
-    if (continuationAction === "failed") {
-      if (!ctx.finalContent) {
-        ctx.finalContent = ctx.response?.content ?? "Request could not be completed due to validation requirements.";
-      }
-      break;
-    }
-    }
 
     const roundProgress = summarizeToolRoundProgress(
       roundCalls,
@@ -1188,17 +982,11 @@ export async function executeToolCallLoop(
     ctx.response.finishReason === "tool_calls" &&
     isRuntimeLimitReached(rounds, effectiveMaxToolRounds)
   ) {
-    const finalized = await callbacks.finalizeDelegatedTurnAfterToolBudgetExhaustion(
+    callbacks.setStopReason(
       ctx,
-      effectiveMaxToolRounds,
+      "tool_calls",
+      `Reached max tool rounds (${effectiveMaxToolRounds})`,
     );
-    if (!finalized) {
-      callbacks.setStopReason(
-        ctx,
-        "tool_calls",
-        `Reached max tool rounds (${effectiveMaxToolRounds})`,
-      );
-    }
   }
 
   ctx.finalContent = ctx.response?.content ?? "";
