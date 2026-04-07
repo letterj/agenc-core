@@ -93,7 +93,10 @@ import { type Tool } from "../tools/types.js";
 import type { GatewayMessage } from "./message.js";
 import { createGatewayMessage } from "./message.js";
 import { ChatExecutor } from "../llm/chat-executor.js";
-import { createChatExecutor } from "./chat-executor-factory.js";
+import {
+  createChatExecutor,
+  buildPermissionRulesFromAllowDeny,
+} from "./chat-executor-factory.js";
 import {
   normalizeToolCallArguments,
 } from "../llm/chat-executor-tool-utils.js";
@@ -1971,6 +1974,15 @@ export class DaemonManager {
       resolveHostToolingProfile: () => this._hostToolingProfile,
       resolveHostWorkspaceRoot: () => this._hostWorkspacePath,
       pipelineExecutor: plannerPipelineExecutor,
+      // Cut 7: wire ToolPermissionEvaluator through the canUseTool
+      // seam. The evaluator runs every tool call through the gateway
+      // policy.toolAllowList / policy.toolDenyList rules before the
+      // existing approval flow. With no policy configured the rules
+      // array is empty and the seam is skipped.
+      permissionRules: buildPermissionRulesFromAllowDeny({
+        toolAllowList: config.policy?.toolAllowList,
+        toolDenyList: config.policy?.toolDenyList,
+      }),
     });
 
     const sessionMgr = this.createSessionManager(hooks);
@@ -3482,6 +3494,10 @@ export class DaemonManager {
         resolveHostToolingProfile: () => this._hostToolingProfile,
         resolveHostWorkspaceRoot: () => this._hostWorkspacePath,
         pipelineExecutor: plannerPipelineExecutor,
+        permissionRules: buildPermissionRulesFromAllowDeny({
+          toolAllowList: newConfig.policy?.toolAllowList,
+          toolDenyList: newConfig.policy?.toolDenyList,
+        }),
       });
 
       const providerNames = providers.map((p) => p.name).join(" → ") || "none";
