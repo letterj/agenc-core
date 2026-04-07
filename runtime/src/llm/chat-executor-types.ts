@@ -528,44 +528,9 @@ export interface PlannerDecision {
   artifactTargets?: readonly string[];
 }
 
-export type PlannerStepType = "deterministic_tool" | "subagent_task" | "synthesis";
-
-export type PlannerPlanArtifactIntent =
-  | "none"
-  | "grounded_plan_generation"
-  | "edit_artifact"
-  | "implement_from_artifact";
-
-export type SubagentVerifierStepVerdict = "pass" | "retry" | "fail";
-
-export interface SubagentVerifierStepAssessment {
-  readonly name: string;
-  readonly verdict: SubagentVerifierStepVerdict;
-  readonly confidence: number;
-  readonly retryable: boolean;
-  readonly issues: readonly string[];
-  readonly summary: string;
-}
-
-export interface SubagentVerifierDecision {
-  readonly overall: "pass" | "retry" | "fail";
-  readonly confidence: number;
-  readonly unresolvedItems: readonly string[];
-  readonly steps: readonly SubagentVerifierStepAssessment[];
-  readonly source: "deterministic" | "model" | "merged";
-}
-
 export interface MutablePlannerSummaryState {
   deterministicStepsExecuted: number;
   diagnostics: PlannerDiagnostic[];
-  /**
-   * Model-emitted plan-artifact intent classification, propagated from
-   * `PlannerPlan.planIntent`. Replaces the regex-based pre-call classifier
-   * that used to live in `chat-executor-planner.ts`. Downstream contract
-   * flow and turn-execution code reads this instead of re-running a regex
-   * against the user message.
-   */
-  plannerPlanIntent?: PlannerPlanArtifactIntent;
 }
 
 /** Full planner summary state — extends the subset used by executePlannerPipelineWithVerifier. */
