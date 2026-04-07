@@ -64,9 +64,9 @@ import { SubAgentSpawnError } from "./errors.js";
 // Reverted from a 5-minute cap added by PR #174 because the cap silently
 // killed legitimate long-horizon child phases.
 export const DEFAULT_SUB_AGENT_TIMEOUT_MS = 0;
-export const DEFAULT_SUB_AGENT_CONTEXT_STARTUP_TIMEOUT_MS = 15_000;
+const DEFAULT_SUB_AGENT_CONTEXT_STARTUP_TIMEOUT_MS = 15_000;
 export const MAX_CONCURRENT_SUB_AGENTS = 16;
-export const DEFAULT_MAX_SUB_AGENT_DEPTH = 4;
+const DEFAULT_MAX_SUB_AGENT_DEPTH = 4;
 export const DEFAULT_MAX_RETAINED_TERMINAL_SUB_AGENTS = 256;
 export const DEFAULT_TERMINAL_SUB_AGENT_RETENTION_MS = 6 * 60 * 60 * 1000; // 6h
 export const SUB_AGENT_SESSION_PREFIX = "subagent:";
@@ -235,7 +235,7 @@ export interface SubAgentManagerConfig {
   readonly onCompaction?: (sessionId: string, summary: string) => void;
 }
 
-export interface ResolvedSubAgentExecutionBudget {
+interface ResolvedSubAgentExecutionBudget {
   readonly promptBudget?: PromptBudgetConfig;
   readonly sessionTokenBudget?: number;
   readonly sessionCompactionThreshold?: number;

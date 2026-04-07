@@ -43,10 +43,6 @@ export function createTask(overrides: Partial<OnChainTask> = {}): OnChainTask {
   };
 }
 
-export function randomPda() {
-  return Keypair.generate().publicKey;
-}
-
 export function createDiscoveryResult(
   overrides: Partial<TaskDiscoveryResult> = {},
 ): TaskDiscoveryResult {

@@ -55,7 +55,7 @@ interface RawExtractedEntity {
   }>;
 }
 
-export interface LLMEntityExtractorConfig {
+interface LLMEntityExtractorConfig {
   llmProvider: LLMProvider;
   logger?: Logger;
   /** Max input chars sent to LLM. Default: 8000 */

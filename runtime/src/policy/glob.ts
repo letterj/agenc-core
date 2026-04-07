@@ -70,7 +70,7 @@ export function matchToolPattern(
  * Match an argument string against an arg-pattern. Supports `*` (any),
  * literal text, and a single trailing `*` for prefix matching.
  */
-export function matchArgPattern(pattern: string, arg: string): boolean {
+function matchArgPattern(pattern: string, arg: string): boolean {
   if (!pattern || pattern === "*") return true;
   if (pattern.endsWith("*")) {
     return arg.startsWith(pattern.slice(0, -1));

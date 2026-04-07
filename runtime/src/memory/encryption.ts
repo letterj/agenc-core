@@ -33,7 +33,7 @@ export interface EncryptionConfig {
  * The `currentVersion` is used for new encryptions.
  * Old versions are retained for decryption of existing entries.
  */
-export interface VersionedEncryptionConfig {
+interface VersionedEncryptionConfig {
   /** Map of key version → 32-byte key (Buffer or hex string). */
   keys: Record<number, Buffer | string>;
   /** Version to use for new encryptions. */
@@ -53,7 +53,7 @@ export interface EncryptionProvider {
  * New encryptions use the current version key.
  * Decryption detects the version from the ciphertext prefix and uses the matching key.
  */
-export interface VersionedEncryptionProvider extends EncryptionProvider {
+interface VersionedEncryptionProvider extends EncryptionProvider {
   /** Current key version used for new encryptions. */
   readonly currentVersion: number;
   /** Re-encrypt a value with the current key version. */

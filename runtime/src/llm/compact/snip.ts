@@ -28,7 +28,7 @@ export function createSnipState(): SnipState {
   return { lastTouchMs: 0, snipCount: 0 };
 }
 
-export interface SnipInput {
+interface SnipInput {
   readonly messages: readonly LLMMessage[];
   readonly state: SnipState;
   readonly nowMs: number;
@@ -36,7 +36,7 @@ export interface SnipInput {
   readonly keepRecent?: number;
 }
 
-export interface SnipResult {
+interface SnipResult {
   readonly action: "noop" | "snipped";
   readonly messages: readonly LLMMessage[];
   readonly state: SnipState;

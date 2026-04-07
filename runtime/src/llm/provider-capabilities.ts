@@ -1,6 +1,5 @@
 import type {
   LLMCompactionDiagnostics,
-  LLMProviderCapabilities,
   LLMStatefulDiagnostics,
   LLMStatefulResponsesConfig,
 } from "./types.js";
@@ -24,16 +23,6 @@ export interface ResolvedLLMStatefulResponsesConfig {
   readonly reconciliationWindow: number;
   readonly compaction: ResolvedLLMCompactionConfig;
 }
-
-export const UNSUPPORTED_STATEFUL_CAPABILITIES: LLMProviderCapabilities["stateful"] = {
-  assistantPhase: false,
-  previousResponseId: false,
-  encryptedReasoning: false,
-  storedResponseRetrieval: false,
-  storedResponseDeletion: false,
-  opaqueCompaction: false,
-  deterministicFallback: true,
-};
 
 export function resolveLLMStatefulResponsesConfig(
   config: LLMStatefulResponsesConfig | undefined,

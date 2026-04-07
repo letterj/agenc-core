@@ -9,11 +9,9 @@
  */
 
 import type {
-  LLMResponse,
   LLMStructuredOutputResult,
   LLMStructuredOutputSchema,
 } from "./types.js";
-import { parseJsonObjectFromText } from "./chat-executor-text.js";
 
 export function supportsXaiStructuredOutputsWithTools(
   model: string | undefined,
@@ -153,16 +151,3 @@ export function parseStructuredOutputText(
   };
 }
 
-export function extractStructuredOutputObject(
-  result: Pick<LLMResponse, "content" | "structuredOutput">,
-): Record<string, unknown> | undefined {
-  const parsed = result.structuredOutput?.parsed;
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return parsed as Record<string, unknown>;
-  }
-  const rawText = result.structuredOutput?.rawText;
-  if (typeof rawText === "string" && rawText.trim().length > 0) {
-    return parseJsonObjectFromText(rawText);
-  }
-  return parseJsonObjectFromText(result.content);
-}

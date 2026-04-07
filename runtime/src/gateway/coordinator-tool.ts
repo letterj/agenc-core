@@ -17,7 +17,7 @@ export const COORDINATOR_MODE_TOOL_NAME = "coordinator_mode";
 const DIRECT_EXECUTION_ERROR =
   "coordinator_mode must run through a session-scoped tool handler";
 
-export type CoordinatorModeAction =
+type CoordinatorModeAction =
   | "list"
   | "spawn"
   | "reuse"
@@ -30,7 +30,7 @@ export interface CoordinatorModeInput {
   readonly request?: ExecuteWithAgentInput;
 }
 
-export type ParseCoordinatorModeResult =
+type ParseCoordinatorModeResult =
   | { ok: true; value: CoordinatorModeInput }
   | { ok: false; error: string };
 

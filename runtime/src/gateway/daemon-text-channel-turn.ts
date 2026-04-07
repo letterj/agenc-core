@@ -90,7 +90,7 @@ function buildConcordiaGenerateAgentsStructuredOutput(
   };
 }
 
-export interface ExecuteTextChannelTurnParams {
+interface ExecuteTextChannelTurnParams {
   readonly logger: Logger;
   readonly channelName: string;
   readonly msg: GatewayMessage;

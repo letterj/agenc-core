@@ -33,14 +33,14 @@ export function createMicrocompactState(): MicrocompactState {
   };
 }
 
-export interface MicrocompactInput {
+interface MicrocompactInput {
   readonly messages: readonly LLMMessage[];
   readonly state: MicrocompactState;
   readonly nowMs: number;
   readonly gapMs?: number;
 }
 
-export interface MicrocompactResult {
+interface MicrocompactResult {
   readonly action: "noop" | "microcompacted";
   readonly messages: readonly LLMMessage[];
   readonly state: MicrocompactState;

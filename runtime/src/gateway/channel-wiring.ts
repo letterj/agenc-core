@@ -178,7 +178,7 @@ async function stopExternalChannelRegistry(
 // wireTelegram
 // ---------------------------------------------------------------------------
 
-export async function wireTelegram(
+async function wireTelegram(
   config: GatewayConfig,
   deps: ChannelWiringDeps,
 ): Promise<TelegramChannel | null> {

@@ -40,7 +40,7 @@ function truncateText(value: string, maxChars: number): string {
   return value.slice(0, maxChars - 3) + "...";
 }
 
-export interface ToolArgumentRepairResult {
+interface ToolArgumentRepairResult {
   readonly args: Record<string, unknown>;
   readonly repairedFields: readonly string[];
 }
@@ -275,7 +275,7 @@ function isLikelyFailureText(result: string): boolean {
 // ============================================================================
 
 /** Result of checking whether a tool call is permitted. */
-export interface ToolCallPermissionResult {
+interface ToolCallPermissionResult {
   readonly action: ToolCallAction;
   readonly errorResult?: string;
   readonly expandAfterRound?: boolean;
@@ -318,7 +318,7 @@ export function checkToolCallPermission(
 }
 
 /** Result of parsing tool call arguments. */
-export type ParseToolCallArgsResult =
+type ParseToolCallArgsResult =
   | { readonly ok: true; readonly args: Record<string, unknown> }
   | { readonly ok: false; readonly error: string };
 
@@ -567,7 +567,7 @@ export function summarizeToolArgumentChanges(
 }
 
 /** Configuration for tool execution with retry. */
-export interface ToolExecutionConfig {
+interface ToolExecutionConfig {
   readonly toolCallTimeoutMs: number;
   readonly retryPolicyMatrix: LLMRetryPolicyMatrix;
   readonly signal?: AbortSignal;
@@ -575,7 +575,7 @@ export interface ToolExecutionConfig {
 }
 
 /** Result of executing a tool with retry logic. */
-export interface ToolExecutionResult {
+interface ToolExecutionResult {
   result: string;
   isError: boolean;
   toolFailed: boolean;
@@ -753,7 +753,7 @@ export interface RoundStuckState {
 }
 
 /** Result of stuck-loop detection check. */
-export interface StuckDetectionResult {
+interface StuckDetectionResult {
   readonly shouldBreak: boolean;
   readonly reason?: string;
 }

@@ -122,7 +122,7 @@ export interface ToolCallRecord {
   readonly durationMs: number;
 }
 
-export type ChatExecutionTraceEventType =
+type ChatExecutionTraceEventType =
   | "context_injected"
   | "model_call_prepared"
   | "recovery_hints_injected"
@@ -501,13 +501,13 @@ export interface PlannerDecision {
   artifactTargets?: readonly string[];
 }
 
-export interface MutablePlannerSummaryState {
+interface MutablePlannerSummaryState {
   deterministicStepsExecuted: number;
   diagnostics: PlannerDiagnostic[];
 }
 
 /** Full planner summary state — extends the subset used by executePlannerPipelineWithVerifier. */
-export interface FullPlannerSummaryState extends MutablePlannerSummaryState {
+interface FullPlannerSummaryState extends MutablePlannerSummaryState {
   enabled: boolean;
   used: boolean;
   routeReason: string;
@@ -609,7 +609,7 @@ export interface ExecutionContext {
 // ============================================================================
 
 /** Parameters for building the default ExecutionContext object. */
-export interface BuildExecutionContextParams {
+interface BuildExecutionContextParams {
   readonly message: GatewayMessage;
   readonly messageText: string;
   readonly systemPrompt: string;
@@ -631,7 +631,7 @@ export interface BuildExecutionContextParams {
 }
 
 /** Configuration values from ChatExecutor instance needed for context building. */
-export interface BuildExecutionContextConfig {
+interface BuildExecutionContextConfig {
   readonly maxToolRounds: number;
   readonly toolBudgetPerRequest: number;
   readonly maxModelRecallsPerRequest: number;

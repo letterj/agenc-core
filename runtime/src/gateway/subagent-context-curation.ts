@@ -70,7 +70,7 @@ import {
 /*  Sensitive-data redaction                                            */
 /* ------------------------------------------------------------------ */
 
-export interface SensitiveTextSanitizationOptions {
+interface SensitiveTextSanitizationOptions {
   readonly preserveAbsolutePathsWithin?: readonly string[];
   readonly absolutePathReplacement?: string;
 }

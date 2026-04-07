@@ -13,7 +13,7 @@ import {
 } from "./sub-agent.js";
 import type { GatewaySubagentFallbackBehavior } from "./types.js";
 
-export interface DelegationPolicyRuntimeConfig {
+interface DelegationPolicyRuntimeConfig {
   readonly enabled: boolean;
   readonly spawnDecisionThreshold: number;
   readonly allowedParentTools?: readonly string[];
@@ -22,14 +22,14 @@ export interface DelegationPolicyRuntimeConfig {
   readonly unsafeBenchmarkMode?: boolean;
 }
 
-export interface DelegationPolicyInput {
+interface DelegationPolicyInput {
   readonly sessionId: string;
   readonly toolName: string;
   readonly args: Record<string, unknown>;
   readonly isSubAgentSession: boolean;
 }
 
-export interface DelegationPolicyDecision {
+interface DelegationPolicyDecision {
   readonly allowed: boolean;
   readonly reason?: string;
   readonly matchedRule?:
@@ -48,7 +48,7 @@ export function isSubAgentSessionId(sessionId: string): boolean {
   return sessionId.startsWith(SUB_AGENT_SESSION_PREFIX);
 }
 
-export function isDelegationToolName(toolName: string): boolean {
+function isDelegationToolName(toolName: string): boolean {
   return (
     toolName === "execute_with_agent" ||
     toolName === "coordinator_mode" ||
@@ -168,7 +168,7 @@ export class DelegationPolicyEngine {
   }
 }
 
-export interface DelegationVerifierRuntimeConfig {
+interface DelegationVerifierRuntimeConfig {
   readonly enabled: boolean;
   readonly forceVerifier: boolean;
 }
@@ -196,7 +196,7 @@ export class DelegationVerifierService {
   }
 }
 
-export type SubAgentLifecycleEventType =
+type SubAgentLifecycleEventType =
   | "subagents.planned"
   | "subagents.policy_bypassed"
   | "subagents.spawned"

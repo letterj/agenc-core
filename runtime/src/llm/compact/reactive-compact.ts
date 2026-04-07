@@ -27,13 +27,13 @@ export function createReactiveCompactState(): ReactiveCompactState {
   return { attemptIndex: 0, lastTriggerMs: null };
 }
 
-export interface ReactiveCompactInput {
+interface ReactiveCompactInput {
   readonly messages: readonly LLMMessage[];
   readonly state: ReactiveCompactState;
   readonly nowMs?: number;
 }
 
-export interface ReactiveCompactResult {
+interface ReactiveCompactResult {
   readonly action: "noop" | "trimmed" | "exhausted";
   readonly messages: readonly LLMMessage[];
   readonly state: ReactiveCompactState;
@@ -90,6 +90,3 @@ void COMPACT_BOUNDARY_SUBTYPE;
  * Reset the attempt counter once a model call succeeds — the next
  * 413 should start fresh from the smallest trim fraction.
  */
-export function resetReactiveCompactState(): ReactiveCompactState {
-  return { attemptIndex: 0, lastTriggerMs: null };
-}

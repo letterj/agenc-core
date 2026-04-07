@@ -391,7 +391,7 @@ export function resolveDelegationScoreThreshold(
 // High-risk capability check
 // ============================================================================
 
-export function hasHighRiskDelegationCapabilities(
+function hasHighRiskDelegationCapabilities(
   capabilities: readonly string[],
 ): boolean {
   for (const capability of capabilities) {
@@ -510,7 +510,7 @@ export async function ensureSubAgentDefaultWorkspace(
 // Delegation runtime services configuration / teardown
 // ============================================================================
 
-export interface DelegationRuntimeServicesState {
+interface DelegationRuntimeServicesState {
   delegationPolicyEngine: DelegationPolicyEngine | null;
   delegationVerifierService: DelegationVerifierService | null;
   subAgentLifecycleEmitter: SubAgentLifecycleEmitter | null;

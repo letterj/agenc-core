@@ -228,7 +228,7 @@ export function buildDesktopContext(
  * Build the model-disclosure section of the system prompt so the agent
  * can answer "which model are you?" questions accurately.
  */
-export function buildModelDisclosureContext(config: GatewayConfig): string {
+function buildModelDisclosureContext(config: GatewayConfig): string {
   const primaryProvider = config.llm?.provider ?? "none";
   const primaryModel =
     normalizeGrokModel(config.llm?.model) ??
@@ -367,7 +367,7 @@ export function resolveActiveHostWorkspacePath(
  * Build generic workspace prompt files when no AGENT.md / AGENC.md
  * exists but the workspace path differs from the default.
  */
-export function buildGenericHostWorkspacePromptFiles(
+function buildGenericHostWorkspacePromptFiles(
   config: GatewayConfig,
 ): WorkspaceFiles {
   const agentName = config.agent?.name?.trim() || "AgenC";

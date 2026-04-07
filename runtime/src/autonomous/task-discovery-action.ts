@@ -20,7 +20,7 @@ import type { Logger } from "../utils/logger.js";
 // Types
 // ============================================================================
 
-export interface TaskDiscoveryActionConfig {
+interface TaskDiscoveryActionConfig {
   scanner: TaskScanner;
   goalManager: GoalManager;
   /** Maximum tasks to evaluate per heartbeat cycle (default: 5). */

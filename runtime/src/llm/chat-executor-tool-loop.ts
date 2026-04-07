@@ -91,7 +91,7 @@ import {
 // Callback interfaces
 // ============================================================================
 
-export interface ToolLoopCallbacks {
+interface ToolLoopCallbacks {
   pushMessage(
     ctx: ExecutionContext,
     message: import("./types.js").LLMMessage,
@@ -135,7 +135,7 @@ export interface ToolLoopCallbacks {
   serializeRemainingRequestMs(remainingRequestMs: number): number | null;
 }
 
-export interface ToolLoopConfig {
+interface ToolLoopConfig {
   readonly maxRuntimeSystemHints: number;
   readonly toolCallTimeoutMs: number;
   readonly retryPolicyMatrix: LLMRetryPolicyMatrix;

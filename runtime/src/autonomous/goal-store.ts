@@ -19,7 +19,7 @@ import { migrateStrategicMemoryState } from "../gateway/state-migrations.js";
 
 export type StrategicGoalPriority = "critical" | "high" | "medium" | "low";
 
-export type StrategicGoalSource =
+type StrategicGoalSource =
   | "meta-planner"
   | "awareness"
   | "user"
@@ -42,7 +42,7 @@ export interface StrategicGoalResult {
   readonly durationMs: number;
 }
 
-export interface StrategicGoalFreshness {
+interface StrategicGoalFreshness {
   readonly score: number;
   readonly lastObservedAt: number;
   readonly expiresAt: number;

@@ -95,7 +95,7 @@ function isTerminalTraceEventName(eventName: string): boolean {
   );
 }
 
-export interface SqliteObservabilityStoreConfig {
+interface SqliteObservabilityStoreConfig {
   readonly dbPath?: string;
   readonly daemonLogPath?: string;
 }

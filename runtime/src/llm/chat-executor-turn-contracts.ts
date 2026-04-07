@@ -1,8 +1,8 @@
 import type { GatewayMessage } from "../gateway/message.js";
 
-export const CONCORDIA_SIMULATION_TURN_CONTRACT =
+const CONCORDIA_SIMULATION_TURN_CONTRACT =
   "concordia_simulation_turn";
-export const CONCORDIA_GENERATE_AGENTS_MESSAGE_TYPE =
+const CONCORDIA_GENERATE_AGENTS_MESSAGE_TYPE =
   "concordia_generate_agents";
 const CONCORDIA_GENERATOR_SESSION_PREFIX = "concordia:generator:";
 const CONCORDIA_GENERATOR_SENDER_ID = "concordia-agent-generator";

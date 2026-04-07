@@ -35,7 +35,7 @@ export interface MCPServerPolicyViolation {
   readonly message: string;
 }
 
-export interface ValidateMCPServerPolicyOptions {
+interface ValidateMCPServerPolicyOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly desktopImage?: string;
 }

@@ -18,7 +18,7 @@ import type {
   RuntimeRunClass,
 } from "./run-budget.js";
 
-export interface ProviderRouteDescriptor {
+interface ProviderRouteDescriptor {
   readonly index: number;
   readonly providerName: string;
   readonly model?: string;
@@ -36,7 +36,7 @@ export interface ModelRoutingPolicy {
   readonly economicsPolicy: RuntimeEconomicsPolicy;
 }
 
-export interface ModelRouteDecision {
+interface ModelRouteDecision {
   readonly runClass: RuntimeRunClass;
   readonly providers: readonly LLMProvider[];
   readonly selectedProviderName: string;
@@ -47,13 +47,13 @@ export interface ModelRouteDecision {
   readonly reason: string;
 }
 
-export interface ModelRouteRequirements {
+interface ModelRouteRequirements {
   readonly statefulContinuationRequired?: boolean;
   readonly structuredOutputRequired?: boolean;
   readonly routedToolNames?: readonly string[];
 }
 
-export function buildProviderRouteKey(
+function buildProviderRouteKey(
   providerName: string,
   model?: string,
 ): string {

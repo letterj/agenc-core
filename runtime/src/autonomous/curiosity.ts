@@ -29,7 +29,7 @@ import { createGatewayMessage } from "../gateway/message.js";
 // Types
 // ============================================================================
 
-export interface CuriosityConfig {
+interface CuriosityConfig {
   /** Topics the agent is curious about. */
   interests: string[];
   /** ChatExecutor for LLM-driven research. */

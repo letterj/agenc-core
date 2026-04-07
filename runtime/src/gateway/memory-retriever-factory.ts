@@ -30,7 +30,7 @@ import { sanitizeDelegatedAssistantEnvironmentSummary } from "../utils/delegated
 // ---------------------------------------------------------------------------
 
 /** Semantic memory retriever defaults. */
-export const SEMANTIC_MEMORY_DEFAULTS = {
+const SEMANTIC_MEMORY_DEFAULTS = {
   MAX_TOKEN_BUDGET: 2000,
   MAX_RESULTS: 5,
   RECENCY_WEIGHT: 0.3,
@@ -48,7 +48,7 @@ const BASIC_MAX_TOTAL_CHARS = 6_000;
 // Factory input
 // ---------------------------------------------------------------------------
 
-export interface CreateMemoryRetrieversParams {
+interface CreateMemoryRetrieversParams {
   config: GatewayConfig;
   hooks: HookDispatcher;
   memoryBackend: MemoryBackend;
@@ -59,7 +59,7 @@ export interface CreateMemoryRetrieversParams {
   llmProvider?: import("../llm/types.js").LLMProvider;
 }
 
-export interface MemoryRetrieversResult {
+interface MemoryRetrieversResult {
   memoryRetriever: MemoryRetriever;
   learningProvider: MemoryRetriever;
 }
@@ -201,7 +201,7 @@ async function createSemanticRetriever(
 // Basic history retriever (fallback when no embedding provider)
 // ---------------------------------------------------------------------------
 
-export function createBasicHistoryRetriever(
+function createBasicHistoryRetriever(
   memoryBackend: MemoryBackend,
 ): MemoryRetriever {
   return {
@@ -246,7 +246,7 @@ export function createBasicHistoryRetriever(
 // Learning provider (reads learned patterns from KV store)
 // ---------------------------------------------------------------------------
 
-export function createLearningRetriever(
+function createLearningRetriever(
   memoryBackend: MemoryBackend,
   workspacePath?: string,
 ): MemoryRetriever {

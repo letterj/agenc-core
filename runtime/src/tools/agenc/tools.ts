@@ -62,10 +62,6 @@ const recentCreateTaskCalls = new Map<string, number>();
 const CREATE_TASK_DEDUP_TTL_MS = 30_000;
 
 /** @internal Exposed for testing only. */
-export function _resetCreateTaskDedup(): void {
-  recentCreateTaskCalls.clear();
-}
-
 const KNOWN_MINTS: Record<string, { symbol: string; decimals: number }> = {
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: { symbol: 'USDC', decimals: 6 },
   Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: { symbol: 'USDT', decimals: 6 },

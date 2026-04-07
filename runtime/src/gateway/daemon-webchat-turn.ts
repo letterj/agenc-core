@@ -50,12 +50,12 @@ import type { ToolRoutingDecision } from "./tool-routing.js";
 import { resolveTurnMaxToolRounds } from "./tool-round-budget.js";
 import { buildAssistantDelegatedScopeMetadata } from "../utils/delegated-scope-trust.js";
 
-export interface WebChatTurnSignals {
+interface WebChatTurnSignals {
   signalThinking: (sessionId: string) => void;
   signalIdle: (sessionId: string) => void;
 }
 
-export interface ExecuteWebChatConversationTurnParams {
+interface ExecuteWebChatConversationTurnParams {
   readonly logger: Logger;
   readonly msg: GatewayMessage;
   readonly webChat: WebChatChannel;

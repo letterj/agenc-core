@@ -36,7 +36,7 @@ export interface ExecuteWithAgentInput {
   readonly spawnDecisionScore?: number;
 }
 
-export type ParseExecuteWithAgentResult =
+type ParseExecuteWithAgentResult =
   | { ok: true; value: ExecuteWithAgentInput }
   | { ok: false; error: string };
 

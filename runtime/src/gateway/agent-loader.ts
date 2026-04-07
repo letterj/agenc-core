@@ -22,8 +22,6 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export type AgentExecutionContext = "fork" | "inline";
-
 export interface AgentDefinition {
   /** Stable identifier (kebab-case, used in tool calls). */
   readonly name: string;
@@ -43,7 +41,7 @@ export interface AgentDefinition {
   readonly body: string;
 }
 
-export interface LoadAgentDefinitionsOptions {
+interface LoadAgentDefinitionsOptions {
   readonly projectRoot?: string;
   readonly homeDir?: string;
   readonly builtinDir?: string;

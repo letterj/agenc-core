@@ -38,20 +38,20 @@ export interface ToolRule {
   readonly approvalConfig?: ToolRuleApprovalConfig;
 }
 
-export interface ToolRuleConditions {
+interface ToolRuleConditions {
   readonly sessionIds?: readonly string[];
   readonly channels?: readonly string[];
   readonly minAmount?: number;
   readonly maxRatePerMinute?: number;
 }
 
-export interface ToolRuleApprovalConfig {
+interface ToolRuleApprovalConfig {
   readonly slaMs?: number;
   readonly approverGroup?: string;
   readonly approverRoles?: readonly string[];
 }
 
-export interface ToolPermissionEvaluatorConfig {
+interface ToolPermissionEvaluatorConfig {
   readonly rules: readonly ToolRule[];
   readonly budgetState?: BudgetStateService;
   readonly toolCheckPermissions?: (
@@ -61,7 +61,7 @@ export interface ToolPermissionEvaluatorConfig {
   readonly maxToolCallRatePerMinute?: number;
 }
 
-export interface ToolPermissionContext {
+interface ToolPermissionContext {
   readonly sessionId: string;
   readonly chainId?: string;
   readonly depth?: number;

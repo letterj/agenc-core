@@ -38,7 +38,7 @@ export function canonicalizeExecutionStepKind(params: {
   return stepKind;
 }
 
-export function inferCompatibilityCompletionContract(params: {
+function inferCompatibilityCompletionContract(params: {
   readonly stepKind?: ExecutionStepKind;
   readonly effectClass?: ExecutionEffectClass;
   readonly verificationMode: ExecutionVerificationMode;

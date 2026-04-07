@@ -40,8 +40,3 @@ export interface ToolRoutingDecision {
  * registry, and this helper exists only as a stable single source of
  * truth callers can resolve tool names through.
  */
-export function resolveAllowedTools(
-  allowedToolNames: readonly string[] | undefined,
-): readonly string[] {
-  return allowedToolNames ? Array.from(new Set(allowedToolNames)) : [];
-}

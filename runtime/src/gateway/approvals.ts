@@ -164,7 +164,7 @@ export interface ApprovalEscalation {
   readonly requiredApproverRoles?: readonly string[];
 }
 
-export interface ApprovalSimulationDecision {
+interface ApprovalSimulationDecision {
   readonly required: boolean;
   readonly elevated: boolean;
   readonly denied: boolean;
@@ -177,12 +177,12 @@ export interface ApprovalSimulationDecision {
   readonly denyReason?: string;
 }
 
-export interface SessionPolicyMutationState {
+interface SessionPolicyMutationState {
   readonly elevatedPatterns: readonly string[];
   readonly deniedPatterns: readonly string[];
 }
 
-export type SessionPolicyMutationOperation =
+type SessionPolicyMutationOperation =
   | "allow"
   | "deny"
   | "clear"

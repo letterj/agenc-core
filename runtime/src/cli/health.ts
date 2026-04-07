@@ -32,7 +32,7 @@ export interface HealthCheckResult {
 }
 
 /** Aggregate health report. */
-export interface HealthReport {
+interface HealthReport {
   status: "healthy" | "degraded" | "unhealthy";
   checks: HealthCheckResult[];
   timestamp: string; // ISO-8601

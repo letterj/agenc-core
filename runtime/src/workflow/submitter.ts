@@ -32,7 +32,7 @@ const DEFAULT_MAX_RETRIES = 3;
 /** Rate limit cooldown wait in ms (slightly over 1s to account for clock skew) */
 const RATE_LIMIT_WAIT_MS = 1500;
 
-export interface DAGSubmitterConfig {
+interface DAGSubmitterConfig {
   program: Program<AgencCoordination>;
   agentId: Uint8Array;
   logger?: Logger;

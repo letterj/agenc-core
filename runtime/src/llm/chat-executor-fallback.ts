@@ -78,7 +78,7 @@ function shouldBypassStreamingForModelCall(
 // Configuration interface for callWithFallback
 // ============================================================================
 
-export interface CallWithFallbackDeps {
+interface CallWithFallbackDeps {
   readonly providers: readonly LLMProvider[];
   readonly cooldowns: Map<string, CooldownEntry>;
   readonly promptBudget: PromptBudgetConfig;
@@ -87,7 +87,7 @@ export interface CallWithFallbackDeps {
   readonly maxCooldownMs: number;
 }
 
-export interface CallWithFallbackOptions {
+interface CallWithFallbackOptions {
   statefulSessionId?: string;
   statefulResumeAnchor?: LLMStatefulResumeAnchor;
   statefulHistoryCompacted?: boolean;

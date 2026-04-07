@@ -28,7 +28,7 @@ export type ExecutionStepKind =
   | "delegated_write"
   | "delegated_scaffold"
   | "delegated_validation";
-export const WORKFLOW_STEP_ROLES = [
+const WORKFLOW_STEP_ROLES = [
   "reviewer",
   "writer",
   "validator",
@@ -36,14 +36,14 @@ export const WORKFLOW_STEP_ROLES = [
   "synthesizer",
 ] as const;
 export type WorkflowStepRole = typeof WORKFLOW_STEP_ROLES[number];
-export const WORKFLOW_ARTIFACT_RELATION_TYPES = [
+const WORKFLOW_ARTIFACT_RELATION_TYPES = [
   "read_dependency",
   "write_owner",
   "verification_subject",
   "context_input",
   "handoff_artifact",
 ] as const;
-export type WorkflowArtifactRelationType =
+type WorkflowArtifactRelationType =
   typeof WORKFLOW_ARTIFACT_RELATION_TYPES[number];
 export interface WorkflowArtifactRelation {
   readonly relationType: WorkflowArtifactRelationType;
@@ -58,11 +58,11 @@ export type ExecutionApprovalProfile =
   | "read_only"
   | "filesystem_write"
   | "shell";
-export const EXECUTION_ENVELOPE_COMPATIBILITY_SOURCES = [
+const EXECUTION_ENVELOPE_COMPATIBILITY_SOURCES = [
   "legacy_context_requirements",
   "legacy_persisted_checkpoint",
 ] as const;
-export type ExecutionEnvelopeCompatibilitySource =
+type ExecutionEnvelopeCompatibilitySource =
   typeof EXECUTION_ENVELOPE_COMPATIBILITY_SOURCES[number];
 
 export interface ExecutionEnvelope {

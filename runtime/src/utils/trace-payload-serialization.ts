@@ -28,7 +28,7 @@ interface TraceSerializationOptions {
   readonly transformString: (value: string, maxChars: number) => unknown;
 }
 
-export interface TracePreviewSerializationOptions {
+interface TracePreviewSerializationOptions {
   readonly maxChars?: number;
   readonly maxDepth?: number;
   readonly maxArrayItems?: number;

@@ -247,11 +247,11 @@ function canonicalizeDelegationExecutionContext(
   });
 }
 
-export type DelegatedExecutionEnvelopeDerivationSource =
+type DelegatedExecutionEnvelopeDerivationSource =
   | "direct_live_path"
   | "internal_planner_path";
 
-export type DelegatedExecutionEnvelopeDerivationIssueCode =
+type DelegatedExecutionEnvelopeDerivationIssueCode =
   | "missing_parent_workspace_authority"
   | "workspace_root_outside_parent_workspace"
   | "read_root_outside_parent_workspace"
@@ -260,7 +260,7 @@ export type DelegatedExecutionEnvelopeDerivationIssueCode =
   | "required_source_outside_parent_workspace"
   | "target_outside_parent_workspace";
 
-export interface DelegatedExecutionEnvelopeDerivationIssue {
+interface DelegatedExecutionEnvelopeDerivationIssue {
   readonly code: DelegatedExecutionEnvelopeDerivationIssueCode;
   readonly message: string;
   readonly path?: string;

@@ -42,7 +42,7 @@ export interface ToolBudgetConfig {
   readonly toolResultsRoot?: string;
 }
 
-export interface ContentReplacement {
+interface ContentReplacement {
   readonly toolUseId: string;
   readonly diskPath: string;
   readonly originalChars: number;
@@ -54,11 +54,7 @@ export interface ContentReplacementState {
   readonly replacements: ReadonlyMap<string, ContentReplacement>;
 }
 
-export function createContentReplacementState(): ContentReplacementState {
-  return { seenIds: new Set<string>(), replacements: new Map() };
-}
-
-export interface ApplyBudgetInput {
+interface ApplyBudgetInput {
   readonly sessionId: string;
   readonly toolUseId: string;
   readonly toolName: string;
@@ -67,7 +63,7 @@ export interface ApplyBudgetInput {
   readonly config?: ToolBudgetConfig;
 }
 
-export interface ApplyBudgetResult {
+interface ApplyBudgetResult {
   readonly content: string;
   readonly state: ContentReplacementState;
   readonly persisted: boolean;
