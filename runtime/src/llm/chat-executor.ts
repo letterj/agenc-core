@@ -47,12 +47,8 @@ import {
   resolveDelegationDecisionConfig,
   type ResolvedDelegationDecisionConfig,
 } from "./delegation-decision.js";
-import {
-  computeDelegationFinalReward,
-  computeUsefulDelegationProxy,
-  DELEGATION_USEFULNESS_PROXY_VERSION,
-  type DelegationBanditPolicyTuner,
-  type DelegationTrajectorySink,
+import type {
+  DelegationBanditPolicyTuner,
 } from "./delegation-learning.js";
 // ---------------------------------------------------------------------------
 // Imports from extracted sibling modules
@@ -264,9 +260,6 @@ import {
 } from "./chat-executor-text.js";
 import {
   summarizeStateful,
-  computeQualityProxy,
-  buildDelegationTrajectoryEntry,
-  buildPlannerSummary,
 } from "./chat-executor-recovery.js";
 import {
   assessPlannerDecision,
@@ -349,9 +342,7 @@ export class ChatExecutor {
   private readonly delegationDecisionConfig: ResolvedDelegationDecisionConfig;
   private readonly resolveDelegationScoreThreshold?: () => number | undefined;
   private readonly subagentVerifierConfig: ResolvedSubagentVerifierConfig;
-  private readonly delegationTrajectorySink?: DelegationTrajectorySink;
   private readonly delegationBanditTuner?: DelegationBanditPolicyTuner;
-  private readonly delegationDefaultStrategyArmId: string;
   private readonly toolBudgetPerRequest: number;
   private readonly maxModelRecallsPerRequest: number;
   private readonly maxFailureBudgetPerRequest: number;
@@ -420,10 +411,7 @@ export class ChatExecutor {
     this.subagentVerifierConfig = ChatExecutor.resolveSubagentVerifierConfig(
       config.subagentVerifier,
     );
-    this.delegationTrajectorySink = config.delegationLearning?.trajectorySink;
     this.delegationBanditTuner = config.delegationLearning?.banditTuner;
-    this.delegationDefaultStrategyArmId =
-      config.delegationLearning?.defaultStrategyArmId?.trim() || "balanced";
     this.toolBudgetPerRequest = normalizeRuntimeLimit(
       config.toolBudgetPerRequest,
       DEFAULT_TOOL_BUDGET_PER_REQUEST,
@@ -1614,92 +1602,12 @@ export class ChatExecutor {
     plannerSummary: ChatPlannerSummary;
     durationMs: number;
   } {
+    // Cut 2.1: planner-era reward signal, bandit tuner, trajectory sink,
+    // and useful-delegation proxy ceremony deleted. The planner subsystem
+    // was removed in earlier phases — there is no planner outcome to
+    // record and no quality proxy to feed back into a learning loop.
     const durationMs = Date.now() - ctx.startTime;
-    const verifierSnapshot = ctx.plannerSummaryState.subagentVerification;
-    const qualityProxy = computeQualityProxy({
-      completionState: ctx.completionState,
-      verifierPerformed: verifierSnapshot.performed,
-      verifierOverall: verifierSnapshot.overall,
-      evaluation: ctx.evaluation,
-      failedToolCalls: ctx.failedToolCalls,
-    });
-    const rewardSignal = computeDelegationFinalReward({
-      qualityProxy,
-      tokenCost: ctx.cumulativeUsage.totalTokens,
-      latencyMs: durationMs,
-      errorCount:
-        ctx.failedToolCalls + (ctx.completionState === "completed" ? 0 : 1),
-    });
-    const estimatedRecallsAvoided = ctx.plannerSummaryState.used
-      ? Math.max(
-          0,
-          ctx.plannerSummaryState.deterministicStepsExecuted -
-            Math.max(0, ctx.modelCalls - ctx.plannerSummaryState.plannerCalls),
-        )
-      : 0;
-    const delegatedThisTurn =
-      ctx.plannerSummaryState.delegationDecision?.shouldDelegate === true;
-    const usefulnessProxy = computeUsefulDelegationProxy({
-      delegated: delegatedThisTurn,
-      completionState: ctx.completionState,
-      failedToolCalls: ctx.failedToolCalls,
-      estimatedRecallsAvoided,
-      verifier: {
-        performed: verifierSnapshot.performed,
-        overall: verifierSnapshot.overall,
-        confidence: verifierSnapshot.confidence,
-      },
-      reward: rewardSignal,
-    });
-    const policyReward = delegatedThisTurn
-      ? usefulnessProxy.score * 2 - 1
-      : 0;
-
-    if (
-      ctx.selectedBanditArm &&
-      this.delegationBanditTuner &&
-      ctx.plannerSummaryState.delegationPolicyTuning.enabled
-    ) {
-      this.delegationBanditTuner.recordOutcome({
-        contextClusterId: ctx.trajectoryContextClusterId,
-        armId: ctx.selectedBanditArm.armId,
-        reward: policyReward,
-      });
-      ctx.plannerSummaryState.delegationPolicyTuning = {
-        ...ctx.plannerSummaryState.delegationPolicyTuning,
-        finalReward: policyReward,
-        usefulDelegation: usefulnessProxy.useful,
-        usefulDelegationScore: usefulnessProxy.score,
-        rewardProxyVersion: DELEGATION_USEFULNESS_PROXY_VERSION,
-      };
-    }
-
-    if (this.delegationTrajectorySink) {
-      const selectedTools = ctx.activeRoutedToolNames.length > 0
-        ? [...ctx.activeRoutedToolNames]
-        : (this.allowedTools ? [...this.allowedTools] : []);
-      this.delegationTrajectorySink.record(
-        buildDelegationTrajectoryEntry({
-          ctx,
-          qualityProxy,
-          durationMs,
-          rewardSignal,
-          usefulnessProxy,
-          selectedTools,
-          defaultStrategyArmId: this.delegationDefaultStrategyArmId,
-          delegationMaxDepth: this.delegationDecisionConfig.maxDepth,
-          delegationMaxFanoutPerTurn: this.delegationDecisionConfig.maxFanoutPerTurn,
-          requestTimeoutMs: this.requestTimeoutMs,
-          usefulDelegationProxyVersion: DELEGATION_USEFULNESS_PROXY_VERSION,
-        }),
-      );
-    }
-
-    const plannerSummary = buildPlannerSummary(
-      ctx.plannerSummaryState,
-      estimatedRecallsAvoided,
-    );
-
+    const plannerSummary: ChatPlannerSummary = ctx.plannerSummaryState;
     return { plannerSummary, durationMs };
   }
 

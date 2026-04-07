@@ -4,9 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  buildWorkflowRecoveryStateLines,
   buildRecoveryHints,
-  computeQualityProxy,
   inferRecoveryHint,
   preflightStaleCopiedCmakeHarnessInvocation,
 } from "./chat-executor-recovery.js";
@@ -926,48 +924,4 @@ describe("chat-executor-recovery", () => {
     expect(hint?.message).toContain("shell mode");
   });
 
-  it("scores completed workflow states higher than needs-verification states", () => {
-    expect(
-      computeQualityProxy({
-        completionState: "completed",
-        verifierPerformed: true,
-        verifierOverall: "pass",
-        failedToolCalls: 0,
-      }),
-    ).toBeGreaterThan(
-      computeQualityProxy({
-        completionState: "needs_verification",
-        verifierPerformed: false,
-        verifierOverall: "skipped",
-        failedToolCalls: 0,
-      }),
-    );
-  });
-
-  it("preserves workflow-owned remaining requirements in recovery state lines", () => {
-    const lines = buildWorkflowRecoveryStateLines({
-      completionState: "needs_verification",
-      stopReason: "completed",
-      requiredRequirements: ["build_verification", "workflow_verifier_pass"],
-      satisfiedRequirements: ["build_verification"],
-      remainingRequirements: ["workflow_verifier_pass"],
-      reusableEvidence: [
-        {
-          requirement: "build_verification",
-          summary: "make test",
-          observedAt: 10,
-        },
-      ],
-      updatedAt: 10,
-    });
-
-    expect(lines).toEqual(
-      expect.arrayContaining([
-        "Workflow state: needs_verification",
-        "Still required before completion: workflow_verifier_pass",
-        "Reusable grounded evidence: make test",
-        "Do not mark this implementation complete until the remaining verifier requirements pass.",
-      ]),
-    );
-  });
 });
