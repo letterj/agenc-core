@@ -750,7 +750,7 @@ describe("GrokProvider", () => {
     });
   });
 
-  it("records provider tool-resolution fallback when routed tools cannot be resolved", async () => {
+  it("suppresses tools when routed allowlist resolves to zero matches (fail-closed)", async () => {
     mockCreate.mockResolvedValueOnce(makeCompletion());
 
     const events: Array<Record<string, unknown>> = [];
@@ -784,21 +784,25 @@ describe("GrokProvider", () => {
       },
     );
 
+    // Previously the adapter fell back to the full catalog here, silently
+    // bypassing the allowlist constraint (audit S1.2). It now returns an
+    // empty tool set with the diagnostic resolution code so the executor
+    // can decide how to recover.
     expect(response.requestMetrics).toMatchObject({
-      toolCount: 1,
-      toolNames: ["system.bash"],
+      toolCount: 0,
+      toolNames: [],
       requestedToolNames: ["mcp.doom.start_game"],
       missingRequestedToolNames: ["mcp.doom.start_game"],
-      toolResolution: "fallback_full_catalog_no_matches",
+      toolResolution: "subset_no_resolved_matches",
       providerCatalogToolCount: 1,
     });
     expect(events[0]).toMatchObject({
       kind: "request",
       context: {
         requestedToolNames: ["mcp.doom.start_game"],
-        resolvedToolNames: ["system.bash"],
+        resolvedToolNames: [],
         missingRequestedToolNames: ["mcp.doom.start_game"],
-        toolResolution: "fallback_full_catalog_no_matches",
+        toolResolution: "subset_no_resolved_matches",
         providerCatalogToolCount: 1,
       },
     });

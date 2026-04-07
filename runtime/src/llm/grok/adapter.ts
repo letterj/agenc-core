@@ -1996,15 +1996,28 @@ export class GrokProvider implements LLMProvider {
     );
 
     if (selected.length === 0) {
+      // The caller explicitly constrained the allowlist to a set of tool
+      // names, but none of those names resolved against the provider
+      // catalog (typo, removed tool, role mismatch, etc.). Returning the
+      // FULL catalog here would silently bypass the allowlist constraint
+      // — exactly the fail-open behavior the audit flagged. Instead emit
+      // an empty tool set with a diagnostic resolution code so the
+      // executor can decide to abort, retry without tools, or surface a
+      // clear error to the operator. The previous behavior shipped under
+      // `fallback_full_catalog_no_matches` is removed.
+      console.warn(
+        `[GrokProvider] Tool allowlist resolved to ${requestedToolNames.length} names but zero matched the provider catalog — suppressing all tools for this call (requested: ${requestedToolNames.join(", ")})`,
+      );
       return {
-        tools: fullCatalogTools,
-        chars: this.toolChars,
+        tools: [],
+        chars: 0,
         requestedToolNames,
-        resolvedToolNames: providerCatalogToolNames,
+        resolvedToolNames: [],
         missingRequestedToolNames: requestedToolNames,
         providerCatalogToolCount,
-        toolResolution: "fallback_full_catalog_no_matches",
+        toolResolution: "subset_no_resolved_matches",
         toolsAttached: false,
+        toolSuppressionReason: "no_allowlist_matches",
       };
     }
 

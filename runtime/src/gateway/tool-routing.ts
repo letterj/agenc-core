@@ -1091,6 +1091,8 @@ export class ToolRouter {
     const expandedToolNames = this.selectExpandedTools(
       scored,
       routedToolNames,
+      blockedToolNames,
+      constrainedAllowedToolNames,
     );
     const confidence = this.estimateConfidence(scored, intentTerms, routedToolNames);
 
@@ -1683,6 +1685,20 @@ export class ToolRouter {
       options?: { readonly limit?: number; readonly ignoreFamilyCap?: boolean },
     ): void => {
       if (selected.has(candidate.name)) return;
+      // Defense-in-depth (audit S1.2): the upstream scoring pass already
+      // assigns blocked/constrained tools `Number.NEGATIVE_INFINITY` and
+      // every existing caller filters via `Number.isFinite(entry.score)`,
+      // so this check is redundant against the current call sites. It is
+      // kept here as an explicit invariant assertion so a future refactor
+      // that wires a non-scored tool through `tryAdd` cannot silently
+      // bypass the allowlist or block list.
+      if (blockedToolNames.has(candidate.name)) return;
+      if (
+        constrainedAllowedToolNames &&
+        !constrainedAllowedToolNames.has(candidate.name)
+      ) {
+        return;
+      }
       const limit = options?.limit ?? maxTools;
       if (selected.size >= limit) return;
 
@@ -1734,12 +1750,34 @@ export class ToolRouter {
         if (selected.size >= maxTools) break;
         if (!Number.isFinite(entry.score)) continue;
         if (selected.has(entry.tool.name)) continue;
+        // Defense-in-depth: blocked/constrained tools have
+        // NEGATIVE_INFINITY scores so the finite check above already
+        // skips them. The explicit checks below preserve the security
+        // invariant against future refactors that might bypass the
+        // sentinel-score filter.
+        if (blockedToolNames.has(entry.tool.name)) continue;
+        if (
+          constrainedAllowedToolNames &&
+          !constrainedAllowedToolNames.has(entry.tool.name)
+        ) {
+          continue;
+        }
         selected.add(entry.tool.name);
       }
     }
 
     if (selected.size === 0) {
-      const fallback = scored.find((entry) => Number.isFinite(entry.score));
+      const fallback = scored.find((entry) => {
+        if (!Number.isFinite(entry.score)) return false;
+        if (blockedToolNames.has(entry.tool.name)) return false;
+        if (
+          constrainedAllowedToolNames &&
+          !constrainedAllowedToolNames.has(entry.tool.name)
+        ) {
+          return false;
+        }
+        return true;
+      });
       if (fallback) {
         selected.add(fallback.tool.name);
       }
@@ -1751,19 +1789,44 @@ export class ToolRouter {
   private selectExpandedTools(
     scored: ReadonlyArray<{ tool: IndexedTool; score: number }>,
     routedToolNames: readonly string[],
+    blockedToolNames: ReadonlySet<string>,
+    constrainedAllowedToolNames: ReadonlySet<string> | null,
   ): string[] {
-    const selected = new Set(routedToolNames);
+    // Strip any tool names from the routed seed that the constraint sets
+    // disallow. routedToolNames came from selectRoutedTools which
+    // enforces the same constraints, but we filter again here so an
+    // upstream regression cannot leak a blocked tool into the expanded
+    // set via the seed.
+    const seedRouted = routedToolNames.filter((name) => {
+      if (blockedToolNames.has(name)) return false;
+      if (
+        constrainedAllowedToolNames &&
+        !constrainedAllowedToolNames.has(name)
+      ) {
+        return false;
+      }
+      return true;
+    });
+    const selected = new Set(seedRouted);
     const maxExpanded = this.config.maxExpandedToolsPerTurn;
 
     for (const entry of scored) {
       if (selected.size >= maxExpanded) break;
       if (!Number.isFinite(entry.score)) continue;
       if (entry.score <= 0) break;
+      // Defense-in-depth: same invariant as selectRoutedTools.
+      if (blockedToolNames.has(entry.tool.name)) continue;
+      if (
+        constrainedAllowedToolNames &&
+        !constrainedAllowedToolNames.has(entry.tool.name)
+      ) {
+        continue;
+      }
       selected.add(entry.tool.name);
     }
 
-    if (selected.size < routedToolNames.length) {
-      for (const name of routedToolNames) selected.add(name);
+    if (selected.size < seedRouted.length) {
+      for (const name of seedRouted) selected.add(name);
     }
 
     return Array.from(selected);
