@@ -725,7 +725,6 @@ export function createGenericRunDomain(): RunDomain {
       run.blocker ? verificationFromBlocker(run.blocker) : undefined,
     detectDeterministicVerification: (run) =>
       run.blocker ? verificationFromBlocker(run.blocker) : undefined,
-    // Cut 4.1: Doom supervision native cycle removed.
   };
 }
 

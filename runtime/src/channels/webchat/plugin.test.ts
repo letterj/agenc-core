@@ -2379,7 +2379,7 @@ describe("WebChatChannel", () => {
           routeMisses: 0,
           completionGateFailures: 0,
         },
-        topTools: [{ name: 'mcp.doom.start_game', count: 1 }],
+        topTools: [{ name: 'mcp.example.start', count: 1 }],
         topStopReasons: [{ name: 'completed', count: 1 }],
       }));
       const listObservabilityTraces = vi.fn(async () => [traceDetail.summary]);

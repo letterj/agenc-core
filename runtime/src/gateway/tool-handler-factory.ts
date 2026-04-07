@@ -69,7 +69,6 @@ const DESKTOP_FILE_MANAGER_LAUNCH_RE = /\b(?:thunar|nautilus)\b/i;
 const DESKTOP_EDITOR_LAUNCH_RE = /\b(?:mousepad|gedit)\b/i;
 const COLLAPSE_WHITESPACE_RE = /\s+/g;
 const APPROVAL_TASK_PREVIEW_MAX_CHARS = 180;
-// Cut 4.1: DOOM_TOOL_PREFIX removed (Doom autoplay subsystem excised).
 const TOOL_NAME_ALIASES: Readonly<Record<string, string>> = {
   "system.makeDir": "system.mkdir",
   "system.listFiles": "system.listDir",
@@ -1773,11 +1772,6 @@ function allowsMissingRootBootstrapCwd(
   return referencesAbsolutePathWithinRoot(toolName, args, normalizedRoot);
 }
 
-// Cut 4.1: isDoomTool + canonicalizeToolFailureResult removed.
-// Doom-specific failure-result wrapping is gone alongside the rest of
-// the Doom autoplay subsystem; the dispatcher now treats `mcp.doom.*`
-// like any other MCP tool.
-
 function normalizeDesktopBashCommand(
   name: string,
   args: Record<string, unknown>,
@@ -3099,9 +3093,6 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
     }
     const durationMs = Date.now() - start;
     incidentDiagnostics?.clearDomain("tool");
-    // Cut 4.1: canonicalizeToolFailureResult was a Doom-specific
-    // failure-result rewrap; removed alongside the rest of the Doom
-    // autoplay subsystem.
     const isError = didToolCallFail(false, result);
     if (!isError) {
       if (toolName === 'system.readFile') {

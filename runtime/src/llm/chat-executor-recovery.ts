@@ -1292,7 +1292,6 @@ function inferRoundRecoveryHint(
   });
   if (!failedManagedStop) return undefined;
 
-  // Cut 4: Doom-specific shell-stop fallback hint removed.
   return undefined;
 }
 
@@ -1300,9 +1299,6 @@ export function inferRecoveryHint(
   call: ToolCallRecord,
 ): RecoveryHint | undefined {
   const parsedResult = parseToolResultObject(call.result);
-  // Cut 4: Doom-specific recovery hints removed (resolution normalization,
-  // async-start verification reminder). mcp.doom.* tools are now handled
-  // by the model directly with no runtime-side coaching.
 
   if (
     !didToolCallFail(call.isError, call.result) &&

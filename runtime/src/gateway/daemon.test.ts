@@ -1325,7 +1325,7 @@ describe("formatTracePayloadForLog", () => {
       callUsage: [
         {
           providerRequestMetrics: {
-            toolNames: ["mcp.doom.start_game"],
+            toolNames: ["mcp.example.start"],
             toolChoice: "required",
           },
           nested: {

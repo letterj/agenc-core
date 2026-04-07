@@ -854,7 +854,6 @@ export async function executeSingleToolCall(
   );
 
   if (abortRound) return "abort_round";
-  // Cut 4: mcp.doom.start_game end-round shortcut removed.
   return "processed";
 }
 

@@ -365,7 +365,7 @@ describe("OllamaProvider", () => {
     const result = await provider.chat(
       [{ role: "user", content: "test" }],
       {
-        toolRouting: { allowedToolNames: ["mcp.doom.start_game"] },
+        toolRouting: { allowedToolNames: ["mcp.example.start"] },
       },
     );
 
@@ -376,8 +376,8 @@ describe("OllamaProvider", () => {
     expect(result.requestMetrics).toMatchObject({
       toolCount: 0,
       toolNames: [],
-      requestedToolNames: ["mcp.doom.start_game"],
-      missingRequestedToolNames: ["mcp.doom.start_game"],
+      requestedToolNames: ["mcp.example.start"],
+      missingRequestedToolNames: ["mcp.example.start"],
       toolResolution: "subset_no_resolved_matches",
       providerCatalogToolCount: 1,
     });

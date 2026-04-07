@@ -292,10 +292,6 @@ import {
   createBackgroundRunToolAfterHook,
   createBackgroundRunWebhookRoute,
 } from "./background-run-wake-adapters.js";
-// Cut 4.1: Doom autoplay subsystem fully excised. The earlier
-// session left no-op shims here so the rest of the runtime would still
-// compile after `chat-executor-doom.ts` was deleted; this commit
-// removes both the shims and the call sites in `executeWebChatTurn`.
 import { parseBackgroundRunQualityArtifact } from "../eval/background-run-quality.js";
 import type { DelegationBenchmarkSummary } from "../eval/delegation-benchmark.js";
 import {
@@ -314,8 +310,6 @@ import {
   wireAutonomousFeatures as wireAutonomousFeaturesStandalone,
   type FeatureWiringContext,
 } from "./daemon-feature-wiring.js";
-// Cut 4.1: doom-stop-guard imports removed alongside the rest of the
-// Doom autoplay subsystem.
 import {
   ObservabilityService,
   setDefaultObservabilityService,
@@ -5449,9 +5443,6 @@ export class DaemonManager {
     }
 
     webChat.broadcastEvent("chat.inbound", { sessionId: msg.sessionId });
-    // Cut 4.1: Doom autoplay subsystem excised. The runtime no longer
-    // special-cases ViZDoom turns; the model treats `mcp.doom.*` like
-    // any other MCP tool.
 
     const activeBackgroundRun =
       this._backgroundRunSupervisor?.getStatusSnapshot(msg.sessionId);
@@ -5624,8 +5615,6 @@ export class DaemonManager {
       traceConfig,
       turnTraceId,
     });
-    // Cut 4.1: post-conversation Doom autoplay → background supervision
-    // hand-off has been removed alongside the rest of the Doom subsystem.
   }
 
   private async executeWebChatConversationTurn(params: {

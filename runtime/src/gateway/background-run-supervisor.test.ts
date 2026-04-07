@@ -389,7 +389,7 @@ describe("background-run-supervisor", () => {
   it("detects explicit long-running intent", () => {
     expect(
       inferBackgroundRunIntent(
-        "Start Doom and keep playing until I tell you to stop.",
+        "Start the long-running probe and keep it running until I tell you to stop.",
       ),
     ).toBe(true);
     expect(
@@ -404,7 +404,7 @@ describe("background-run-supervisor", () => {
     ).toBe(true);
     expect(
       inferBackgroundRunIntent(
-        "Play Doom defending the center, keep it smooth and aggressive, and provide periodic status updates.",
+        "Run the soak workload, keep it stable, and provide periodic status updates.",
       ),
     ).toBe(true);
     expect(inferBackgroundRunIntent("What is 2+2?")).toBe(false);
@@ -539,10 +539,10 @@ describe("background-run-supervisor", () => {
     const publishUpdate = vi.fn(async () => undefined);
     const execute = vi.fn(async () =>
       makeResult({
-        content: "Doom launched and verified.",
+        content: "Soak workload launched and verified.",
         toolCalls: [
           {
-            name: "mcp.doom.start_game",
+            name: "mcp.example.start",
             args: { async_player: true },
             result: '{"status":"running"}',
             isError: false,
@@ -555,7 +555,7 @@ describe("background-run-supervisor", () => {
       name: "supervisor",
       chat: vi.fn(async () => ({
         content:
-          '{"state":"working","userUpdate":"Doom is still running in the background.","internalSummary":"verified running","nextCheckMs":4000,"shouldNotifyUser":true}',
+          '{"state":"working","userUpdate":"Soak workload is still running in the background.","internalSummary":"verified running","nextCheckMs":4000,"shouldNotifyUser":true}',
         toolCalls: [],
         usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
         model: "supervisor-model",
@@ -576,7 +576,7 @@ describe("background-run-supervisor", () => {
 
     await supervisor.startRun({
       sessionId: "session-1",
-      objective: "Play Doom until I say stop and keep me updated.",
+      objective: "Run the soak workload until I say stop and keep me updated.",
     });
     await vi.advanceTimersByTimeAsync(0);
     await eventually(() => {
@@ -598,7 +598,7 @@ describe("background-run-supervisor", () => {
     expect(publishUpdate).toHaveBeenNthCalledWith(
       2,
       "session-1",
-      "Doom is still running in the background.",
+      "Soak workload is still running in the background.",
     );
 
     const snapshot = supervisor.getStatusSnapshot("session-1");
@@ -845,12 +845,12 @@ describe("background-run-supervisor", () => {
     const publishUpdate = vi.fn(async () => undefined);
     const execute = vi.fn(async () =>
       makeResult({
-        content: "Game not started yet. Launching Doom now.",
+        content: "Workload not started yet. Launching the soak workload now.",
         toolCalls: [
           {
-            name: "mcp.doom.get_situation_report",
+            name: "mcp.example.status",
             args: {},
-            result: "No game is running. Call start_game first.",
+            result: "No workload is running. Call start first.",
             isError: true,
             durationMs: 15,
           },
@@ -864,7 +864,7 @@ describe("background-run-supervisor", () => {
         name: "supervisor",
         chat: vi.fn(async () => ({
           content:
-            '{"state":"working","userUpdate":"Doom is running in the background.","internalSummary":"verified running","nextCheckMs":4000,"shouldNotifyUser":true}',
+            '{"state":"working","userUpdate":"Soak workload is running in the background.","internalSummary":"verified running","nextCheckMs":4000,"shouldNotifyUser":true}',
           toolCalls: [],
           usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
           model: "supervisor-model",
@@ -881,7 +881,7 @@ describe("background-run-supervisor", () => {
 
     await supervisor.startRun({
       sessionId: "session-grounded",
-      objective: "Play Doom until I say stop and keep me updated.",
+      objective: "Run the soak workload until I say stop and keep me updated.",
     });
     await vi.advanceTimersByTimeAsync(0);
 
@@ -890,8 +890,8 @@ describe("background-run-supervisor", () => {
       "session-grounded",
       expect.stringContaining("Latest cycle hit only tool errors and will retry"),
     );
-    expect(publishUpdate.mock.calls[1]?.[1]).toContain("No game is running");
-    expect(publishUpdate.mock.calls[1]?.[1]).not.toContain("Doom is running in the background.");
+    expect(publishUpdate.mock.calls[1]?.[1]).toContain("No workload is running");
+    expect(publishUpdate.mock.calls[1]?.[1]).not.toContain("Soak workload is running in the background.");
 
     const snapshot = supervisor.getStatusSnapshot("session-grounded");
     expect(snapshot?.state).toBe("working");
@@ -2249,10 +2249,10 @@ describe("background-run-supervisor", () => {
       chatExecutor: {
         execute: vi.fn(async () =>
           makeResult({
-            content: "Doom is launched and verified.",
+            content: "Soak workload is launched and verified.",
             toolCalls: [
               {
-                name: "mcp.doom.start_game",
+                name: "mcp.example.start",
                 args: { async_player: true },
                 result: '{"status":"running"}',
                 isError: false,
@@ -2276,7 +2276,7 @@ describe("background-run-supervisor", () => {
           })
           .mockResolvedValueOnce({
             content:
-              '{"state":"completed","userUpdate":"Doom setup complete.","internalSummary":"done","shouldNotifyUser":true}',
+              '{"state":"completed","userUpdate":"Soak workload setup complete.","internalSummary":"done","shouldNotifyUser":true}',
             toolCalls: [],
             usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
             model: "supervisor-model",
@@ -2293,7 +2293,7 @@ describe("background-run-supervisor", () => {
 
     await supervisor.startRun({
       sessionId: "session-until-stop",
-      objective: "Keep playing Doom until I tell you to stop.",
+      objective: "Keep running the soak workload until I tell you to stop.",
     });
     await vi.runOnlyPendingTimersAsync();
 

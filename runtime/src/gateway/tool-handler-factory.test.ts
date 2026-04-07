@@ -96,7 +96,7 @@ describe("createSessionToolHandler", () => {
     expect(lifecyclePayload?.toolCallId).toBeDefined();
   });
 
-  it("does not block duplicate same-turn Doom launches after a successful start", async () => {
+  it("does not block duplicate same-turn tool launches after a successful start", async () => {
     const sentMessages: ControlResponse[] = [];
     const send = vi.fn((msg: ControlResponse): void => {
       sentMessages.push(msg);
@@ -112,10 +112,10 @@ describe("createSessionToolHandler", () => {
       send,
     });
 
-    const firstResult = await handler("mcp.doom.start_game", {
+    const firstResult = await handler("mcp.example.start", {
       scenario: "defend_the_center",
     });
-    const secondResult = await handler("mcp.doom.start_game", {
+    const secondResult = await handler("mcp.example.start", {
       scenario: "defend_the_center",
     });
 
@@ -125,7 +125,7 @@ describe("createSessionToolHandler", () => {
     expect(sentMessages.at(-1)).toMatchObject({
       type: "tools.result",
       payload: {
-        toolName: "mcp.doom.start_game",
+        toolName: "mcp.example.start",
       },
     });
   });

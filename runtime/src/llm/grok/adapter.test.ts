@@ -774,7 +774,7 @@ describe("GrokProvider", () => {
     const response = await provider.chat(
       [{ role: "user", content: "inspect the repo" }],
       {
-        toolRouting: { allowedToolNames: ["mcp.doom.start_game"] },
+        toolRouting: { allowedToolNames: ["mcp.example.start"] },
         trace: {
           includeProviderPayloads: true,
           onProviderTraceEvent: (event) => {
@@ -791,17 +791,17 @@ describe("GrokProvider", () => {
     expect(response.requestMetrics).toMatchObject({
       toolCount: 0,
       toolNames: [],
-      requestedToolNames: ["mcp.doom.start_game"],
-      missingRequestedToolNames: ["mcp.doom.start_game"],
+      requestedToolNames: ["mcp.example.start"],
+      missingRequestedToolNames: ["mcp.example.start"],
       toolResolution: "subset_no_resolved_matches",
       providerCatalogToolCount: 1,
     });
     expect(events[0]).toMatchObject({
       kind: "request",
       context: {
-        requestedToolNames: ["mcp.doom.start_game"],
+        requestedToolNames: ["mcp.example.start"],
         resolvedToolNames: [],
-        missingRequestedToolNames: ["mcp.doom.start_game"],
+        missingRequestedToolNames: ["mcp.example.start"],
         toolResolution: "subset_no_resolved_matches",
         providerCatalogToolCount: 1,
       },
@@ -879,8 +879,8 @@ describe("GrokProvider", () => {
         {
           type: "function",
           function: {
-            name: "mcp.doom.start_game",
-            description: "start doom",
+            name: "mcp.example.start",
+            description: "start the example tool",
             parameters: {
               type: "object",
               properties: {
@@ -894,18 +894,18 @@ describe("GrokProvider", () => {
     });
 
     const response = await provider.chat(
-      [{ role: "user", content: "start doom" }],
-      { toolRouting: { allowedToolNames: ["mcp.doom.start_game"] } },
+      [{ role: "user", content: "start the example tool" }],
+      { toolRouting: { allowedToolNames: ["mcp.example.start"] } },
     );
 
     const params = mockCreate.mock.calls[0][0];
     expect(params.tools).toBeDefined();
     expect(params.tools).toHaveLength(1);
-    expect(params.tools[0].name).toBe("mcp.doom.start_game");
+    expect(params.tools[0].name).toBe("mcp.example.start");
     expect(response.requestMetrics).toMatchObject({
       toolCount: 1,
-      toolNames: ["mcp.doom.start_game"],
-      requestedToolNames: ["mcp.doom.start_game"],
+      toolNames: ["mcp.example.start"],
+      requestedToolNames: ["mcp.example.start"],
       missingRequestedToolNames: [],
       toolResolution: "subset_exact",
     });
