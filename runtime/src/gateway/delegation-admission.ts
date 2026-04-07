@@ -4,10 +4,6 @@ import type { DelegationBudgetSnapshot } from "../llm/run-budget.js";
 import { estimateDelegationStepSpendUnits } from "../llm/model-routing-policy.js";
 import { hasRuntimeLimit } from "../llm/runtime-limit-policy.js";
 import {
-  allowsUserMandatedSubagentCardinalityOverride,
-  extractRequiredSubagentOrchestrationRequirements,
-} from "../workflow/subagent-orchestration-requirements.js";
-import {
   deriveDelegationEconomics,
   type DelegationCandidateStep,
   type DelegationEconomics,
@@ -793,15 +789,9 @@ export function assessDelegationAdmission(
     });
   }
 
-  const requiredOrchestration =
-    extractRequiredSubagentOrchestrationRequirements(input.messageText);
-  const allowUserMandatedCardinality =
-    allowsUserMandatedSubagentCardinalityOverride(requiredOrchestration);
-
   if (
     hasRuntimeLimit(input.maxFanoutPerTurn) &&
-    input.steps.length > input.maxFanoutPerTurn &&
-    !allowUserMandatedCardinality
+    input.steps.length > input.maxFanoutPerTurn
   ) {
     return buildDecision({
       allowed: false,
