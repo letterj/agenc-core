@@ -74,6 +74,11 @@ import {
   generateFallbackContent,
   buildPromptToolContent,
 } from "./chat-executor-text.js";
+import {
+  HookRegistry,
+  dispatchHooks,
+  defaultHookExecutor,
+} from "./hooks/index.js";
 
 // ============================================================================
 // Callback interfaces
@@ -134,6 +139,8 @@ export interface ToolLoopConfig {
   readonly retryPolicyMatrix: LLMRetryPolicyMatrix;
   readonly allowedTools: Set<string> | null;
   readonly toolFailureBreaker: ToolFailureCircuitBreaker;
+  /** Cut 5.2: hook registry for PreToolUse / PostToolUse / PostToolUseFailure. */
+  readonly hookRegistry?: HookRegistry;
 }
 
 // ============================================================================
@@ -565,6 +572,50 @@ export async function executeSingleToolCall(
     },
   });
 
+  // Cut 5.2: PreToolUse hook dispatch. With no hooks registered (the
+  // default) the registry returns `noop` immediately and behavior is
+  // unchanged. Hooks may rewrite tool args via `updatedInput` or deny
+  // the call outright.
+  if (config.hookRegistry) {
+    const preDispatch = await dispatchHooks({
+      registry: config.hookRegistry,
+      event: "PreToolUse",
+      matchKey: toolCall.name,
+      executor: defaultHookExecutor,
+      context: {
+        event: "PreToolUse",
+        sessionId: ctx.sessionId,
+        toolCall,
+      },
+    });
+    if (preDispatch.action === "deny") {
+      const denyMessage =
+        preDispatch.message ??
+        `Tool "${toolCall.name}" blocked by PreToolUse hook`;
+      callbacks.pushMessage(
+        ctx,
+        {
+          role: "tool",
+          content: denyMessage,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+        },
+        "tools",
+      );
+      callbacks.appendToolRecord(ctx, {
+        name: toolCall.name,
+        args,
+        result: denyMessage,
+        isError: true,
+        durationMs: 0,
+      });
+      return "skip";
+    }
+    if (preDispatch.updatedInput) {
+      args = preDispatch.updatedInput as typeof args;
+    }
+  }
+
   // Execute tool with retry.
   const exec = await executeToolWithRetry(
     toolCall,
@@ -626,6 +677,38 @@ export async function executeSingleToolCall(
       result,
     },
   });
+
+  // Cut 5.2: PostToolUse / PostToolUseFailure hook dispatch.
+  if (config.hookRegistry) {
+    if (exec.toolFailed) {
+      await dispatchHooks({
+        registry: config.hookRegistry,
+        event: "PostToolUseFailure",
+        matchKey: toolCall.name,
+        executor: defaultHookExecutor,
+        context: {
+          event: "PostToolUseFailure",
+          sessionId: ctx.sessionId,
+          toolCall,
+          errorMessage: result,
+        },
+      });
+    } else {
+      await dispatchHooks({
+        registry: config.hookRegistry,
+        event: "PostToolUse",
+        matchKey: toolCall.name,
+        executor: defaultHookExecutor,
+        context: {
+          event: "PostToolUse",
+          sessionId: ctx.sessionId,
+          toolCall,
+          result,
+          isError: exec.toolFailed,
+        },
+      });
+    }
+  }
 
   if (isRuntimeLimitExceeded(ctx.failedToolCalls, ctx.effectiveFailureBudget)) {
     callbacks.setStopReason(

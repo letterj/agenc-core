@@ -48,6 +48,7 @@ import {
 import type {
   DelegationBanditPolicyTuner,
 } from "./delegation-learning.js";
+import type { HookRegistry } from "./hooks/index.js";
 // ---------------------------------------------------------------------------
 // Imports from extracted sibling modules
 // ---------------------------------------------------------------------------
@@ -352,6 +353,14 @@ export class ChatExecutor {
   private readonly economicsPolicy: RuntimeEconomicsPolicy;
   private readonly modelRoutingPolicy: ModelRoutingPolicy;
   private readonly defaultRunClass?: RuntimeRunClass;
+  /**
+   * Cut 5.2: optional hook registry. When set, the chat-executor fires
+   * PreToolUse/PostToolUse/PostToolUseFailure events at the tool
+   * dispatch boundary inside chat-executor-tool-loop.ts. With no
+   * registry (the default) the hooks code paths short-circuit and the
+   * runtime behaves identically to the pre-hooks shape.
+   */
+  private readonly hookRegistry?: HookRegistry;
 
   private readonly cooldowns = new Map<string, CooldownEntry>();
   private readonly sessionTokens = new Map<string, number>();
@@ -466,6 +475,7 @@ export class ChatExecutor {
       economicsPolicy: this.economicsPolicy,
     });
     this.defaultRunClass = config.defaultRunClass;
+    this.hookRegistry = config.hookRegistry;
   }
 
   private static resolveSubagentVerifierConfig(
@@ -1657,6 +1667,7 @@ export class ChatExecutor {
       retryPolicyMatrix: this.retryPolicyMatrix,
       allowedTools: this.allowedTools,
       toolFailureBreaker: this.toolFailureBreaker,
+      ...(this.hookRegistry ? { hookRegistry: this.hookRegistry } : {}),
     }, this.buildToolLoopCallbacks());
   }
 
