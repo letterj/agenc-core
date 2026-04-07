@@ -3023,11 +3023,24 @@ export class BackgroundRunSupervisor {
       clearTimeout(this.workerHeartbeatTimer);
       this.workerHeartbeatTimer = null;
     }
+    // Audit S3.1: log the drain-state set failure so an operator can
+    // observe a worker that failed to mark itself draining. The
+    // failure is intentionally not propagated because the shutdown
+    // sequence still needs to proceed (releasing leases below) — but
+    // a silent drop made resurrection-after-stale-worker bugs hard
+    // to debug.
     await this.runStore.setWorkerDrainState({
       workerId: this.instanceId,
       draining: true,
       now: this.now(),
-    }).catch(() => undefined);
+    }).catch((err: unknown) => {
+      this.logger.warn(
+        `[background-run-supervisor] failed to set worker drain state during stop: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return undefined;
+    });
     const runs = [...this.activeRuns.values()];
     for (const run of runs) {
       this.clearRunTimers(run);
@@ -3064,7 +3077,18 @@ export class BackgroundRunSupervisor {
       this.activeRuns.delete(run.sessionId);
       await this.wakeBus.clearSession(run.sessionId);
     }
-    await this.runStore.removeWorker(this.instanceId).catch(() => undefined);
+    // Audit S3.1: log worker removal failure for the same reason as
+    // setWorkerDrainState above. A silent drop here leaves a stale
+    // worker registration that can confuse leader election on the
+    // next boot.
+    await this.runStore.removeWorker(this.instanceId).catch((err: unknown) => {
+      this.logger.warn(
+        `[background-run-supervisor] failed to remove worker registration during stop: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return undefined;
+    });
     this.wakeBus.dispose();
   }
 

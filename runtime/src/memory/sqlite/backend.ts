@@ -515,8 +515,18 @@ export class SqliteBackend implements MemoryBackend {
           CREATE INDEX IF NOT EXISTS idx_entries_workspace_session ON memory_entries(workspace_id, session_id, timestamp);
         `);
       }
-    } catch {
-      // Migration not needed or already applied
+    } catch (err) {
+      // Audit S3.2: log instead of silently swallowing the migration
+      // failure. The previous comment "Migration not needed or
+      // already applied" was correct ONLY for ALTER TABLE failures
+      // caused by the column already existing. Any other failure
+      // (locked DB, corrupted file, schema mismatch) was silently
+      // dropped, leaving the backend running against an under-
+      // migrated schema. The catch is kept (so a benign re-migration
+      // doesn't crash startup) but a warning is now emitted.
+      this.logger.warn(
+        `[sqlite] schema migration check failed: ${(err as Error).message}`,
+      );
     }
   }
 
