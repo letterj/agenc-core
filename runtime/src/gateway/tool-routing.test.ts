@@ -658,37 +658,6 @@ describe("ToolRouter", () => {
     expect(decision.expandedToolNames).not.toContain("system.serverResume");
   });
 
-  it("treats C++ Doom-clone prompts as host codegen instead of Doom gameplay intent", () => {
-    const router = new ToolRouter(TOOLS, {
-      maxToolsPerTurn: 18,
-      minToolsPerTurn: 6,
-      maxExpandedToolsPerTurn: 24,
-    });
-
-    const decision = router.route({
-      sessionId: "s-host-codegen-doom-clone-cpp",
-      messageText:
-        "Build a complete standalone C++ Doom 1-inspired FPS in /tmp/codegen-bench-doom1-cpp-host. " +
-        "Use CMake, write the full codebase, and keep iterating until it builds cleanly.",
-      history: [],
-    });
-
-    expect(decision.routedToolNames).toEqual(
-      expect.arrayContaining([
-        "system.bash",
-        "system.readFile",
-        "system.writeFile",
-        "system.listDir",
-        "execute_with_agent",
-      ]),
-    );
-    expect(decision.routedToolNames).not.toContain("mcp.doom.start_game");
-    expect(decision.routedToolNames).not.toContain("mcp.doom.get_state");
-    expect(decision.routedToolNames).not.toContain("desktop.bash");
-    expect(decision.expandedToolNames).not.toContain("mcp.doom.start_game");
-    expect(decision.expandedToolNames).not.toContain("desktop.bash");
-  });
-
   it("treats host code/file/system tools phrasing as host-only codegen intent", () => {
     const router = new ToolRouter(TOOLS, {
       maxToolsPerTurn: 18,

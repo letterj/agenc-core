@@ -304,18 +304,12 @@ const OFFICE_DOCUMENT_TERMS = createTypedArtifactTermSet("office-document", "rou
 const EMAIL_MESSAGE_TERMS = createTypedArtifactTermSet("email-message", "routingTerms");
 const CALENDAR_TERMS = createTypedArtifactTermSet("calendar", "routingTerms");
 
-const DOOM_TERMS = new Set([
-  "doom",
-  "vizdoom",
-  "defend_the_center",
-  "freedoom",
-]);
-
-const DOOM_INTENT_RE = /\b(?:doom|vizdoom|defend_the_center|freedoom)\b/i;
+// Cut 4: DOOM_TERMS and DOOM_INTENT_RE removed (Doom autoplay subsystem
+// excised; the mcp.doom.* prefix has no special meaning to the router).
 const NEGATED_TOOL_CLAUSE_RE =
   /\b(?:do\s+not(?:\s+use)?|don't(?:\s+use)?|dont(?:\s+use)?|avoid|without|never(?:\s+use)?|exclude|skip)\b/i;
 const COMPACT_NEGATED_TOOL_CLAUSE_RE =
-  /\bnot\s+(?:use\s+)?(?:any\s+)?(?:desktop(?:\.\*)?|browser|playwright|sandbox|docker|container|doom|vizdoom|freedoom)(?:\s*\/\s*(?:desktop(?:\.\*)?|browser|playwright|sandbox|docker|container|doom|vizdoom|freedoom))*\b/;
+  /\bnot\s+(?:use\s+)?(?:any\s+)?(?:desktop(?:\.\*)?|browser|playwright|sandbox|docker|container)(?:\s*\/\s*(?:desktop(?:\.\*)?|browser|playwright|sandbox|docker|container))*\b/;
 const EXPLICIT_TOOL_ALLOWLIST_RE =
   /\b(?:use\s+only|only\s+these\s+tools?)\b/i;
 const HOST_CODING_TOOLS_RE =
@@ -626,18 +620,9 @@ function isBrowserToolName(toolName: string): boolean {
   );
 }
 
-function isDoomToolName(toolName: string): boolean {
-  return toolName.startsWith("mcp.doom.");
-}
-
-function hasExplicitDoomToolMention(
-  explicitToolMentions: ReadonlySet<string>,
-): boolean {
-  for (const toolName of explicitToolMentions) {
-    if (isDoomToolName(toolName)) return true;
-  }
-  return false;
-}
+// Cut 4: Doom tool-name detection removed alongside the rest of the
+// Doom autoplay subsystem. `mcp.doom.*` is now treated like any other
+// MCP tool — no special intent detection or blocking.
 
 function inferBlockedToolNamesForMessage(
   messageText: string,
@@ -648,7 +633,6 @@ function inferBlockedToolNamesForMessage(
   let blockDesktop = false;
   let blockBrowser = false;
   let blockSandbox = false;
-  let blockDoom = false;
   const compactNegatedClause =
     normalized.match(COMPACT_NEGATED_TOOL_CLAUSE_RE)?.[0] ?? "";
   const hasNegatedDesktop =
@@ -666,16 +650,10 @@ function inferBlockedToolNamesForMessage(
     /(?:do\s+not(?:\s+use)?|don't(?:\s+use)?|dont(?:\s+use)?|avoid|without|never(?:\s+use)?|exclude|skip)[^!\n]{0,160}\b(?:sandbox|docker|container)\b/.test(
       normalized,
     ) || /\b(?:sandbox|docker|container)\b/.test(compactNegatedClause);
-  const hasNegatedDoom =
-    NEGATED_TOOL_CLAUSE_RE.test(normalized) &&
-    /(?:do\s+not(?:\s+use)?|don't(?:\s+use)?|dont(?:\s+use)?|avoid|without|never(?:\s+use)?|exclude|skip)[^!\n]{0,160}\b(?:doom|vizdoom|freedoom)\b/.test(
-      normalized,
-    ) || /\b(?:doom|vizdoom|freedoom)\b/.test(compactNegatedClause);
 
   blockDesktop = hasNegatedDesktop;
   blockBrowser = hasNegatedBrowser;
   blockSandbox = hasNegatedSandbox;
-  blockDoom = hasNegatedDoom;
 
   for (const toolName of allToolNames) {
     if (
@@ -690,10 +668,6 @@ function inferBlockedToolNamesForMessage(
       continue;
     }
     if (blockSandbox && SANDBOX_TOOL_NAMES.has(toolName)) {
-      blocked.add(toolName);
-      continue;
-    }
-    if (blockDoom && isDoomToolName(toolName)) {
       blocked.add(toolName);
     }
   }
@@ -781,7 +755,6 @@ function hasStrongCurrentIntent(terms: readonly string[]): boolean {
     OFFICE_DOCUMENT_TERMS.has(term) ||
     EMAIL_MESSAGE_TERMS.has(term) ||
     CALENDAR_TERMS.has(term) ||
-    DOOM_TERMS.has(term) ||
     TERMINAL_TERMS.has(term) ||
     BROWSER_TERMS.has(term) ||
     MCP_TERMS.has(term)
@@ -1304,8 +1277,7 @@ export class ToolRouter {
       wantsTypedServer ||
       prefersDesktopProcessHandles ||
       hasExplicitHostProcessHandleMention;
-    const hasDoomIntent = intentTerms.some((term) => DOOM_TERMS.has(term));
-    const wantsDoomStop = hasDoomIntent && wantsProcessStop;
+    // Cut 4: Doom intent / stop derived terms removed.
     const hasBrowserIntent = intentTerms.some((term) => BROWSER_TERMS.has(term));
     const wantsResearchHandles =
       hasResearchIntent &&
@@ -1335,13 +1307,8 @@ export class ToolRouter {
       ) {
         return { tool, score: Number.NEGATIVE_INFINITY };
       }
-      if (
-        isDoomToolName(tool.name) &&
-        !DOOM_INTENT_RE.test(messageText) &&
-        !hasExplicitDoomToolMention(explicitToolMentions)
-      ) {
-        return { tool, score: Number.NEGATIVE_INFINITY };
-      }
+      // Cut 4: Doom intent gating removed; mcp.doom.* tools score
+      // through the same path as any other MCP tool.
       if (
         hasHostCodegenIntent &&
         !constrainedAllowedToolNames
@@ -1349,12 +1316,6 @@ export class ToolRouter {
         if (
           tool.family === "desktop" &&
           !explicitToolMentions.has(tool.name)
-        ) {
-          return { tool, score: Number.NEGATIVE_INFINITY };
-        }
-        if (
-          isDoomToolName(tool.name) &&
-          !hasExplicitDoomToolMention(explicitToolMentions)
         ) {
           return { tool, score: Number.NEGATIVE_INFINITY };
         }
@@ -1501,18 +1462,7 @@ export class ToolRouter {
       ) {
         score += 12;
       }
-      if (hasDoomIntent && tool.name.startsWith("mcp.doom.")) {
-        score += 10;
-      }
-      if (wantsDoomStop) {
-        if (tool.name === "mcp.doom.stop_game") {
-          score += 24;
-        } else if (tool.name === "desktop.process_stop") {
-          score -= 10;
-        } else if (tool.name === "desktop.bash") {
-          score -= 6;
-        }
-      }
+      // Cut 4: Doom-intent scoring removed.
       if (terminalIntent !== "none" && tool.family === "mcp.kitty") {
         score += 4;
       }
