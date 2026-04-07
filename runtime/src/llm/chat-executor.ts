@@ -516,8 +516,7 @@ export class ChatExecutor {
     const ctx = await this.initializeExecutionContext(params);
 
     // Planner path removed in Phase 2 of the refactor — every request
-    // now flows through `executeToolCallLoop` directly. See PR #188 for
-    // the simpleAgentLoop flag that gated this for Phase 1.
+    // now flows through `executeToolCallLoop` directly.
 
     // Direct path: initial LLM call + tool loop. The planner subsystem
     // was deleted in Phase 2; `plannerHandled` is always false here and

@@ -124,7 +124,6 @@ export function createChatExecutor(
     maxToolRounds: params.maxToolRounds,
     plannerEnabled:
       llmConfig?.plannerEnabled ?? subagentConfig.enabled,
-    simpleAgentLoop: llmConfig?.simpleAgentLoop ?? true,
     plannerMaxTokens: llmConfig?.plannerMaxTokens,
     toolBudgetPerRequest: llmConfig?.toolBudgetPerRequest,
     maxModelRecallsPerRequest: llmConfig?.maxModelRecallsPerRequest,

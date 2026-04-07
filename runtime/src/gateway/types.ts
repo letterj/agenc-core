@@ -74,12 +74,6 @@ export interface GatewayLLMConfig extends LLMXaiCapabilitySurface {
   maxToolRounds?: number;
   /** Enable planner/executor split for high-complexity turns. */
   plannerEnabled?: boolean;
-  /**
-   * Bypass the planner subsystem entirely and run a Claude Code-style
-   * tool loop directly. Defaults to true. Set false to fall back to the
-   * legacy planner-driven flow during the transition window.
-   */
-  simpleAgentLoop?: boolean;
   /** Maximum output tokens for the planner pass. 0 or undefined = unlimited. */
   plannerMaxTokens?: number;
   /** Maximum tool calls allowed in one request execution. 0 or undefined = unlimited. */

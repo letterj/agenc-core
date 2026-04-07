@@ -2770,9 +2770,6 @@ function validateLlmSection(llm: unknown, errors: string[]): void {
   if (llm.plannerEnabled !== undefined && typeof llm.plannerEnabled !== "boolean") {
     errors.push("llm.plannerEnabled must be a boolean");
   }
-  if (llm.simpleAgentLoop !== undefined && typeof llm.simpleAgentLoop !== "boolean") {
-    errors.push("llm.simpleAgentLoop must be a boolean");
-  }
   if (llm.plannerMaxTokens !== undefined) {
     requireUnlimitedOrIntRange(
       llm.plannerMaxTokens,

@@ -459,20 +459,6 @@ export interface ChatExecutorConfig {
   readonly maxTrackedSessions?: number;
   /** Enable planner/executor split for high-complexity turns. */
   readonly plannerEnabled?: boolean;
-  /**
-   * When true, bypass the planner subsystem AND the contract-inference
-   * machinery entirely, running a Claude Code-style tool loop directly:
-   * the model is given the system prompt + tools + history, called once,
-   * and the loop continues as long as it returns tool_use blocks. No
-   * structured plan, no completion contract synthesis, no placeholder
-   * detector, no salvage paths, no refinement retries. Defaults to true.
-   * Set false to fall back to the legacy planner-driven flow.
-   *
-   * The legacy planner subsystem is being removed; this flag exists for
-   * the transition window so the old path can still be exercised by
-   * eval/regression jobs while the new path is rolled out.
-   */
-  readonly simpleAgentLoop?: boolean;
   /** Max output tokens for the planner pass (bounded planning call). */
   readonly plannerMaxTokens?: number;
   /**
