@@ -36,6 +36,7 @@ import type {
   PlannerDeterministicToolStepIntent,
   PlannerSubAgentTaskStepIntent,
   PlannerPlan,
+  PlannerPlanArtifactIntent,
   PlannerParseResult,
   PlannerDiagnostic,
   PlannerGraphValidationConfig,
@@ -420,38 +421,20 @@ export function assessPlannerDecision(
     };
   }
 
-  const artifactIntent = classifyPlannerPlanArtifactIntent(messageText);
-
-  if (artifactIntent === "grounded_plan_generation") {
+  // Pre-planner routing only needs to know "does this turn reference a
+  // planning artifact", NOT what the user wants done with it. The actual
+  // EDIT vs IMPLEMENT vs GENERATE decision is made by the model later and
+  // surfaced as `plan_intent` in the planner JSON output. Force planning
+  // whenever an artifact path is mentioned so the model gets the rubric.
+  const referencedArtifacts = extractPlannerArtifactTargets(messageText);
+  if (referencedArtifacts.length > 0) {
     return {
       score: Math.max(score, 4),
       shouldPlan: true,
       reason:
         reasons.length > 0
-          ? `${reasons.join("+")}+plan_artifact_request`
-          : "plan_artifact_request",
-    };
-  }
-
-  if (artifactIntent === "edit_artifact") {
-    return {
-      score: Math.max(score, 4),
-      shouldPlan: true,
-      reason:
-        reasons.length > 0
-          ? `${reasons.join("+")}+plan_artifact_execution_request`
-          : "plan_artifact_execution_request",
-    };
-  }
-
-  if (artifactIntent === "implement_from_artifact") {
-    return {
-      score: Math.max(score, 4),
-      shouldPlan: true,
-      reason:
-        reasons.length > 0
-          ? `${reasons.join("+")}+artifact_spec_execution_request`
-          : "artifact_spec_execution_request",
+          ? `${reasons.join("+")}+plan_artifact_reference`
+          : "plan_artifact_reference",
     };
   }
 
@@ -737,73 +720,20 @@ export function buildPlannerMessages(
     extractPlannerVerificationRequirements(messageText);
   const verificationCommandRequirements =
     extractPlannerVerificationCommandRequirements(messageText);
-  const artifactIntent = classifyPlannerPlanArtifactIntent(messageText);
-  const planArtifactExecutionRequest = artifactIntent === "edit_artifact";
-  const implementFromArtifactRequest =
-    artifactIntent === "implement_from_artifact";
-  const groundedPlanArtifactRequest =
-    artifactIntent === "grounded_plan_generation";
-  const workspaceGroundedArtifactUpdate =
-    plannerRequestNeedsWorkspaceGroundedArtifactUpdate(messageText);
-  const sameTargetImplementFromArtifactHistoryBlockedRe =
-    /\b(?:validation_error|workflow state:\s*(?:blocked|partial)|inline legacy fallback is disabled|planner emitted a structured plan that failed local validation|implementation-class completion requires workflow-owned verification closure|do not present the work as complete)\b/i;
+  // Artifact-target extraction is parsing, not classification — the model
+  // needs to know which file paths the user mentioned. The intent (edit vs
+  // implement vs generate) used to be decided here by a regex classifier; it
+  // is now decided by the model and surfaced as `plan_intent` in its JSON
+  // response. Downstream validators read `plannerPlan.planIntent` instead of
+  // re-running a regex against the user message.
   const currentArtifactTargets = extractPlannerArtifactTargets(messageText);
   const hostToolingHint = buildPlannerHostToolingHint(
     messageText,
     history,
     hostToolingProfile,
   );
-  let suppressImmediateAssistantReply = false;
   const historyPreview = history
     .slice(-6)
-    .filter((entry) => {
-      const raw =
-        typeof entry.content === "string"
-          ? entry.content
-          : entry.content
-              .filter((part) => part.type === "text")
-              .map((part) => part.text)
-              .join(" ");
-      if (!implementFromArtifactRequest) {
-        suppressImmediateAssistantReply = false;
-        return true;
-      }
-      if (entry.role === "assistant" && suppressImmediateAssistantReply) {
-        suppressImmediateAssistantReply = false;
-        return false;
-      }
-      const entryIntent = classifyPlannerPlanArtifactIntent(raw);
-      const sameArtifactTarget = plannerArtifactTargetsOverlap(
-        currentArtifactTargets,
-        extractPlannerArtifactTargets(raw),
-      );
-      if (
-        sameArtifactTarget &&
-        (
-          entryIntent === "grounded_plan_generation" ||
-          entryIntent === "edit_artifact"
-        )
-      ) {
-        suppressImmediateAssistantReply = entry.role === "user";
-        return false;
-      }
-      if (
-        sameArtifactTarget &&
-        entryIntent === "implement_from_artifact"
-      ) {
-        suppressImmediateAssistantReply = entry.role === "user";
-        return false;
-      }
-      if (
-        sameArtifactTarget &&
-        entry.role === "assistant" &&
-        sameTargetImplementFromArtifactHistoryBlockedRe.test(raw)
-      ) {
-        return false;
-      }
-      suppressImmediateAssistantReply = false;
-      return true;
-    })
     .map((entry) => {
       const raw =
         typeof entry.content === "string"
@@ -827,16 +757,11 @@ export function buildPlannerMessages(
       : canonicalPlannerWorkspaceRoot
       ? `${canonicalPlannerWorkspaceRoot}/${schemaPrimaryArtifact}`
       : `<actual-workspace-root>/${schemaPrimaryArtifact}`;
-  const schemaTargetArtifact =
-    groundedPlanArtifactRequest || planArtifactExecutionRequest
-      ? schemaPlanArtifact
-      : implementFromArtifactRequest
-      ? schemaWorkspaceRoot
-      : (
-          canonicalPlannerWorkspaceRoot
-            ? `${canonicalPlannerWorkspaceRoot}/src`
-            : "<actual-workspace-root>/src"
-        );
+  // Schema example value only — the model decides the real targetArtifacts
+  // for each step from context now, not from a pre-classified intent flag.
+  const schemaTargetArtifact = canonicalPlannerWorkspaceRoot
+    ? `${canonicalPlannerWorkspaceRoot}/src`
+    : "<actual-workspace-root>/src";
 
   const messages: LLMMessage[] = [
     {
@@ -847,6 +772,7 @@ export function buildPlannerMessages(
         "{\n" +
         '  "reason": "short routing reason",\n' +
         '  "requiresSynthesis": boolean,\n' +
+        '  "plan_intent": "edit_artifact|implement_from_artifact|grounded_plan_generation|none",\n' +
         '  "steps": [\n' +
         "    {\n" +
         '      "name": "step_name",\n' +
@@ -984,17 +910,6 @@ export function buildPlannerMessages(
     });
   }
 
-  if (workspaceGroundedArtifactUpdate) {
-    messages.push({
-      role: "system",
-      content:
-        "This is a workspace-grounded artifact update request. " +
-        "Do not satisfy it by reading and rewriting the planning document alone. " +
-        "The plan must preserve meaningful inspection of the current workspace state or codebase layout before final artifact mutation, " +
-        "and the delegated write step's objective or acceptance criteria must explicitly require the updated artifact to reflect current workspace state, repo layout, or recent directory changes.",
-    });
-  }
-
   if (verificationCommandRequirements.length > 0) {
     messages.push({
       role: "system",
@@ -1005,36 +920,19 @@ export function buildPlannerMessages(
     });
   }
 
-  if (planArtifactExecutionRequest) {
+  if (currentArtifactTargets.length > 0) {
     messages.push({
       role: "system",
       content:
-        "This is a plan-artifact EDIT request — the user wants to modify the plan/document FILE itself. " +
-        "The deliverable is the updated plan file, NOT the implementation of what the plan describes. " +
-        "Read the plan file first, then write the updated version back with the requested changes. " +
-        "Do NOT create source code files, run build commands, or spawn implementation sub-agents. " +
-        "Keep the plan as a single deterministic read → write sequence.",
-    });
-  }
-  if (groundedPlanArtifactRequest || planArtifactExecutionRequest) {
-    messages.push({
-      role: "system",
-      content:
-        "This request must materialize the named planning artifact itself. " +
-        `The step that mutates ${schemaTargetArtifact} may be either a final deterministic \`system.writeFile\`/\`system.appendFile\` step or a single bounded \`subagent_task\` whose \`execution_context.targetArtifacts\` explicitly include ${schemaTargetArtifact}. ` +
-        "Do not target a different file for the final artifact update.",
-    });
-  }
-  if (implementFromArtifactRequest) {
-    messages.push({
-      role: "system",
-      content:
-        "The named planning artifact is the source specification for implementation work, not the primary artifact to rewrite. " +
-        "Plan code changes, build/test verification, and bounded delegated implementation around the source spec. " +
-        "Unless the user explicitly bounded mutable scope to a narrower subtree, the single mutable implementation owner should own the workspace root so it can update source files, headers, tests, and root config files required by the plan. " +
-        "Do not collapse the task into editing the planning artifact unless the user explicitly asks to update that artifact. " +
-        "A plan that only reads the plan artifact, lists files, or produces read-only analysis is invalid for this request class. " +
-        "Emit at least one concrete mutable implementation step, or a deterministic build/test-backed mutation path that changes owned source artifacts.",
+        "The user message references one or more planning artifacts: " +
+        `${currentArtifactTargets.join(", ")}.\n` +
+        "Decide for yourself which of the following intents applies to this turn and emit it as the top-level `plan_intent` field in your JSON response:\n" +
+        "  - `edit_artifact`: the user wants the named planning file modified in place. The deliverable is the updated plan file. Read it, apply the requested changes, write it back. Do NOT create source code files or run build commands.\n" +
+        "  - `implement_from_artifact`: the user wants the work the plan describes built. The named file is a source specification, NOT the primary artifact to rewrite. Plan code changes, build/test verification, and bounded delegated implementation around the source spec. Emit at least one concrete mutable implementation step that changes owned source artifacts. Do not collapse the task into editing the planning artifact.\n" +
+        "  - `grounded_plan_generation`: the user wants a NEW planning document written from scratch (or an existing skeleton fully populated for the first time). Materialize the named artifact itself.\n" +
+        "  - `none`: no planning-artifact intent applies for this turn.\n" +
+        "How to choose: read the user's literal request words AND the surrounding context (what files exist in the workspace, what was discussed in recent turns, whether the named file is empty/skeletal vs already-substantive). Surface the verb the user used (\"implement\", \"build\", \"finish\", \"ship\" → implement_from_artifact; \"audit\", \"review\", \"fix gaps\", \"fill missing\", \"polish\", \"rewrite\" → edit_artifact; \"draft\", \"write\", \"generate from scratch\" → grounded_plan_generation). When the literal verb is genuinely ambiguous AND the surrounding context does not disambiguate, ask one clarifying question instead of guessing. Do not lock in a destructive intent based on a surface keyword alone.\n" +
+        "After choosing, emit steps consistent with the chosen intent. Do not mix intents in one plan.",
     });
   }
 
@@ -1081,6 +979,14 @@ export function buildPlannerStructuredOutputRequest(): LLMStructuredOutputReques
           reason: { type: "string" },
           confidence: { type: "number" },
           requiresSynthesis: { type: "boolean" },
+          plan_intent: {
+            enum: [
+              "edit_artifact",
+              "implement_from_artifact",
+              "grounded_plan_generation",
+              "none",
+            ],
+          },
           steps: {
             type: "array",
             items: {
@@ -1280,8 +1186,13 @@ export type PlannerVerificationRequirementCategory =
   | "test"
   | "browser";
 
-const PLANNER_PLAN_ARTIFACT_REQUEST_RE =
-  /\b(?:write|create|draft|generate|produce|make|turn|convert|rewrite|expand|flesh\s+out|promote)\b[\s\S]{0,120}\b(?:implementation plan|project plan|plan doc(?:ument)?|roadmap|checklist|spec(?:ification)?)\b/i;
+// PLANNER_EXPLICIT_ARTIFACT_* are parsing regexes used by
+// `extractPlannerArtifactTargets` to find @-mentioned and quoted file paths in
+// the user message. They do NOT classify intent — they only locate references.
+// The four classifier-cue regexes (PLANNER_PLAN_ARTIFACT_REQUEST_RE,
+// PLANNER_PLAN_ARTIFACT_PHASE_CUE_RE, PLANNER_PLAN_ARTIFACT_EDIT_CUE_RE,
+// PLANNER_PLAN_ARTIFACT_IMPLEMENTATION_CUE_RE) were removed alongside
+// `classifyPlannerPlanArtifactIntent` on 2026-04-06.
 const PLANNER_EXPLICIT_ARTIFACT_AT_REF_RE =
   /(?:^|[\s(])@((?:\.{0,2}\/|\/)?[A-Za-z0-9._\/-]+(?:\.[A-Za-z0-9._-]+)?)/g;
 const PLANNER_EXPLICIT_ARTIFACT_QUOTED_RE =
@@ -1292,12 +1203,6 @@ const PLANNER_EXPLICIT_ARTIFACT_SPECIAL_BASENAME_RE =
   /^(?:Makefile|Dockerfile|CMakeLists\.txt|README(?:\.[A-Za-z0-9._-]+)?|CHANGELOG(?:\.[A-Za-z0-9._-]+)?|CONTRIBUTING(?:\.[A-Za-z0-9._-]+)?|LICENSE(?:\.[A-Za-z0-9._-]+)?|COPYING(?:\.[A-Za-z0-9._-]+)?|AGENTS\.md|CLAUDE\.md|TODO(?:\.[A-Za-z0-9._-]+)?)$/i;
 const PLANNER_ARTIFACT_FILE_EXTENSION_RE =
   /^(?:c|cc|cpp|cxx|h|hpp|m|mm|rs|go|py|rb|php|java|kt|swift|cs|js|jsx|ts|tsx|json|toml|yaml|yml|xml|sh|zsh|bash|md|txt|rst|adoc|html|css|scss|less|sql|csv|tsv|ini|cfg|conf|env|lock)$/i;
-const PLANNER_PLAN_ARTIFACT_PHASE_CUE_RE =
-  /\b(?:phase|step|task|item)s?\b/i;
-const PLANNER_PLAN_ARTIFACT_EDIT_CUE_RE =
-  /\b(?:update|rewrite|improve|perfect|polish|edit|revise|expand|flesh\s+out|address\s+gaps?|fix\s+gaps?|tighten|correct)\b/i;
-const PLANNER_PLAN_ARTIFACT_IMPLEMENTATION_CUE_RE =
-  /\b(?:all|each|every|entire|full|fully|phase\s+by\s+phase|one\s+phase\s+at\s+a\s+time|before\s+moving\s+on|move\s+on\s+to\s+the\s+next\s+phase)\b/i;
 const REQUEST_VERIFICATION_DIRECTIVE_RE =
   /\b(?:verify|verification|validated?|before\s+finish(?:ing)?|before\s+returning|before\s+completion|browser-grounded checks?)\b/i;
 const REQUEST_INSTALL_VERIFICATION_RE =
@@ -1305,11 +1210,11 @@ const REQUEST_INSTALL_VERIFICATION_RE =
 const REQUEST_BUILD_VERIFICATION_RE =
   /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:build|typecheck|lint)\b|\b(?:vite\s+build|tsc\b|build(?:s|ing)?|compile(?:s|d|ing)?|typecheck(?:s|ed|ing)?|lint(?:s|ed|ing)?)\b/i;
 
-export type PlannerPlanArtifactIntent =
-  | "none"
-  | "grounded_plan_generation"
-  | "edit_artifact"
-  | "implement_from_artifact";
+// PlannerPlanArtifactIntent is now defined in chat-executor-types.ts and
+// re-exported below so external callers (chat-executor-artifact-task) can keep
+// importing it from this module without churn.
+export type { PlannerPlanArtifactIntent } from "./chat-executor-types.js";
+
 const REQUEST_TEST_VERIFICATION_RE =
   /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|coverage|vitest|jest)\b|\b(?:tests?|testing|smoke tests?|unit tests?|vitest|jest|pytest|mocha|ava|coverage)\b/i;
 const REQUEST_BROWSER_VERIFICATION_RE =
@@ -2838,6 +2743,7 @@ export function parsePlannerPlan(
         typeof parsed.requiresSynthesis === "boolean"
           ? parsed.requiresSynthesis || containsSynthesisStep
           : containsSynthesisStep || undefined,
+      planIntent: parsePlannerPlanIntent(parsed.plan_intent),
       steps,
       edges,
       workflowContract: buildPlannerWorkflowContract({
@@ -2850,6 +2756,28 @@ export function parsePlannerPlan(
     },
     diagnostics,
   };
+}
+
+/**
+ * Reads the model-emitted `plan_intent` field from a parsed planner JSON
+ * object and validates it against the allowed enum. Returns `"none"` for any
+ * missing or unrecognized value so downstream consumers can rely on a
+ * defined value without re-running a regex classifier.
+ */
+function parsePlannerPlanIntent(value: unknown): PlannerPlanArtifactIntent {
+  if (typeof value !== "string") {
+    return "none";
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "edit_artifact" ||
+    normalized === "implement_from_artifact" ||
+    normalized === "grounded_plan_generation" ||
+    normalized === "none"
+  ) {
+    return normalized;
+  }
+  return "none";
 }
 
 function parsePlannerToolCallArguments(
@@ -4143,7 +4071,10 @@ export function validatePlannerStepContracts(
 
   if (typeof messageText === "string") {
     diagnostics.push(...validatePlannerArtifactAuthority(plannerPlan, messageText));
-    const artifactIntent = classifyPlannerPlanArtifactIntent(messageText);
+    // Read intent from the model-emitted planIntent on the parsed plan
+    // instead of re-classifying the message text with a regex.
+    const artifactIntent: PlannerPlanArtifactIntent =
+      plannerPlan.planIntent ?? "none";
     const runtimeTodoArtifactRepairValidation =
       artifactIntent === "none" &&
       plannerPlanNeedsRuntimeTodoArtifactRepairValidation(
@@ -4396,143 +4327,41 @@ export function extractPlannerSourceArtifactTargets(
   );
 }
 
-function plannerRequestGroundedPlanArtifactIntent(
-  messageText: string,
-  explicitArtifactTargets: readonly string[],
-): boolean {
-  const normalized = messageText.trim();
-  if (normalized.length === 0 || explicitArtifactTargets.length === 0) {
-    return false;
-  }
-  const signals = collectPlannerRequestSignals(normalized, []);
-  const explicitPlanExpansionCue =
-    /\b(?:read|expand|turn|convert|rewrite|flesh\s+out|promote)\b[\s\S]{0,80}\b(?:into|to)\b[\s\S]{0,80}\b(?:complete|full|detailed)?\s*(?:implementation\s+)?plan\b/i.test(
-      normalized,
-    );
-  const hasPlainPlanGenerationCue =
-    /\b(?:write|create|draft|generate|produce|make)\b/i.test(normalized) &&
-    /\b(?:complete|full|detailed)\s+(?:implementation\s+)?plan\b/i.test(
-      normalized,
-    );
-  const hasGenerationCue =
-    PLANNER_PLAN_ARTIFACT_REQUEST_RE.test(normalized) ||
-    explicitPlanExpansionCue ||
-    hasPlainPlanGenerationCue;
-  if (!hasGenerationCue) {
-    return false;
-  }
-  return (
-    signals.hasImplementationScopeCue ||
-    explicitPlanExpansionCue ||
-    hasPlainPlanGenerationCue ||
-    signals.hasDocumentationCue ||
-    signals.hasVerificationCue ||
-    signals.hasMultiStepCue ||
-    signals.longTask ||
-    areDocumentationOnlyArtifacts(explicitArtifactTargets) ||
-    /\b(?:complete|full|detailed)\s+plan\b/i.test(normalized)
-  );
-}
-
-export function classifyPlannerPlanArtifactIntent(
-  messageText: string,
-): PlannerPlanArtifactIntent {
-  const normalized = messageText.trim();
-  if (normalized.length === 0) {
-    return "none";
-  }
-
-  const explicitArtifactTargets = extractPlannerArtifactTargets(normalized);
-  if (explicitArtifactTargets.length === 0) {
-    return "none";
-  }
-  const explicitSourceArtifactTargets =
-    extractPlannerSourceArtifactTargets(normalized);
-
-  const isReviewQuestion =
-    /\b(?:are there|is there|is it|does it|do we|can you review|read through|look at|check|analyze|evaluate|assess)\b/i.test(normalized) &&
-    /\?/.test(normalized);
-  if (isReviewQuestion) {
-    return "none";
-  }
-
-  const signals = collectPlannerRequestSignals(normalized, []);
-  const hasArtifactGapClosureCue =
-    /\b(?:fill|add|address|fix|close|resolve|cover|patch|update|correct)\b[\s\S]{0,120}\b(?:issues?|gaps?|problems?|inconsistencies|missing(?:\s+(?:sections?|items?|pieces?|details?|content))?|outdated(?:\s+(?:sections?|items?|content))?)\b/i.test(
-      normalized,
-    ) ||
-    (/\b(?:find|identify|review|inspect|analy(?:s|z)e|check|look\s+for|spot|go\s+through|read\s+through)\b[\s\S]{0,140}\b(?:issues?|gaps?|problems?|inconsistencies|missing(?:\s+(?:sections?|items?|pieces?|details?|content))?|outdated(?:\s+(?:sections?|items?|content))?)\b/i.test(
-      normalized,
-    ) &&
-      /\b(?:fill|add|address|fix|close|resolve|cover|update|correct)\b[\s\S]{0,120}\b(?:them|those|it|whatever\s+is\s+missing|what\s+is\s+missing|the artifact|the file|the document|the plan|the spec|the issues?|the gaps?|the problems?|the missing(?:\s+(?:sections?|items?|pieces?|details?|content))?)\b/i.test(
-        normalized,
-      ));
-  const hasArtifactEditCue =
-    PLANNER_PLAN_ARTIFACT_EDIT_CUE_RE.test(normalized) ||
-    hasArtifactGapClosureCue ||
-    /\b(?:make|keep)\b[\s\S]{0,80}\b(?:perfect|complete|consistent|correct)\b/i.test(
-      normalized,
-    );
-  if (hasArtifactEditCue) {
-    return "edit_artifact";
-  }
-
-  if (plannerRequestGroundedPlanArtifactIntent(normalized, explicitArtifactTargets)) {
-    return "grounded_plan_generation";
-  }
-
-  const hasImplementationExecutionVerb =
-    /\b(?:implement|execute|finish|carry\s+out|apply|fix|repair|refactor|ship)\b/i.test(
-      normalized,
-    ) ||
-    (/\bcomplete\b/i.test(normalized) &&
-      (
-        PLANNER_PLAN_ARTIFACT_PHASE_CUE_RE.test(normalized) ||
-        PLANNER_PLAN_ARTIFACT_IMPLEMENTATION_CUE_RE.test(normalized) ||
-        /\bevery\s+single\s+phase\b/i.test(normalized)
-      ));
-  const hasArtifactSourceCue = explicitSourceArtifactTargets.length > 0;
-  const hasImplementationFromArtifactCue =
-    explicitSourceArtifactTargets.length > 0 &&
-    hasImplementationExecutionVerb &&
-    (
-      hasArtifactSourceCue ||
-      PLANNER_PLAN_ARTIFACT_PHASE_CUE_RE.test(normalized) ||
-      PLANNER_PLAN_ARTIFACT_IMPLEMENTATION_CUE_RE.test(normalized) ||
-      signals.hasImplementationScopeCue ||
-      signals.hasVerificationCue ||
-      signals.hasMultiStepCue ||
-      signals.longTask
-    );
-  if (hasImplementationFromArtifactCue) {
-    return "implement_from_artifact";
-  }
-
-  return "none";
-}
-
-export function plannerRequestNeedsGroundedPlanArtifact(messageText: string): boolean {
-  return classifyPlannerPlanArtifactIntent(messageText) === "grounded_plan_generation";
-}
-
-export function plannerRequestNeedsPlanArtifactExecution(messageText: string): boolean {
-  return classifyPlannerPlanArtifactIntent(messageText) === "edit_artifact";
-}
-
-export function plannerRequestNeedsWorkspaceGroundedArtifactUpdate(
-  messageText: string,
-): boolean {
-  return (
-    classifyPlannerPlanArtifactIntent(messageText) === "edit_artifact" &&
-    textRequiresWorkspaceGroundedArtifactUpdate(messageText)
-  );
-}
-
-export function plannerRequestImplementsFromArtifact(
-  messageText: string,
-): boolean {
-  return classifyPlannerPlanArtifactIntent(messageText) === "implement_from_artifact";
-}
+// ============================================================================
+// REMOVED 2026-04-06 — regex-based plan-artifact intent classifier
+// ============================================================================
+//
+// This file used to contain `classifyPlannerPlanArtifactIntent(messageText)`
+// and four wrapper functions (`plannerRequestNeedsGroundedPlanArtifact`,
+// `plannerRequestNeedsPlanArtifactExecution`,
+// `plannerRequestNeedsWorkspaceGroundedArtifactUpdate`,
+// `plannerRequestImplementsFromArtifact`) plus four `PLANNER_PLAN_ARTIFACT_*`
+// regex constants. They tried to label the user message as `edit_artifact |
+// implement_from_artifact | grounded_plan_generation | none` BEFORE the model
+// saw the request, then injected a different system prompt per label.
+//
+// That layer was harmful: a single surface-keyword regex (e.g. "fill any
+// gaps", "find missing sections") forced the planner into the EDIT branch,
+// which sent the model a system message saying "Do NOT create source code
+// files" and "Keep the plan as a single deterministic read → write sequence".
+// Once that prompt landed, the model could not pick the right action even
+// when context made the right action obvious.
+//
+// The new contract: the model decides intent and emits it as a top-level
+// `plan_intent` field in its JSON response. Pre-call code only EXTRACTS
+// artifact target paths (parsing, not classification). Post-call validators
+// read `plannerPlan.planIntent` from the parsed plan instead of re-running a
+// regex against the user message.
+//
+// External call sites kept compatible by reading `plannerPlan.planIntent`:
+//   - chat-executor-planner.ts validators (validatePlannerArtifactAuthority,
+//     validatePlannerPlan, validatePlannerPlanArtifactSteps)
+//   - chat-executor-contract-flow.ts contract gating
+//   - turn-execution-contract.ts contract assembly
+//
+// See also: CLAUDE.md learned rule "Artifact Routing: Never make runtime
+// behavior depend on a filename like `PLAN.md`" (2026-04-04).
+// ============================================================================
 
 function sanitizePlannerArtifactTarget(target: string): string {
   return target
@@ -4984,7 +4813,10 @@ function validatePlannerArtifactAuthority(
     ];
   }
 
-  const artifactIntent = classifyPlannerPlanArtifactIntent(messageText);
+  // Read intent from the model-emitted planIntent on the parsed plan instead
+  // of re-classifying the message text with a regex.
+  const artifactIntent: PlannerPlanArtifactIntent =
+    plannerPlan.planIntent ?? "none";
   if (requestedArtifactTargets.length === 0 || artifactIntent === "none") {
     return [];
   }
@@ -5209,13 +5041,16 @@ function validatePlannerPlanArtifactSteps(
   const usesRequestedArtifactTargetsOverride =
     (options?.requestedArtifactTargetsOverride?.length ?? 0) > 0;
   const strictWorkspaceGrounding = usesRequestedArtifactTargetsOverride;
+  // The model-decided planIntent is the source of truth for "is this an edit
+  // request that needs workspace grounding before the write." Fall back to the
+  // text-pattern signal only when the model omitted planIntent (e.g. legacy
+  // plans or partial parses) AND there is an explicit override forcing the
+  // strict path.
   const workspaceGroundedArtifactUpdate =
-    typeof messageText === "string" &&
-    (
-      plannerRequestNeedsWorkspaceGroundedArtifactUpdate(messageText) ||
-      (usesRequestedArtifactTargetsOverride &&
-        textRequiresWorkspaceGroundedArtifactUpdate(messageText))
-    );
+    plannerPlan.planIntent === "edit_artifact" ||
+    (typeof messageText === "string" &&
+      usesRequestedArtifactTargetsOverride &&
+      textRequiresWorkspaceGroundedArtifactUpdate(messageText));
   const requestedArtifactTargets =
     usesRequestedArtifactTargetsOverride
       ? (options?.requestedArtifactTargetsOverride ?? [])
@@ -5334,7 +5169,7 @@ function validatePlannerPlanArtifactSteps(
     typeof messageText === "string" &&
     requestedArtifactTargets.length === 1 &&
     areDocumentationOnlyArtifacts(requestedArtifactTargets) &&
-    classifyPlannerPlanArtifactIntent(messageText) === "edit_artifact" &&
+    plannerPlan.planIntent === "edit_artifact" &&
     !requestExplicitlyRequestsDelegation(messageText) &&
     !extractExplicitSubagentOrchestrationRequirements(messageText);
 

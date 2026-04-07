@@ -14,17 +14,15 @@ import {
   type ArtifactTaskContract,
 } from "./chat-executor-artifact-task.js";
 import {
-  classifyPlannerPlanArtifactIntent,
   collectPlannerRequestSignals,
   extractPlannerArtifactTargets,
   extractPlannerSourceArtifactTargets,
-  plannerRequestImplementsFromArtifact,
   requestExplicitlyRequestsDelegation,
   requestRequiresToolGroundedExecution,
   extractExplicitSubagentOrchestrationRequirements,
   isDialogueOnlyDirectTurnMessage,
-  type PlannerPlanArtifactIntent,
 } from "./chat-executor-planner.js";
+import type { PlannerPlanArtifactIntent } from "./chat-executor-types.js";
 import {
   specRequiresFileMutationEvidence,
   specRequiresMeaningfulWorkspaceEvidence,
@@ -392,7 +390,7 @@ function resolveWorkflowImplementationRequested(params: {
   if (isDialogueOnlyDirectTurnMessage(params.messageText)) {
     return false;
   }
-  if (plannerRequestImplementsFromArtifact(params.messageText)) {
+  if (params.artifactIntent === "implement_from_artifact") {
     return true;
   }
   if (
@@ -519,9 +517,12 @@ function buildWorkflowImplementationContract(params: {
     explicitArtifactTargets,
     explicitSourceArtifactTargets,
   });
-  const implementFromArtifactRequest =
-    explicitSourceArtifactTargets.length > 0 &&
-    plannerRequestImplementsFromArtifact(params.messageText);
+  // This function runs PRE-PLAN — the model has not yet emitted a plan, so
+  // there is no model-decided plan_intent to read. The previous regex
+  // classifier (`plannerRequestImplementsFromArtifact`) was removed on
+  // 2026-04-06; the workflow contract now defaults to non-implementation here
+  // and gets refined post-plan once the planner emits its intent.
+  const implementFromArtifactRequest = false;
   const targetArtifacts =
     implementFromArtifactRequest &&
     explicitTargetArtifacts.length === 0 &&
@@ -638,7 +639,13 @@ export function resolveTurnExecutionContract(params: {
   const explicitSourceArtifactTargets = extractPlannerSourceArtifactTargets(
     messageText,
   );
-  const artifactIntent = classifyPlannerPlanArtifactIntent(messageText);
+  // Pre-planner contract assembly cannot read the model-emitted planIntent
+  // because the model has not been called yet. The previous regex classifier
+  // (`classifyPlannerPlanArtifactIntent`) was removed on 2026-04-06; this
+  // turn-execution-contract path now defaults to "none" so the executor never
+  // bypasses the planner via a regex shortcut. The model decides intent
+  // inside the planner pipeline and the contract is refined post-plan.
+  const artifactIntent: PlannerPlanArtifactIntent = "none";
   const explicitDelegationRequested = requestExplicitlyRequestsDelegation(messageText);
   const explicitSubagentOrchestrationRequested =
     extractExplicitSubagentOrchestrationRequirements(messageText) !== undefined;
