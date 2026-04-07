@@ -41,6 +41,13 @@ export class RedisBackend implements MemoryBackend {
   readonly name = "redis";
 
   private client: any = null;
+  /**
+   * Memoized init promise (audit S2.3). Concurrent ensureClient()
+   * callers await the same in-flight connect instead of opening
+   * duplicate Redis connections. Cleared on init failure so a retry
+   * can re-initialize.
+   */
+  private clientInitPromise: Promise<any> | null = null;
   private readonly config: RedisBackendConfig;
   private readonly logger: Logger;
   private readonly defaultTtlMs: number;
@@ -315,6 +322,9 @@ export class RedisBackend implements MemoryBackend {
 
   async close(): Promise<void> {
     this.closed = true;
+    // Audit S2.3: also clear the memoized init promise so a stale
+    // init can't resurrect the connection after close.
+    this.clientInitPromise = null;
     if (this.client) {
       await this.client.quit();
       this.client = null;
@@ -364,42 +374,55 @@ export class RedisBackend implements MemoryBackend {
       throw new MemoryBackendError(this.name, "Backend is closed");
     }
     if (this.client) return this.client;
+    if (this.clientInitPromise) return this.clientInitPromise;
 
-    const Redis = await ensureLazyBackend("ioredis", this.name, (mod) => {
-      return (mod.default ?? mod) as any;
-    });
-
-    const opts: Record<string, unknown> = {
-      lazyConnect: true,
-      maxRetriesPerRequest: this.config.maxReconnectAttempts ?? 3,
-    };
-
-    if (this.config.password) opts.password = this.config.password;
-    if (this.config.db !== undefined) opts.db = this.config.db;
-    if (this.config.connectTimeoutMs)
-      opts.connectTimeout = this.config.connectTimeoutMs;
-
-    if (this.config.url) {
-      this.client = new Redis(this.config.url, opts);
-    } else {
-      this.client = new Redis({
-        host: this.config.host ?? "localhost",
-        port: this.config.port ?? 6379,
-        ...opts,
+    // Audit S2.3: memoize the in-flight init Promise so concurrent
+    // ensureClient() callers do not race on the `if (this.client)`
+    // check above and open duplicate Redis connections.
+    this.clientInitPromise = (async () => {
+      const Redis = await ensureLazyBackend("ioredis", this.name, (mod) => {
+        return (mod.default ?? mod) as any;
       });
-    }
+
+      const opts: Record<string, unknown> = {
+        lazyConnect: true,
+        maxRetriesPerRequest: this.config.maxReconnectAttempts ?? 3,
+      };
+
+      if (this.config.password) opts.password = this.config.password;
+      if (this.config.db !== undefined) opts.db = this.config.db;
+      if (this.config.connectTimeoutMs)
+        opts.connectTimeout = this.config.connectTimeoutMs;
+
+      const client: any = this.config.url
+        ? new Redis(this.config.url, opts)
+        : new Redis({
+            host: this.config.host ?? "localhost",
+            port: this.config.port ?? 6379,
+            ...opts,
+          });
+
+      try {
+        await client.connect();
+      } catch (err) {
+        throw new MemoryConnectionError(
+          this.name,
+          `Failed to connect: ${(err as Error).message}`,
+        );
+      }
+
+      this.client = client;
+      return client;
+    })();
 
     try {
-      await this.client.connect();
+      return await this.clientInitPromise;
     } catch (err) {
+      // Clear so a retry can re-initialize.
+      this.clientInitPromise = null;
       this.client = null;
-      throw new MemoryConnectionError(
-        this.name,
-        `Failed to connect: ${(err as Error).message}`,
-      );
+      throw err;
     }
-
-    return this.client;
   }
 
   private parseEntry(json: string): MemoryEntry | null {
