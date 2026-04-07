@@ -186,7 +186,7 @@ export function resolveSubAgentRuntimeConfig(
     const normalized = normalizeRuntimeLimit(value, fallback);
     return hasRuntimeLimit(normalized)
       ? Math.min(hardCap, normalized)
-      : 0;
+      : hardCap;
   };
   const policyLearningArms =
     Array.isArray(policyLearning?.arms) && policyLearning.arms.length > 0

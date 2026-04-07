@@ -886,7 +886,7 @@ export class ProofDeferralManager {
       const error = err instanceof Error ? err : new Error(String(err));
       this.handleSubmissionError(proof, error);
     } finally {
-      this.activeSubmissions--;
+      this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
     }
   }
 

@@ -26,6 +26,17 @@ import { ensureLazyBackend } from "../lazy-import.js";
 import type { MetricsProvider } from "../../task/types.js";
 import { TELEMETRY_METRIC_NAMES } from "../../telemetry/metric-names.js";
 
+async function scanKeys(client: any, pattern: string): Promise<string[]> {
+  const keys: string[] = [];
+  let cursor = "0";
+  do {
+    const [nextCursor, batch] = await client.scan(cursor, "MATCH", pattern, "COUNT", 100);
+    cursor = nextCursor;
+    keys.push(...batch);
+  } while (cursor !== "0");
+  return keys;
+}
+
 export class RedisBackend implements MemoryBackend {
   readonly name = "redis";
 
@@ -78,6 +89,11 @@ export class RedisBackend implements MemoryBackend {
       timestamp: now,
       taskPda: options.taskPda,
       metadata: options.metadata,
+      workspaceId: options.workspaceId ?? "default",
+      agentId: options.agentId,
+      userId: options.userId,
+      worldId: options.worldId,
+      channel: options.channel,
     };
 
     let json: string;
@@ -166,6 +182,10 @@ export class RedisBackend implements MemoryBackend {
     let results = allEntries.filter((e) => {
       if (query.taskPda && e.taskPda !== query.taskPda) return false;
       if (query.role && e.role !== query.role) return false;
+      if (query.workspaceId && (e as any).workspaceId !== query.workspaceId) return false;
+      if (query.agentId && (e as any).agentId !== query.agentId) return false;
+      if (query.userId && (e as any).userId !== query.userId) return false;
+      if (query.worldId && (e as any).worldId !== query.worldId) return false;
       return true;
     });
 
@@ -267,7 +287,7 @@ export class RedisBackend implements MemoryBackend {
       ? `${this.prefix}kv:${prefix}*`
       : `${this.prefix}kv:*`;
 
-    const keys: string[] = await client.keys(pattern);
+    const keys: string[] = await scanKeys(client, pattern);
     const kvPrefixLen = `${this.prefix}kv:`.length;
     return keys.map((k: string) => k.slice(kvPrefixLen));
   }
@@ -285,7 +305,7 @@ export class RedisBackend implements MemoryBackend {
     await client.del(this.sessionsKey);
 
     // Delete all KV keys
-    const kvKeys: string[] = await client.keys(`${this.prefix}kv:*`);
+    const kvKeys: string[] = await scanKeys(client, `${this.prefix}kv:*`);
     if (kvKeys.length > 0) {
       await client.del(...kvKeys);
     }

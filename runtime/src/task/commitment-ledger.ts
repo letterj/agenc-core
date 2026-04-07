@@ -653,41 +653,51 @@ export class CommitmentLedger {
    *
    * @param command - Mutation command to queue
    */
+  private processingMutations = false;
+
   queueMutation(command: MutationCommand): void {
     this.mutationQueue.push(command);
+    if (!this.processingMutations) {
+      this.processMutations();
+    }
   }
 
   /**
    * Processes all queued mutations. Called by scheduler event loop.
    */
   processMutations(): void {
-    while (this.mutationQueue.length > 0) {
-      const command = this.mutationQueue.shift()!;
+    this.processingMutations = true;
+    try {
+      while (this.mutationQueue.length > 0) {
+        const command = this.mutationQueue.shift()!;
 
-      switch (command.type) {
-        case "create":
-          // Already created, just store
-          this.commitments.set(command.commitment.id, command.commitment);
-          break;
-        case "updateStatus":
-          this.updateStatus(command.taskPda, command.status);
-          break;
-        case "addDependent":
-          const commitment = this.commitments.get(command.commitmentId);
-          if (commitment) {
-            this.addDependent(
-              commitment.sourceTaskPda,
-              command.dependentTaskPda,
-            );
-          }
-          break;
-        case "markConfirmed":
-          this.markConfirmed(command.taskPda);
-          break;
-        case "markFailed":
-          this.markFailed(command.taskPda);
-          break;
+        switch (command.type) {
+          case "create":
+            // Already created, just store
+            this.commitments.set(command.commitment.id, command.commitment);
+            break;
+          case "updateStatus":
+            this.updateStatus(command.taskPda, command.status);
+            break;
+          case "addDependent":
+            const commitment = this.commitments.get(command.commitmentId);
+            if (commitment) {
+              this.addDependent(
+                commitment.sourceTaskPda,
+                command.dependentTaskPda,
+              );
+            }
+            break;
+          case "markConfirmed":
+            this.markConfirmed(command.taskPda);
+            break;
+          case "markFailed":
+            this.markFailed(command.taskPda);
+            break;
+        }
       }
+    } finally {
+      this.processingMutations = false;
     }
   }
 

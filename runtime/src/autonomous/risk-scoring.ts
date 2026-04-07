@@ -187,16 +187,20 @@ export function scoreTaskRisk(
   }
 
   const score = clamp01(weightedScore / normalizedWeight);
-  const mediumThreshold = clamp01(
+  let mediumThreshold = clamp01(
     adaptiveRisk?.mediumRiskThreshold ??
       scoringConfig.mediumRiskThreshold ??
       DEFAULT_MEDIUM_THRESHOLD,
   );
-  const highThreshold = clamp01(
+  let highThreshold = clamp01(
     adaptiveRisk?.highRiskThreshold ??
       scoringConfig.highRiskThreshold ??
       DEFAULT_HIGH_THRESHOLD,
   );
+
+  if (mediumThreshold >= highThreshold) {
+    [mediumThreshold, highThreshold] = [highThreshold, mediumThreshold];
+  }
 
   return {
     score,

@@ -602,8 +602,8 @@ export class RollbackController {
       state = "executing";
       action = "aborted";
       computeTimeMs = Date.now() - activeEntry.startedAt;
-      activeEntry.abortController.abort();
       this.activeTasks.delete(key);
+      activeEntry.abortController.abort();
     } else if (commitment) {
       // Task has a commitment - determine state from commitment status
       switch (commitment.status) {

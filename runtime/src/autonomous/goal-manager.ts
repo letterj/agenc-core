@@ -53,7 +53,8 @@ export class GoalManager {
   async addGoal(input: GoalStoreInput): Promise<ManagedGoal> {
     const activeGoals = await this.goalStore.getActiveGoals();
     if (activeGoals.length >= this.maxActiveGoals) {
-      const lowestPriority = [...activeGoals].sort((left, right) => {
+      const evictable = activeGoals.filter(g => g.status !== "executing");
+      const lowestPriority = [...evictable].sort((left, right) => {
         const weight = (priority: ManagedGoal["priority"]): number => {
           switch (priority) {
             case "critical":

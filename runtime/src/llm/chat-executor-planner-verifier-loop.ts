@@ -299,6 +299,7 @@ export async function executePlannerPipelineWithVerifierLoop(
         completedSteps: nextPipelineResult.completedSteps,
         totalSteps: nextPipelineResult.totalSteps,
       });
+      if (input.checkRequestTimeout("verifier retry")) break;
       continue;
     }
 

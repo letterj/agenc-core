@@ -2058,6 +2058,7 @@ export class ChatExecutor {
       return undefined;
     }
     if (this.checkRequestTimeout(ctx, `${input.phase} model call`)) {
+      ctx.stopReason = "timeout";
       return undefined;
     }
     const effectiveRoutedToolNames = resolveEffectiveRoutedToolNames({

@@ -433,6 +433,11 @@ function createConcordiaMemoryHostServices(params: {
         return existing;
       }
 
+      if (worldContexts.size >= 100) {
+        const oldestKey = worldContexts.keys().next().value;
+        if (oldestKey) worldContexts.delete(oldestKey);
+      }
+
       const created = createConcordiaWorldContext({
         ...params,
         worldId: input.worldId,

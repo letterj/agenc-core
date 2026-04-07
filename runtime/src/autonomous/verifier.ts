@@ -70,6 +70,7 @@ export interface VerifierLaneMetrics {
   disagreements: number;
   revisions: number;
   escalations: number;
+  rollbacks: number;
   addedLatencyMs: number;
 }
 
@@ -141,6 +142,7 @@ export class VerifierExecutor {
     disagreements: 0,
     revisions: 0,
     escalations: 0,
+    rollbacks: 0,
     addedLatencyMs: 0,
   };
 
@@ -446,17 +448,15 @@ export class VerifierExecutor {
       return;
     }
 
-    const nextHistory =
-      this.budgetHistory.length >= 100
-        ? this.budgetHistory.slice(-99).concat(success)
-        : this.budgetHistory.concat(success);
+    const currentHistory = [...this.budgetHistory];
+    const nextHistory = [...currentHistory, success].slice(-100);
     const consecutiveStreak =
-      countConsecutiveFromEnd(this.budgetHistory, success) + 1;
+      countConsecutiveFromEnd(currentHistory, success) + 1;
 
     const result = calculateNextBudget({
       currentBudgetLamports: this.currentBudgetLamports,
       success,
-      history: this.budgetHistory,
+      history: currentHistory,
       guardrail: this.activeBudgetGuardrail,
       lastAdjustmentTimestampMs: this.lastBudgetAdjustmentMs,
       nowMs,
@@ -559,7 +559,7 @@ export class VerifierExecutor {
           this.laneMetrics.checks > 0
             ? this.laneMetrics.disagreements / this.laneMetrics.checks
             : 0,
-        rollbackRate: 0,
+        rollbackRate: this.laneMetrics.rollbacks / Math.max(1, this.laneMetrics.checks),
         taskTypeRiskMultiplier: taskTypePolicy?.riskMultiplier,
       },
       adaptiveRisk,
@@ -760,6 +760,7 @@ export class VerifierExecutor {
       this.metrics?.counter(VERIFIER_METRIC_NAMES.PASSES_TOTAL);
     } else if (verdict.verdict === "fail") {
       this.laneMetrics.fails++;
+      this.laneMetrics.rollbacks++;
       this.metrics?.counter(VERIFIER_METRIC_NAMES.FAILS_TOTAL);
     } else {
       this.laneMetrics.needsRevision++;

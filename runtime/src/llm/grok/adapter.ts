@@ -65,7 +65,7 @@ import {
 const DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_MODEL = "grok-4-1-fast-reasoning";
 const DEFAULT_VISION_MODEL = "grok-4-0709";
-const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_MESSAGES_PAYLOAD_CHARS = 80_000;
 const MAX_SYSTEM_MESSAGE_CHARS = 16_000;
 const MAX_MESSAGE_CHARS_PER_ENTRY = 4_000;
@@ -1560,6 +1560,7 @@ export class GrokProvider implements LLMProvider {
           detail: `session=${sessionId}`,
         });
         this.statefulSessions.delete(sessionId);
+        previousResponseId = undefined;
         if (!this.statefulConfig.fallbackToStateless) {
           throw new LLMProviderError(
             this.name,
@@ -1810,7 +1811,7 @@ export class GrokProvider implements LLMProvider {
     const params: Record<string, unknown> = {
       model,
       input,
-      store: options?.store ?? false,
+      store: options?.store ?? this.statefulConfig?.store ?? false,
     };
     if (options?.previousResponseId) {
       params.previous_response_id = options.previousResponseId;
@@ -1870,13 +1871,21 @@ export class GrokProvider implements LLMProvider {
       }
     }
     if (structuredOutputEnabled && structuredOutputSchema) {
-      assertXaiStructuredOutputToolCompatibility({
-        providerName: this.name,
-        model: typeof params.model === "string" ? params.model : this.config.model,
-        structuredOutputRequested: true,
-        toolsRequested: selectedTools.toolsAttached,
-      });
-      params.text = {
+      let stripStructuredOutput = false;
+      try {
+        assertXaiStructuredOutputToolCompatibility({
+          providerName: this.name,
+          model: typeof params.model === "string" ? params.model : this.config.model,
+          structuredOutputRequested: true,
+          toolsRequested: selectedTools.toolsAttached,
+        });
+      } catch {
+        console.warn(
+          `[${this.name}] Structured output with tools not supported on model ${typeof params.model === "string" ? params.model : this.config.model}; stripping structured output for this request`,
+        );
+        stripStructuredOutput = true;
+      }
+      if (!stripStructuredOutput) params.text = {
         format: {
           type: structuredOutputSchema.type,
           name: structuredOutputSchema.name,
@@ -1922,6 +1931,7 @@ export class GrokProvider implements LLMProvider {
     }
 
     if (allowedToolNames.length === 0) {
+      console.warn("[GrokProvider] Tool allowlist resolved to empty set — all tools suppressed for this call");
       return {
         tools: [],
         chars: 0,
@@ -2291,7 +2301,7 @@ export class GrokProvider implements LLMProvider {
       return undefined;
     }
     const rawText = this.extractOutputText(response);
-    if (rawText === undefined) return undefined;
+    if (rawText === undefined || rawText.trim().length === 0) return undefined;
     return parseStructuredOutputText(rawText, schema.name, schema.schema);
   }
 

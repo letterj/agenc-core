@@ -58,7 +58,7 @@ import { SubAgentSpawnError } from "./errors.js";
 // Constants
 // ============================================================================
 
-export const DEFAULT_SUB_AGENT_TIMEOUT_MS = 0; // unlimited
+export const DEFAULT_SUB_AGENT_TIMEOUT_MS = 300_000; // 5 minutes
 export const DEFAULT_SUB_AGENT_CONTEXT_STARTUP_TIMEOUT_MS = 15_000;
 export const MAX_CONCURRENT_SUB_AGENTS = 16;
 export const DEFAULT_MAX_SUB_AGENT_DEPTH = 4;

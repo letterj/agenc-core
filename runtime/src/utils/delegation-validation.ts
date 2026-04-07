@@ -4184,7 +4184,7 @@ function validateBlockedPhaseOutput(
   spec: DelegationContractSpec,
   output: string,
   parsedOutput: Record<string, unknown> | undefined,
-  toolCalls?: readonly DelegationValidationToolCall[],
+  _toolCalls?: readonly DelegationValidationToolCall[],
 ): DelegationOutputValidationResult | undefined {
   if (isReviewerDelegatedTask(spec)) {
     return undefined;

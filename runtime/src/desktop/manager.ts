@@ -313,6 +313,8 @@ export class DesktopSandboxManager {
   private readonly authTokens = new Map<string, string>();
   /** Cached Docker availability check */
   private dockerAvailable: boolean | null = null;
+  /** Serializes pool-limited container creation to prevent TOCTOU races */
+  private createLock: Promise<void> = Promise.resolve();
 
   constructor(
     config: DesktopSandboxConfig,
@@ -401,6 +403,22 @@ export class DesktopSandboxManager {
   async create(
     options: CreateDesktopSandboxOptions,
   ): Promise<DesktopSandboxHandle> {
+    // Serialize creation through the lock to prevent TOCTOU races on pool limits
+    let releaseLock!: () => void;
+    const lockPromise = this.createLock;
+    this.createLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    await lockPromise;
+
+    try {
+      return await this.createInner(options);
+    } finally {
+      releaseLock();
+    }
+  }
+
+  private async createInner(
+    options: CreateDesktopSandboxOptions,
+  ): Promise<DesktopSandboxHandle> {
     if (this.activeCount >= this.config.maxConcurrent) {
       await this.reclaimCapacity();
     }
@@ -468,6 +486,8 @@ export class DesktopSandboxManager {
       this.logger.error(
         `Desktop sandbox ${containerId} failed to become ready: ${toErrorMessage(err)}`,
       );
+      // Clean up the failed container so it doesn't leak resources
+      this.forceRemove(containerId).catch(() => {});
       // Don't throw — the handle is tracked, caller can check status
     }
 

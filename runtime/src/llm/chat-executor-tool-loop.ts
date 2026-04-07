@@ -786,6 +786,7 @@ export async function executeToolCallLoop(
     budgetReason:
       "Initial completion blocked by max model recalls per request budget",
   });
+  if (!suppressToolsForDialogueTurn) {
   const initialPlanOnlyAction =
     await callbacks.enforcePlanOnlyExecutionBeforeCompletion(ctx, "initial");
   if (initialPlanOnlyAction === "failed" && !ctx.finalContent) {
@@ -813,6 +814,7 @@ export async function executeToolCallLoop(
   }
   if (initialContinuationAction === "failed") {
     return;
+  }
   }
 
   let rounds = 0;
@@ -1041,12 +1043,18 @@ export async function executeToolCallLoop(
     });
     if (!nextResponse) break;
     ctx.response = nextResponse;
+    if (!suppressToolsForDialogueTurn) {
     const planOnlyAction =
       await callbacks.enforcePlanOnlyExecutionBeforeCompletion(
         ctx,
         "tool_followup",
       );
-    if (planOnlyAction === "failed") break;
+    if (planOnlyAction === "failed") {
+      if (!ctx.finalContent) {
+        ctx.finalContent = ctx.response?.content ?? "Request could not be completed due to validation requirements.";
+      }
+      break;
+    }
     if (planOnlyAction === "continue") {
       // Gate pushed a correction; skip remaining gates this round to avoid
       // conflicting instructions reaching the model simultaneously.
@@ -1057,7 +1065,12 @@ export async function executeToolCallLoop(
         ctx,
         "tool_followup",
       );
-    if (evidenceAction === "failed") break;
+    if (evidenceAction === "failed") {
+      if (!ctx.finalContent) {
+        ctx.finalContent = ctx.response?.content ?? "Request could not be completed due to validation requirements.";
+      }
+      break;
+    }
     if (evidenceAction === "continue") {
       continue;
     }
@@ -1066,7 +1079,13 @@ export async function executeToolCallLoop(
         ctx,
         "tool_followup",
       );
-    if (continuationAction === "failed") break;
+    if (continuationAction === "failed") {
+      if (!ctx.finalContent) {
+        ctx.finalContent = ctx.response?.content ?? "Request could not be completed due to validation requirements.";
+      }
+      break;
+    }
+    }
 
     const roundProgress = summarizeToolRoundProgress(
       roundCalls,

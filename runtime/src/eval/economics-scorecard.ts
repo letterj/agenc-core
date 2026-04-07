@@ -34,7 +34,7 @@ function safeRatio(numerator: number, denominator: number): number {
 }
 
 function safeComplianceRate(numerator: number, denominator: number): number {
-  if (!Number.isFinite(denominator) || denominator <= 0) return 1;
+  if (!Number.isFinite(denominator) || denominator <= 0) return 0;
   return numerator / denominator;
 }
 

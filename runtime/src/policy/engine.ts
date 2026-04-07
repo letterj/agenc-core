@@ -755,12 +755,6 @@ export class PolicyEngine {
     const currentTokens = bucket.reduce((sum, event) => sum + event.amount, 0);
     const projected = currentTokens + action.tokenCount;
     if (projected > budget.limitTokens) {
-      if (consume) {
-        if (action.budgetConsumptionMode === "post_hoc_actual") {
-          bucket.push({ atMs: now, amount: action.tokenCount });
-        }
-        this.tokenEvents.set(eventKey, bucket);
-      }
       return this.buildViolation(
         "token_budget_exceeded",
         action,
@@ -964,9 +958,6 @@ export class PolicyEngine {
     const currentSpend = bucket.reduce((sum, event) => sum + event.amount, 0n);
     const projected = currentSpend + action.spendLamports;
     if (projected > budget.limitLamports) {
-      if (consume) {
-        this.spendEvents.set(eventKey, bucket);
-      }
       return this.buildViolation(
         "spend_budget_exceeded",
         action,

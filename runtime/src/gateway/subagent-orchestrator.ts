@@ -2358,6 +2358,19 @@ export class SubAgentOrchestrator implements DeterministicPipelineExecutor {
         this.childToolAllowlistStrategy === "inherit_intersection",
       unsafeBenchmarkMode: this.unsafeBenchmarkMode,
     });
+    if (resolvedScope.blockedReason && resolvedScope.allowedTools.length === 0) {
+      return {
+        allowedTools: [],
+        allowsToollessExecution: resolvedScope.allowsToollessExecution,
+        semanticFallback: resolvedScope.semanticFallback,
+        removedLowSignalBrowserTools: resolvedScope.removedLowSignalBrowserTools,
+        blockedReason: resolvedScope.blockedReason,
+        removedByPolicy: resolvedScope.removedByPolicy,
+        removedAsDelegationTools: resolvedScope.removedAsDelegationTools,
+        removedAsUnknownTools: resolvedScope.removedAsUnknownTools,
+        parentPolicyAllowed,
+      };
+    }
     const strippedDelegationTools = resolvedScope.allowedTools.filter(
       isPlannerChildDelegationToolName,
     );

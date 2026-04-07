@@ -199,6 +199,7 @@ export async function callWithFallback(
       ? "chat_stream"
       : "chat";
 
+  const skipReasons: string[] = [];
   for (let i = 0; i < deps.providers.length; i++) {
     const provider = deps.providers[i];
     const providerRouteKey = getProviderRouteKey(provider);
@@ -206,6 +207,9 @@ export async function callWithFallback(
     const cooldown = deps.cooldowns.get(providerRouteKey);
 
     if (cooldown && cooldown.availableAt > now) {
+      skipReasons.push(
+        `${provider.name}: cooldown until ${new Date(cooldown.availableAt).toISOString()} (${cooldown.failures} failures, ${Math.max(0, cooldown.availableAt - now)}ms remaining)`,
+      );
       emitProviderTraceEvent(options, {
         kind: "error",
         transport,
@@ -379,6 +383,6 @@ export async function callWithFallback(
   // All providers were skipped (in cooldown) — no provider was attempted
   throw new LLMProviderError(
     "chat-executor",
-    "All providers are in cooldown",
+    `All providers are in cooldown${skipReasons.length > 0 ? `: ${skipReasons.join("; ")}` : ""}`,
   );
 }
