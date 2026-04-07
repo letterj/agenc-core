@@ -49,6 +49,7 @@ import type {
   DelegationBanditPolicyTuner,
 } from "./delegation-learning.js";
 import type { HookRegistry } from "./hooks/index.js";
+import type { CanUseToolFn } from "./can-use-tool.js";
 // ---------------------------------------------------------------------------
 // Imports from extracted sibling modules
 // ---------------------------------------------------------------------------
@@ -361,6 +362,14 @@ export class ChatExecutor {
    * runtime behaves identically to the pre-hooks shape.
    */
   private readonly hookRegistry?: HookRegistry;
+  /**
+   * Cut 5.7: optional canUseTool seam. When set, the runtime calls
+   * this before every tool dispatch and honors deny / ask / allow with
+   * optional updatedInput. With no value (the default) the seam is
+   * skipped and the existing allowedTools / approval flow continues
+   * unchanged.
+   */
+  private readonly canUseTool?: CanUseToolFn;
 
   private readonly cooldowns = new Map<string, CooldownEntry>();
   private readonly sessionTokens = new Map<string, number>();
@@ -476,6 +485,7 @@ export class ChatExecutor {
     });
     this.defaultRunClass = config.defaultRunClass;
     this.hookRegistry = config.hookRegistry;
+    this.canUseTool = config.canUseTool;
   }
 
   private static resolveSubagentVerifierConfig(
@@ -1668,6 +1678,7 @@ export class ChatExecutor {
       allowedTools: this.allowedTools,
       toolFailureBreaker: this.toolFailureBreaker,
       ...(this.hookRegistry ? { hookRegistry: this.hookRegistry } : {}),
+      ...(this.canUseTool ? { canUseTool: this.canUseTool } : {}),
     }, this.buildToolLoopCallbacks());
   }
 

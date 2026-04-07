@@ -434,6 +434,14 @@ export interface ChatExecutorConfig {
    */
   readonly hookRegistry?: import("./hooks/index.js").HookRegistry;
   /**
+   * Cut 5.7: optional canUseTool seam. When provided, the runtime
+   * calls this before every tool dispatch and honors deny/ask/allow
+   * with optional updatedInput. Callers can wrap a
+   * ToolPermissionEvaluator via `evaluatorToCanUseTool()` to plug the
+   * unified policy pipeline through this single hook.
+   */
+  readonly canUseTool?: import("./can-use-tool.js").CanUseToolFn;
+  /**
    * Maximum token budget per session. When cumulative usage meets or exceeds
    * this value, the executor attempts to compact conversation history by
    * summarizing older messages. If compaction fails, falls back to

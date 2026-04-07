@@ -79,6 +79,7 @@ import {
   dispatchHooks,
   defaultHookExecutor,
 } from "./hooks/index.js";
+import type { CanUseToolFn } from "./can-use-tool.js";
 
 // ============================================================================
 // Callback interfaces
@@ -141,6 +142,16 @@ export interface ToolLoopConfig {
   readonly toolFailureBreaker: ToolFailureCircuitBreaker;
   /** Cut 5.2: hook registry for PreToolUse / PostToolUse / PostToolUseFailure. */
   readonly hookRegistry?: HookRegistry;
+  /**
+   * Cut 5.7: canUseTool permission seam. When set, the tool dispatch
+   * loop calls this before each tool to check whether the call is
+   * allowed. Returning `deny` short-circuits the call with the hook's
+   * message. Returning `ask` is currently treated as a soft deny at
+   * this layer (interactive approval is the gateway's responsibility).
+   * Returning `allow` with `updatedInput` rewrites the tool args
+   * before dispatch.
+   */
+  readonly canUseTool?: CanUseToolFn;
 }
 
 // ============================================================================
@@ -571,6 +582,43 @@ export async function executeSingleToolCall(
         : {}),
     },
   });
+
+  // Cut 5.7: canUseTool permission seam. When configured, this fires
+  // before the hook system so the global policy decision is the first
+  // gate at the dispatch boundary. With no canUseTool wired (the
+  // default), the seam is skipped and behavior is unchanged.
+  if (config.canUseTool) {
+    const decision = await config.canUseTool(toolCall, {
+      sessionId: ctx.sessionId,
+    });
+    if (decision.behavior === "deny" || decision.behavior === "ask") {
+      const denyMessage =
+        decision.behavior === "deny"
+          ? decision.message
+          : `Tool "${toolCall.name}" requires interactive approval: ${decision.message}`;
+      callbacks.pushMessage(
+        ctx,
+        {
+          role: "tool",
+          content: denyMessage,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+        },
+        "tools",
+      );
+      callbacks.appendToolRecord(ctx, {
+        name: toolCall.name,
+        args,
+        result: denyMessage,
+        isError: true,
+        durationMs: 0,
+      });
+      return "skip";
+    }
+    if (decision.updatedInput) {
+      args = decision.updatedInput as typeof args;
+    }
+  }
 
   // Cut 5.2: PreToolUse hook dispatch. With no hooks registered (the
   // default) the registry returns `noop` immediately and behavior is
