@@ -45,37 +45,37 @@ export interface HookDefinition {
   readonly timeoutMs?: number;
 }
 
-export interface HookContextBase {
+interface HookContextBase {
   readonly event: HookEvent;
   readonly sessionId: string;
   readonly chainId?: string;
   readonly depth?: number;
 }
 
-export interface PreToolUseContext extends HookContextBase {
+interface PreToolUseContext extends HookContextBase {
   readonly event: "PreToolUse";
   readonly toolCall: LLMToolCall;
 }
 
-export interface PostToolUseContext extends HookContextBase {
+interface PostToolUseContext extends HookContextBase {
   readonly event: "PostToolUse";
   readonly toolCall: LLMToolCall;
   readonly result: string;
   readonly isError?: boolean;
 }
 
-export interface PostToolUseFailureContext extends HookContextBase {
+interface PostToolUseFailureContext extends HookContextBase {
   readonly event: "PostToolUseFailure";
   readonly toolCall: LLMToolCall;
   readonly errorMessage: string;
 }
 
-export interface SessionLifecycleContext extends HookContextBase {
+interface SessionLifecycleContext extends HookContextBase {
   readonly event: "SessionStart" | "Stop" | "StopFailure";
   readonly messages: readonly LLMMessage[];
 }
 
-export interface CompactContext extends HookContextBase {
+interface CompactContext extends HookContextBase {
   readonly event: "PreCompact" | "PostCompact";
   readonly layer: "snip" | "microcompact" | "autocompact" | "reactive-compact";
 }

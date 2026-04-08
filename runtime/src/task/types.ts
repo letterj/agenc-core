@@ -1009,7 +1009,7 @@ export interface DeadLetterQueueConfig {
 /**
  * Pipeline stage recorded in a checkpoint.
  */
-export type CheckpointStage = "claimed" | "executed" | "submitted";
+type CheckpointStage = "claimed" | "executed" | "submitted";
 
 export interface TaskExecutionResultAttestation {
   /** Persisted schema version for trust evaluation. */

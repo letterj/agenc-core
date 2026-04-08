@@ -4,11 +4,6 @@ import type { CliConfigPathSource } from "./config-contract.js";
 
 export type CliOutputFormat = "json" | "jsonl" | "table";
 
-export interface CliReplayOutput<TPayload = unknown> {
-  format: CliOutputFormat;
-  payload: TPayload;
-}
-
 export type CliLogLevel = "silent" | "error" | "warn" | "info" | "debug";
 
 export interface CliLogger {
@@ -113,11 +108,11 @@ export interface ConnectorRemoveOptions extends BaseCliOptions {
   restart: boolean;
 }
 
-export interface SkillListOptions extends BaseCliOptions {}
+interface SkillListOptions extends BaseCliOptions {}
 export interface SkillInfoOptions extends BaseCliOptions {
   skillName: string;
 }
-export interface SkillValidateOptions extends BaseCliOptions {}
+interface SkillValidateOptions extends BaseCliOptions {}
 export interface SkillCreateOptions extends BaseCliOptions {
   skillName: string;
 }
@@ -171,19 +166,6 @@ export type SkillCommandOptions =
   | RegistryRateOptions
   | RegistryVerifyOptions
   | RegistryImportOpenclawOptions;
-
-export interface CliUsage {
-  command: string;
-  description: string;
-}
-
-export interface ParsedCliArguments {
-  command: "replay" | null;
-  replayCommand: "backfill" | "compare" | "incident" | null;
-  positional: string[];
-  options: Record<string, string | number | boolean>;
-  outputFormat: CliOutputFormat;
-}
 
 export interface CliParseReport {
   command: "replay";
