@@ -1,5 +1,6 @@
 import { didToolCallFail } from "../llm/chat-executor-tool-utils.js";
 import type { ChatExecutorResult } from "../llm/chat-executor.js";
+import { createSyntheticDialogueTurnExecutionContract } from "../llm/turn-execution-contract.js";
 import type { ToolHandler } from "../llm/types.js";
 import { toErrorMessage } from "../utils/async.js";
 
@@ -28,19 +29,6 @@ export async function executeNativeToolCall(
       durationMs: Math.max(0, Date.now() - startedAt),
     };
   }
-}
-
-function createSyntheticDialogueTurnExecutionContract() {
-  return {
-    version: 1 as const,
-    turnClass: "dialogue" as const,
-    ownerMode: "none" as const,
-    sourceArtifacts: [],
-    targetArtifacts: [],
-    delegationPolicy: "forbid" as const,
-    contractFingerprint: "synthetic-dialogue-contract",
-    taskLineageId: "synthetic-dialogue-task",
-  };
 }
 
 export function buildNativeActorResult(

@@ -1,3 +1,4 @@
+import { estimateContentChars } from "./chat-executor-text.js";
 import type { LLMContentPart, LLMMessage } from "./types.js";
 
 export type PromptBudgetMemoryRole = "working" | "episodic" | "semantic";
@@ -232,14 +233,6 @@ function truncateContent(
   }
 
   return out.length > 0 ? out : [{ type: "text", text: "" }];
-}
-
-function estimateContentChars(content: string | LLMContentPart[]): number {
-  if (typeof content === "string") return content.length;
-  return content.reduce((sum, part) => {
-    if (part.type === "text") return sum + part.text.length;
-    return sum + part.image_url.url.length;
-  }, 0);
 }
 
 function estimateMessageChars(message: LLMMessage): number {

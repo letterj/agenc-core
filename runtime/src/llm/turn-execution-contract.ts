@@ -66,3 +66,21 @@ export function deriveActiveTaskContext(
     targetArtifacts: contract.targetArtifacts,
   };
 }
+
+/**
+ * Synthetic "dialogue" contract for runtime-native tool invocations and
+ * benchmark harnesses that do not go through the LLM adapter. Uses
+ * `delegationPolicy: "forbid"` to short-circuit delegation heuristics.
+ */
+export function createSyntheticDialogueTurnExecutionContract(): TurnExecutionContract {
+  return {
+    version: 1 as const,
+    turnClass: "dialogue" as const,
+    ownerMode: "none" as const,
+    sourceArtifacts: [],
+    targetArtifacts: [],
+    delegationPolicy: "forbid" as const,
+    contractFingerprint: "synthetic-dialogue-contract",
+    taskLineageId: "synthetic-dialogue-task",
+  };
+}
