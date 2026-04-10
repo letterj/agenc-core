@@ -2,6 +2,13 @@ import type { ChatExecuteParams, ChatExecutorResult } from "../llm/chat-executor
 import type { ActiveTaskContext } from "../llm/turn-execution-contract-types.js";
 import type { LLMStatefulResumeAnchor } from "../llm/types.js";
 import type { MemoryBackend } from "../memory/types.js";
+import type { RuntimeContractSnapshot } from "../runtime-contract/types.js";
+import {
+  updateRuntimeContractMailboxLayer,
+  updateRuntimeContractTaskLayer,
+  updateRuntimeContractWorkerLayer,
+} from "../runtime-contract/types.js";
+import type { TaskStore } from "../tools/system/task-tracker.js";
 import {
   MemoryArtifactStore,
   type ContextArtifactRecord,
@@ -9,6 +16,7 @@ import {
 } from "../memory/artifact-store.js";
 import {
   SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY,
+  SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY,
   SESSION_STATEFUL_ARTIFACT_CONTEXT_METADATA_KEY,
   SESSION_STATEFUL_ARTIFACT_RECORDS_METADATA_KEY,
   SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY,
@@ -24,6 +32,7 @@ interface PersistedWebSessionRuntimeState {
   readonly statefulHistoryCompacted?: boolean;
   readonly artifactSnapshotId?: string;
   readonly artifactSessionId?: string;
+  readonly runtimeContractSnapshot?: RuntimeContractSnapshot;
   /**
    * Active task carryover for the next compatible turn. Round-trips through
    * web-session resume so a paused implementation/artifact-update task can
@@ -91,10 +100,18 @@ function buildPersistedWebSessionRuntimeState(
     session.metadata[SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY];
   const hasActiveTaskContext =
     typeof activeTaskContext === "object" && activeTaskContext !== null;
+  const runtimeContractSnapshot =
+    typeof session.metadata[SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY] === "object" &&
+      session.metadata[SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY] !== null
+      ? (session.metadata[
+          SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY
+        ] as RuntimeContractSnapshot)
+      : undefined;
   if (
     !resumeAnchor &&
     !historyCompacted &&
     !artifactSnapshotId &&
+    !runtimeContractSnapshot &&
     !hasActiveTaskContext
   ) {
     return undefined;
@@ -105,6 +122,7 @@ function buildPersistedWebSessionRuntimeState(
     ...(historyCompacted ? { statefulHistoryCompacted: true } : {}),
     ...(artifactSnapshotId ? { artifactSnapshotId } : {}),
     ...(artifactSnapshotId ? { artifactSessionId: session.id } : {}),
+    ...(runtimeContractSnapshot ? { runtimeContractSnapshot } : {}),
     ...(hasActiveTaskContext ? { activeTaskContext } : {}),
   };
 }
@@ -134,10 +152,16 @@ function coercePersistedWebSessionRuntimeState(
     candidate.activeTaskContext !== null
       ? candidate.activeTaskContext
       : undefined;
+  const runtimeContractSnapshot =
+    typeof candidate.runtimeContractSnapshot === "object" &&
+      candidate.runtimeContractSnapshot !== null
+      ? (candidate.runtimeContractSnapshot as RuntimeContractSnapshot)
+      : undefined;
   if (
     !resumeAnchor &&
     !historyCompacted &&
     !artifactSnapshotId &&
+    !runtimeContractSnapshot &&
     !activeTaskContext
   ) {
     return undefined;
@@ -148,6 +172,7 @@ function coercePersistedWebSessionRuntimeState(
     ...(historyCompacted ? { statefulHistoryCompacted: true } : {}),
     ...(artifactSnapshotId ? { artifactSnapshotId } : {}),
     ...(artifactSessionId ? { artifactSessionId } : {}),
+    ...(runtimeContractSnapshot ? { runtimeContractSnapshot } : {}),
     ...(activeTaskContext ? { activeTaskContext } : {}),
   };
 }
@@ -250,6 +275,10 @@ export async function hydrateWebSessionRuntimeState(
   if (persisted.activeTaskContext) {
     session.metadata[SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY] =
       persisted.activeTaskContext;
+  }
+  if (persisted.runtimeContractSnapshot) {
+    session.metadata[SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY] =
+      persisted.runtimeContractSnapshot;
   }
 }
 
@@ -358,4 +387,82 @@ export function persistSessionActiveTaskContext(
   } else {
     delete session.metadata[SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY];
   }
+}
+
+export function persistSessionRuntimeContractSnapshot(
+  session: Session,
+  result: ChatExecutorResult,
+): void {
+  if (result.runtimeContractSnapshot) {
+    session.metadata[SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY] =
+      result.runtimeContractSnapshot;
+  } else {
+    delete session.metadata[SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY];
+  }
+}
+
+export async function enrichRuntimeContractSnapshotForSession(params: {
+  readonly sessionId: string;
+  readonly result: ChatExecutorResult;
+  readonly taskStore?: TaskStore | null;
+}): Promise<ChatExecutorResult> {
+  if (!params.result.runtimeContractSnapshot) {
+    return params.result;
+  }
+
+  let snapshot = params.result.runtimeContractSnapshot;
+  if (params.taskStore) {
+    const taskLayer = await params.taskStore.describeRuntimeTaskLayer(
+      params.sessionId,
+      snapshot.flags.asyncTasksEnabled,
+    );
+    snapshot = updateRuntimeContractTaskLayer({
+      snapshot,
+      taskLayer,
+    });
+
+    const sessionTasks = params.taskStore.list(params.sessionId);
+    const activePublicWorkers = sessionTasks.filter(
+      (task) => task.kind !== "manual" && task.status === "in_progress",
+    ).length;
+    snapshot = updateRuntimeContractWorkerLayer({
+      snapshot,
+      workerLayer: {
+        configured:
+          snapshot.flags.asyncTasksEnabled ||
+          snapshot.flags.persistentWorkersEnabled,
+        effective: snapshot.flags.asyncTasksEnabled,
+        launchMode: snapshot.flags.asyncTasksEnabled
+          ? "durable_task_handle"
+          : "none",
+        activePublicWorkers,
+        ...(snapshot.flags.asyncTasksEnabled
+          ? {}
+          : {
+              inactiveReason: snapshot.flags.persistentWorkersEnabled
+                ? "persistent_workers_not_implemented"
+                : "flag_disabled",
+            }),
+      },
+    });
+  }
+
+  snapshot = updateRuntimeContractMailboxLayer({
+    snapshot,
+    mailboxLayer: {
+      configured: snapshot.flags.mailboxEnabled,
+      effective: false,
+      inactiveReason: snapshot.flags.mailboxEnabled
+        ? "mailbox_not_implemented"
+        : "flag_disabled",
+    },
+  });
+
+  if (snapshot === params.result.runtimeContractSnapshot) {
+    return params.result;
+  }
+  return {
+    ...params.result,
+    runtimeContractSnapshot: snapshot,
+  };
 }

@@ -32,6 +32,7 @@ import {
   updateRuntimeContractLegacyVerifierMode,
   updateRuntimeContractVerifierVerdict,
 } from "../runtime-contract/types.js";
+import type { TaskStore } from "../tools/system/task-tracker.js";
 
 const DEFAULT_VERIFY_TOOLS = [
   "system.readFile",
@@ -104,6 +105,7 @@ interface TopLevelVerifierParams {
     DelegationVerifierService,
     "shouldVerifySubAgentResult"
   > | null;
+  readonly taskStore?: TaskStore | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
   readonly logger?: Logger;
 }
@@ -119,6 +121,7 @@ export interface TopLevelVerifierValidationResult {
   readonly summary: string;
   readonly blockingMessage?: string;
   readonly exhaustedDetail?: string;
+  readonly taskId?: string;
 }
 
 function truncate(text: string, max: number): string {
@@ -388,10 +391,59 @@ export async function runTopLevelVerifierValidation(
     },
   };
 
+  let verifierTaskId: string | undefined;
+  if (params.taskStore) {
+    try {
+      const verifierTask = await params.taskStore.createRuntimeTask({
+        listId: params.sessionId,
+        kind: "verifier",
+        subject: "Run runtime verification",
+        description: "Verify the completed implementation with concrete checks.",
+        activeForm: "Running runtime verification",
+        metadata: {
+          _runtime: {
+            verification: true,
+          },
+        },
+        summary: "Runtime verifier started.",
+      });
+      verifierTaskId = verifierTask.id;
+    } catch (error) {
+      params.logger?.debug?.("Failed to create verifier task record", {
+        sessionId: params.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   let childSessionId: string;
   try {
     childSessionId = await subAgentManager.spawn(spawnConfig);
+    if (params.taskStore && verifierTaskId) {
+      await params.taskStore.attachExternalRef(
+        params.sessionId,
+        verifierTaskId,
+        {
+          kind: "verifier",
+          id: childSessionId,
+          sessionId: childSessionId,
+        },
+        "Runtime verifier worker started.",
+      );
+    }
   } catch (error) {
+    if (params.taskStore && verifierTaskId) {
+      await params.taskStore.finalizeRuntimeTask({
+        listId: params.sessionId,
+        taskId: verifierTaskId,
+        status: "failed",
+        summary: "Top-level verifier worker could not be started.",
+        workingDirectory: workspaceRoot,
+        eventData: {
+          stage: "spawn",
+        },
+      });
+    }
     params.logger?.warn(
       "Failed to spawn top-level verifier worker",
       {
@@ -409,12 +461,37 @@ export async function runTopLevelVerifierValidation(
       },
       summary: "Top-level verifier worker could not be started.",
       exhaustedDetail: "Top-level verifier worker could not be started.",
+      ...(verifierTaskId ? { taskId: verifierTaskId } : {}),
     };
   }
 
   const verifierResult = await subAgentManager.waitForResult(childSessionId);
   const parsed = parseVerifierSnapshot(verifierResult);
   const runtimeVerifier = toRuntimeVerifierVerdict(parsed);
+  if (params.taskStore && verifierTaskId) {
+    await params.taskStore.finalizeRuntimeTask({
+      listId: params.sessionId,
+      taskId: verifierTaskId,
+      status: parsed.snapshot.overall === "pass" ? "completed" : "failed",
+      summary: parsed.summary,
+      output: verifierResult?.output,
+      structuredOutput: verifierResult?.structuredOutput?.parsed,
+      usage:
+        verifierResult?.tokenUsage as unknown as Record<string, unknown> | undefined,
+      verifierVerdict: runtimeVerifier,
+      ownedArtifacts: targetArtifacts,
+      workingDirectory: workspaceRoot,
+      externalRef: {
+        kind: "verifier",
+        id: childSessionId,
+        sessionId: childSessionId,
+      },
+      eventData: {
+        verifierSessionId: childSessionId,
+        verdict: runtimeVerifier.overall,
+      },
+    });
+  }
   if (parsed.snapshot.overall !== "pass") {
     params.logger?.warn(
       "Top-level verifier did not pass",
@@ -432,6 +509,7 @@ export async function runTopLevelVerifierValidation(
       runtimeVerifier,
       summary: parsed.summary,
       exhaustedDetail: `Top-level verifier retry: ${parsed.summary}`,
+      ...(verifierTaskId ? { taskId: verifierTaskId } : {}),
     };
   }
   if (parsed.snapshot.overall === "pass") {
@@ -440,6 +518,7 @@ export async function runTopLevelVerifierValidation(
       verifier: parsed.snapshot,
       runtimeVerifier,
       summary: parsed.summary,
+      ...(verifierTaskId ? { taskId: verifierTaskId } : {}),
     };
   }
   return {
@@ -452,6 +531,7 @@ export async function runTopLevelVerifierValidation(
       verdict: runtimeVerifier.overall,
     }),
     exhaustedDetail: `Top-level verifier ${parsed.snapshot.overall}: ${parsed.summary}`,
+    ...(verifierTaskId ? { taskId: verifierTaskId } : {}),
   };
 }
 

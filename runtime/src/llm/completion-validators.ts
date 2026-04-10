@@ -437,6 +437,8 @@ export function buildCompletionValidators(params: {
           verifierService:
             params.completionValidation?.topLevelVerifier?.verifierService ??
             null,
+          taskStore:
+            params.completionValidation?.topLevelVerifier?.taskStore ?? null,
           agentDefinitions:
             params.completionValidation?.topLevelVerifier?.agentDefinitions,
           logger: params.completionValidation?.topLevelVerifier?.logger,
@@ -449,6 +451,7 @@ export function buildCompletionValidators(params: {
           maxAttempts: params.ctx.requiredToolEvidence?.maxCorrectionAttempts ?? 1,
           exhaustedDetail: validation.exhaustedDetail,
           verifier: validation.runtimeVerifier,
+          verifierTaskId: validation.taskId,
         };
       },
     },

@@ -29,6 +29,8 @@ import type { MemoryBackend } from "../memory/types.js";
 import { EffectLedger } from "../workflow/effect-ledger.js";
 import { createGatewayMessage } from "./message.js";
 import { createSessionToolHandler } from "./tool-handler-factory.js";
+import type { RuntimeContractFlags } from "../runtime-contract/types.js";
+import type { TaskStore } from "../tools/system/task-tracker.js";
 import { buildChatUsagePayload } from "./chat-usage.js";
 import {
   createExecutionTraceEventLogger,
@@ -188,6 +190,10 @@ export interface VoiceBridgeConfig {
   traceProviderPayloads?: boolean;
   /** Full trace logging controls shared with the daemon's traced webchat path. */
   traceConfig?: ResolvedTraceLoggingConfig;
+  /** Durable task registry used for handle-first delegation. */
+  taskStore?: TaskStore | null;
+  /** Runtime-contract flags that gate handle-first delegation. */
+  runtimeContractFlags?: RuntimeContractFlags;
 }
 
 interface ActiveSession {
@@ -488,6 +494,8 @@ export class VoiceBridge {
     const baseHandler = createSessionToolHandler({
       sessionId,
       baseHandler: toolHandler,
+      taskStore: this.config.taskStore,
+      runtimeContractFlags: this.config.runtimeContractFlags,
       availableToolNames: this.config.availableToolNames,
       desktopRouterFactory,
       // Keep desktop routing aligned with chat slash commands/history by using

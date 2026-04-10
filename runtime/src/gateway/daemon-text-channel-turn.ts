@@ -27,13 +27,16 @@ import {
 import {
   buildSessionActiveTaskContext,
   buildSessionStatefulOptions,
+  enrichRuntimeContractSnapshotForSession,
   persistSessionActiveTaskContext,
+  persistSessionRuntimeContractSnapshot,
   persistSessionStatefulContinuation,
 } from "./daemon-session-state.js";
 import { applyLegacyTopLevelVerifier } from "./top-level-verifier.js";
 import type { AgentDefinition } from "./agent-loader.js";
 import type { DelegationVerifierService } from "./delegation-runtime.js";
 import type { SubAgentManager } from "./sub-agent.js";
+import type { TaskStore } from "../tools/system/task-tracker.js";
 import { filterSystemPromptForToolRouting } from "./system-prompt-routing.js";
 import {
   logExecutionTraceEvent,
@@ -125,6 +128,7 @@ interface ExecuteTextChannelTurnParams {
   readonly subAgentManager?: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
   readonly verifierService?: Pick<DelegationVerifierService, "shouldVerifySubAgentResult"> | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
+  readonly taskStore?: TaskStore | null;
 }
 
 export async function executeTextChannelTurn(
@@ -151,6 +155,7 @@ export async function executeTextChannelTurn(
     subAgentManager = null,
     verifierService = null,
     agentDefinitions,
+    taskStore = null,
   } = params;
 
   const toolRoutingDecision = buildToolRoutingDecision(
@@ -298,7 +303,7 @@ export async function executeTextChannelTurn(
         }
       : {}),
   });
-  const result =
+  const baseResult =
     rawResult.runtimeContractSnapshot?.flags.runtimeContractV2 === true
       ? rawResult
       : await applyLegacyTopLevelVerifier({
@@ -310,6 +315,12 @@ export async function executeTextChannelTurn(
         agentDefinitions,
         logger,
       });
+  const result = await enrichRuntimeContractSnapshotForSession({
+    sessionId: msg.sessionId,
+    result: baseResult,
+    taskStore,
+  });
+  persistSessionRuntimeContractSnapshot(session, result);
   recordToolRoutingOutcome(msg.sessionId, result.toolRoutingSummary);
 
   if (traceConfig.enabled) {

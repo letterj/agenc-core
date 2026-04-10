@@ -19,6 +19,7 @@ import {
   TASK_LIST_ARG,
   TASK_TRACKER_TOOL_NAMES,
 } from "../tools/system/task-tracker.js";
+import type { TaskStore } from "../tools/system/task-tracker.js";
 import {
   didToolCallFail,
   enrichToolResultMetadata,
@@ -63,6 +64,7 @@ import {
   resolveExecutionEnvelopeArtifactRelations,
   type ExecutionEnvelope,
 } from "../workflow/execution-envelope.js";
+import type { RuntimeContractFlags } from "../runtime-contract/types.js";
 import type { RuntimeIncidentDiagnostics } from "../telemetry/incident-diagnostics.js";
 import {
   FaultInjectionError,
@@ -2357,6 +2359,10 @@ interface SessionToolHandlerConfig {
   effectLedger?: EffectLedger;
   /** Optional channel/source label attached to emitted effect records. */
   effectChannel?: string;
+  /** Durable task registry used for public task handles. */
+  taskStore?: TaskStore | null;
+  /** Runtime-contract feature flags that gate handle-first delegation. */
+  runtimeContractFlags?: RuntimeContractFlags;
 }
 
 // ============================================================================
@@ -2398,6 +2404,8 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
     resolvePolicyScope,
     effectLedger,
     effectChannel,
+    taskStore,
+    runtimeContractFlags,
     resolveWorkspaceContext,
   } = config;
   let toolCallSeq = 0;
@@ -2932,6 +2940,8 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
             subAgentManager,
             lifecycleEmitter,
             verifier,
+            taskStore,
+            runtimeContractFlags,
             availableToolNames,
             defaultWorkingDirectory: effectiveDefaultWorkingDirectory,
             parentAllowedReadRoots: delegatedParentAllowedRoots,
@@ -2950,6 +2960,8 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
               subAgentManager,
               lifecycleEmitter,
               verifier,
+              taskStore,
+              runtimeContractFlags,
               availableToolNames,
               defaultWorkingDirectory: effectiveDefaultWorkingDirectory,
               parentAllowedReadRoots: delegatedParentAllowedRoots,

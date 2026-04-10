@@ -10,6 +10,7 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { MemoryBackend } from "../memory/types.js";
 import type { Logger } from "../utils/logger.js";
 import { toErrorMessage } from "../utils/async.js";
 import type { GatewayConfig, GatewayMCPServerConfig } from "./types.js";
@@ -49,6 +50,7 @@ import {
   buildAllowedFilesystemPaths,
   resolveHostWorkspacePath,
 } from "./host-workspace.js";
+import { resolveRuntimePersistencePaths } from "./runtime-persistence.js";
 import {
   validateMCPServerBinaryIntegrity,
   validateMCPServerStaticPolicy,
@@ -128,6 +130,7 @@ interface ToolRegistryDeps {
 export async function createDaemonToolRegistry(
   config: GatewayConfig,
   deps: ToolRegistryDeps,
+  memoryBackend: MemoryBackend,
   metrics?: UnifiedTelemetryCollector,
 ): Promise<ToolRegistrySideEffects> {
   const { logger, configPath, yolo } = deps;
@@ -315,7 +318,11 @@ export async function createDaemonToolRegistry(
       logger,
     ),
   );
-  const taskTrackerStore = new TaskStore();
+  const taskTrackerStore = new TaskStore({
+    memoryBackend,
+    persistenceRootDir: resolveRuntimePersistencePaths().rootDir,
+    logger,
+  });
   registry.registerAll(
     createTaskTrackerTools(taskTrackerStore, {
       onBeforeTaskComplete: async ({ listId, taskId, task, patch }) => {

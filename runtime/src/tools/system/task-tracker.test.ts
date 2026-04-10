@@ -38,6 +38,8 @@ describe("task-tracker", () => {
   let list: Tool;
   let get: Tool;
   let update: Tool;
+  let wait: Tool;
+  let output: Tool;
   let toolOptions: TaskTrackerToolOptions;
 
   beforeEach(() => {
@@ -49,12 +51,21 @@ describe("task-tracker", () => {
     list = findTool(tools, "task.list");
     get = findTool(tools, "task.get");
     update = findTool(tools, "task.update");
+    wait = findTool(tools, "task.wait");
+    output = findTool(tools, "task.output");
   });
 
   describe("registration metadata", () => {
-    it("exposes the four task tracker tools", () => {
+    it("exposes the six task tracker tools", () => {
       const names = tools.map((t) => t.name).sort();
-      expect(names).toEqual(["task.create", "task.get", "task.list", "task.update"]);
+      expect(names).toEqual([
+        "task.create",
+        "task.get",
+        "task.list",
+        "task.output",
+        "task.update",
+        "task.wait",
+      ]);
     });
 
     it("each tool has a non-trivial description and an inputSchema", () => {
@@ -411,6 +422,61 @@ describe("task-tracker", () => {
       expect(stored?.status).toBe("pending");
       expect(stored?.metadata).toEqual({ changedBy: "guard" });
       expect((result.body.task as Record<string, unknown> | undefined)?.revision).toBeUndefined();
+    });
+  });
+
+  describe("task.wait and task.output", () => {
+    it("returns terminal state and persisted output for runtime-managed tasks", async () => {
+      const runtimeTask = await store.createRuntimeTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        kind: "subagent",
+        subject: "Implement phase",
+        description: "Finish the delegated phase",
+        summary: "Delegated worker started.",
+      });
+
+      await store.finalizeRuntimeTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        taskId: runtimeTask.id,
+        status: "completed",
+        summary: "Delegated worker completed successfully.",
+        output: "{\"ok\":true}",
+        structuredOutput: { ok: true },
+        usage: { outputTokens: 12 },
+        externalRef: {
+          kind: "subagent",
+          id: "subagent:1",
+          sessionId: "subagent:1",
+        },
+      });
+
+      const waited = await callTool(wait, {
+        taskId: runtimeTask.id,
+        until: "terminal",
+      });
+      expect(waited.body.ready).toBe(true);
+      expect(waited.body.task).toMatchObject({
+        id: runtimeTask.id,
+        status: "completed",
+        outputReady: true,
+      });
+
+      const persistedOutput = await callTool(output, {
+        taskId: runtimeTask.id,
+        includeEvents: true,
+      });
+      expect(persistedOutput.body.ready).toBe(true);
+      expect(persistedOutput.body.summary).toBe(
+        "Delegated worker completed successfully.",
+      );
+      expect(persistedOutput.body.output).toBe("{\"ok\":true}");
+      expect(persistedOutput.body.structuredOutput).toEqual({ ok: true });
+      expect(persistedOutput.body.usage).toEqual({ outputTokens: 12 });
+      expect(persistedOutput.body.externalRef).toMatchObject({
+        kind: "subagent",
+        id: "subagent:1",
+      });
+      expect(persistedOutput.body.events).toBeInstanceOf(Array);
     });
   });
 

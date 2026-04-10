@@ -63,6 +63,7 @@ import type { HostToolingProfile } from "../gateway/host-tooling.js";
 import type { AgentDefinition } from "../gateway/agent-loader.js";
 import type { DelegationVerifierService } from "../gateway/delegation-runtime.js";
 import type { SubAgentManager } from "../gateway/sub-agent.js";
+import type { TaskStore } from "../tools/system/task-tracker.js";
 import type { ActiveTaskContext, TurnExecutionContract } from "./turn-execution-contract-types.js";
 import type {
   RuntimeContractFlags,
@@ -156,6 +157,7 @@ type ChatExecutionTraceEventType =
   | "model_call_prepared"
   | "recovery_hints_injected"
   | "route_expanded"
+  | "runtime_contract_snapshot"
   | "stop_hook_execution_finished"
   | "stop_gate_intervention"
   | "tool_arguments_invalid"
@@ -527,6 +529,7 @@ export interface ChatExecutorConfig {
       readonly verifierService?: Pick<DelegationVerifierService, "shouldVerifySubAgentResult"> | null;
       readonly agentDefinitions?: readonly AgentDefinition[];
       readonly logger?: import("../utils/logger.js").Logger;
+      readonly taskStore?: TaskStore | null;
     };
   };
 }

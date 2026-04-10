@@ -50,11 +50,57 @@ export interface RuntimeToolProtocolSnapshot {
   readonly lastViolation?: string;
 }
 
+export interface RuntimeTaskLayerSnapshot {
+  readonly configured: boolean;
+  readonly effective: boolean;
+  readonly backend: string;
+  readonly durability: string;
+  readonly totalTasks: number;
+  readonly activeCount: number;
+  readonly publicHandleCount: number;
+  readonly inactiveReason?: string;
+}
+
+export interface RuntimeWorkerLayerSnapshot {
+  readonly configured: boolean;
+  readonly effective: boolean;
+  readonly launchMode: "none" | "session_subagent" | "durable_task_handle";
+  readonly activePublicWorkers: number;
+  readonly inactiveReason?: string;
+}
+
+export interface RuntimeMailboxLayerSnapshot {
+  readonly configured: boolean;
+  readonly effective: boolean;
+  readonly inactiveReason?: string;
+}
+
+export interface RuntimeVerifierStageSnapshot {
+  readonly bootstrapConfigured: boolean;
+  readonly bootstrapAttempted: boolean;
+  readonly runtimeRequired: boolean;
+  readonly launcherKind: "none" | "subagent";
+  readonly taskId?: string;
+  readonly stageStatus:
+    | "inactive"
+    | "pending"
+    | "running"
+    | "passed"
+    | "retry"
+    | "failed"
+    | "skipped";
+  readonly skipReason?: string;
+}
+
 export interface RuntimeContractSnapshot {
   readonly flags: RuntimeContractFlags;
   readonly validatorOrder: readonly CompletionValidatorId[];
   readonly validators: readonly RuntimeContractValidatorSnapshot[];
   readonly verifier: RuntimeVerifierVerdict;
+  readonly taskLayer: RuntimeTaskLayerSnapshot;
+  readonly workerLayer: RuntimeWorkerLayerSnapshot;
+  readonly mailboxLayer: RuntimeMailboxLayerSnapshot;
+  readonly verifierStages: RuntimeVerifierStageSnapshot;
   readonly legacyTopLevelVerifierMode: "none" | "pending" | "applied" | "skipped";
   readonly toolProtocol: RuntimeToolProtocolSnapshot;
 }
@@ -69,6 +115,7 @@ export interface CompletionValidatorResult {
   readonly exhaustedDetail?: string;
   readonly validationCode?: DelegationOutputValidationCode;
   readonly verifier?: RuntimeVerifierVerdict;
+  readonly verifierTaskId?: string;
 }
 
 export interface CompletionValidatorContext {
@@ -82,18 +129,33 @@ export interface RuntimeWorkerHandle {
   readonly id: string;
   readonly kind: string;
   readonly status: string;
+  readonly taskId?: string;
+  readonly summary?: string;
 }
 
 export interface RuntimeTaskHandle {
   readonly id: string;
+  readonly kind: string;
   readonly status: string;
+  readonly summary?: string;
+  readonly externalRef?: {
+    readonly kind: string;
+    readonly id: string;
+    readonly sessionId?: string;
+    readonly runId?: string;
+  };
+  readonly outputReady?: boolean;
   readonly outputPath?: string;
+  readonly waitTool?: "task.wait";
+  readonly outputTool?: "task.output";
 }
 
 export interface RuntimeMailboxMessage {
   readonly type: string;
   readonly workerId?: string;
   readonly taskId?: string;
+  readonly subject?: string;
+  readonly body?: string;
 }
 
 export const COMPLETION_VALIDATOR_ORDER: readonly CompletionValidatorId[] = [
@@ -122,6 +184,44 @@ export function createRuntimeContractSnapshot(
     verifier: {
       attempted: false,
       overall: "skipped",
+    },
+    taskLayer: {
+      configured: flags.asyncTasksEnabled,
+      effective: false,
+      backend: "uninitialized",
+      durability: "unknown",
+      totalTasks: 0,
+      activeCount: 0,
+      publicHandleCount: 0,
+      inactiveReason: flags.asyncTasksEnabled
+        ? "runtime_task_registry_uninitialized"
+        : "flag_disabled",
+    },
+    workerLayer: {
+      configured: flags.persistentWorkersEnabled,
+      effective: false,
+      launchMode: "none",
+      activePublicWorkers: 0,
+      inactiveReason: flags.persistentWorkersEnabled
+        ? "persistent_workers_not_implemented"
+        : "flag_disabled",
+    },
+    mailboxLayer: {
+      configured: flags.mailboxEnabled,
+      effective: false,
+      inactiveReason: flags.mailboxEnabled
+        ? "mailbox_not_implemented"
+        : "flag_disabled",
+    },
+    verifierStages: {
+      bootstrapConfigured: flags.verifierProjectBootstrap,
+      bootstrapAttempted: false,
+      runtimeRequired: flags.verifierRuntimeRequired,
+      launcherKind: flags.verifierRuntimeRequired ? "subagent" : "none",
+      stageStatus: flags.verifierRuntimeRequired ? "pending" : "inactive",
+      ...(flags.verifierRuntimeRequired
+        ? {}
+        : { skipReason: "runtime_not_required" }),
     },
     legacyTopLevelVerifierMode: flags.runtimeContractV2 ? "none" : "pending",
     toolProtocol: {
@@ -166,6 +266,46 @@ export function updateRuntimeContractVerifierVerdict(params: {
   return {
     ...params.snapshot,
     verifier: params.verifier,
+  };
+}
+
+export function updateRuntimeContractTaskLayer(params: {
+  readonly snapshot: RuntimeContractSnapshot;
+  readonly taskLayer: RuntimeTaskLayerSnapshot;
+}): RuntimeContractSnapshot {
+  return {
+    ...params.snapshot,
+    taskLayer: params.taskLayer,
+  };
+}
+
+export function updateRuntimeContractWorkerLayer(params: {
+  readonly snapshot: RuntimeContractSnapshot;
+  readonly workerLayer: RuntimeWorkerLayerSnapshot;
+}): RuntimeContractSnapshot {
+  return {
+    ...params.snapshot,
+    workerLayer: params.workerLayer,
+  };
+}
+
+export function updateRuntimeContractMailboxLayer(params: {
+  readonly snapshot: RuntimeContractSnapshot;
+  readonly mailboxLayer: RuntimeMailboxLayerSnapshot;
+}): RuntimeContractSnapshot {
+  return {
+    ...params.snapshot,
+    mailboxLayer: params.mailboxLayer,
+  };
+}
+
+export function updateRuntimeContractVerifierStage(params: {
+  readonly snapshot: RuntimeContractSnapshot;
+  readonly verifierStages: RuntimeVerifierStageSnapshot;
+}): RuntimeContractSnapshot {
+  return {
+    ...params.snapshot,
+    verifierStages: params.verifierStages,
   };
 }
 

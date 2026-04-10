@@ -113,6 +113,7 @@ import {
 import type { DelegationOutputValidationCode } from "../utils/delegation-validation.js";
 import {
   updateRuntimeContractValidatorSnapshot,
+  updateRuntimeContractVerifierStage,
   updateRuntimeContractToolProtocolSnapshot,
   updateRuntimeContractVerifierVerdict,
 } from "../runtime-contract/types.js";
@@ -1907,6 +1908,20 @@ export async function executeToolCallLoop(
     let completionValidationStatus = "passed";
     for (const validator of validators) {
       if (!validator.enabled) {
+        if (validator.id === "top_level_verifier") {
+          ctx.runtimeContractSnapshot = updateRuntimeContractVerifierStage({
+            snapshot: ctx.runtimeContractSnapshot,
+            verifierStages: {
+              ...ctx.runtimeContractSnapshot.verifierStages,
+              stageStatus: ctx.runtimeContractSnapshot.flags.verifierRuntimeRequired
+                ? "skipped"
+                : "inactive",
+              ...(ctx.runtimeContractSnapshot.flags.verifierRuntimeRequired
+                ? { skipReason: "validator_disabled" }
+                : { skipReason: "runtime_not_required" }),
+            },
+          });
+        }
         ctx.runtimeContractSnapshot = updateRuntimeContractValidatorSnapshot({
           snapshot: ctx.runtimeContractSnapshot,
           id: validator.id,
@@ -1915,6 +1930,17 @@ export async function executeToolCallLoop(
           outcome: "skipped",
         });
         continue;
+      }
+
+      if (validator.id === "top_level_verifier") {
+        ctx.runtimeContractSnapshot = updateRuntimeContractVerifierStage({
+          snapshot: ctx.runtimeContractSnapshot,
+          verifierStages: {
+            ...ctx.runtimeContractSnapshot.verifierStages,
+            stageStatus: "running",
+            skipReason: undefined,
+          },
+        });
       }
 
       const validation = await validator.execute();
@@ -1954,6 +1980,33 @@ export async function executeToolCallLoop(
         ctx.runtimeContractSnapshot = updateRuntimeContractVerifierVerdict({
           snapshot: ctx.runtimeContractSnapshot,
           verifier: validation.verifier,
+        });
+      }
+      if (validator.id === "top_level_verifier") {
+        const verifierStageStatus =
+          validation.outcome === "pass"
+            ? "passed"
+            : validation.outcome === "fail_closed"
+              ? "failed"
+              : validation.outcome === "retry_with_blocking_message"
+                ? validation.verifier?.overall === "fail"
+                  ? "failed"
+                  : "retry"
+                : "skipped";
+        ctx.runtimeContractSnapshot = updateRuntimeContractVerifierStage({
+          snapshot: ctx.runtimeContractSnapshot,
+          verifierStages: {
+            ...ctx.runtimeContractSnapshot.verifierStages,
+            ...(validation.verifierTaskId
+              ? { taskId: validation.verifierTaskId }
+              : {}),
+            stageStatus: verifierStageStatus,
+            ...(validation.outcome === "skipped" && validation.reason
+              ? { skipReason: validation.reason }
+              : verifierStageStatus === "skipped"
+                ? { skipReason: "validator_skipped" }
+                : { skipReason: undefined }),
+          },
         });
       }
       ctx.runtimeContractSnapshot = updateRuntimeContractValidatorSnapshot({

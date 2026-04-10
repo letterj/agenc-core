@@ -1878,6 +1878,93 @@ describe("createSessionToolHandler", () => {
     );
   });
 
+  it("returns a durable task handle for execute_with_agent when async task handles are enabled", async () => {
+    const outputRoot = createTempDir("agenc-task-handle-");
+    const taskStore = new TaskStore({
+      memoryBackend: createMockMemoryBackend(),
+      persistenceRootDir: outputRoot,
+    });
+
+    try {
+      const childResult = makeCompletedChildResult({
+        sessionId: "subagent:child-async",
+        output: '{"summary":"child completed"}',
+        success: true,
+        durationMs: 42,
+        toolCalls: [],
+        tokenUsage: {
+          promptTokens: 10,
+          completionTokens: 20,
+          totalTokens: 30,
+        },
+      });
+      const subAgentManager = {
+        spawn: vi.fn(async () => "subagent:child-async"),
+        waitForResult: vi.fn(async () => childResult),
+      };
+
+      const handler = createSessionToolHandler({
+        sessionId: "session-parent",
+        baseHandler: vi.fn(async () => "should-not-run"),
+        taskStore,
+        runtimeContractFlags: {
+          runtimeContractV2: true,
+          stopHooksEnabled: false,
+          asyncTasksEnabled: true,
+          persistentWorkersEnabled: false,
+          mailboxEnabled: false,
+          verifierRuntimeRequired: false,
+          verifierProjectBootstrap: false,
+          workerIsolationWorktree: false,
+          workerIsolationRemote: false,
+        },
+        availableToolNames: ["system.readFile"],
+        routerId: "router-a",
+        send: vi.fn(),
+        defaultWorkingDirectory: "/tmp/project-root",
+        delegation: () => ({
+          subAgentManager: subAgentManager as any,
+          policyEngine: null,
+          verifier: null,
+          lifecycleEmitter: null,
+        }),
+      });
+
+      const result = await handler("execute_with_agent", {
+        task: "Inspect file",
+        tools: ["system.readFile"],
+      });
+      const parsed = JSON.parse(result) as {
+        readonly success?: boolean;
+        readonly status?: string;
+        readonly taskId?: string;
+        readonly task?: Record<string, unknown>;
+      };
+
+      expect(parsed.success).toBe(true);
+      expect(parsed.status).toBe("in_progress");
+      expect(parsed.taskId).toBeTruthy();
+      expect(parsed.task).toMatchObject({
+        id: parsed.taskId,
+        kind: "subagent",
+        status: "in_progress",
+        waitTool: "task.wait",
+        outputTool: "task.output",
+      });
+
+      const waited = await taskStore.waitForTask("session-parent", parsed.taskId!, {
+        timeoutMs: 1_000,
+        until: "terminal",
+      });
+      expect(waited?.status).toBe("completed");
+      const output = await taskStore.readTaskOutput("session-parent", parsed.taskId!);
+      expect(output?.summary).toBe("Delegated worker completed successfully.");
+      expect(output?.output).toBe('{"summary":"child completed"}');
+    } finally {
+      rmSync(outputRoot, { recursive: true, force: true });
+    }
+  });
+
   it("does not surface delegated child success when completion state still needs verification", async () => {
     const handler = createSessionToolHandler({
       sessionId: "session-parent",

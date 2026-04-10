@@ -374,7 +374,7 @@ describe("executeTextChannelTurn", () => {
       },
     });
 
-    expect(returned).toBe(result);
+    expect(returned).toMatchObject(result);
     expect(returned.completionState).toBe("completed");
     expect(returned.content).toBe("reply");
   });

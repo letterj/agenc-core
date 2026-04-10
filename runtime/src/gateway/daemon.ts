@@ -96,6 +96,7 @@ import {
   createChatExecutor,
   buildPermissionRulesFromAllowDeny,
 } from "./chat-executor-factory.js";
+import { resolveRuntimeContractFlags } from "../runtime-contract/flags.js";
 import {
   normalizeToolCallArguments,
 } from "../llm/chat-executor-tool-utils.js";
@@ -1396,6 +1397,8 @@ export class DaemonManager {
         createSessionToolHandler({
           sessionId: sessionIdentity.subagentSessionId,
           baseHandler: baseToolHandler,
+          taskStore: this._taskTrackerStore,
+          runtimeContractFlags: resolveRuntimeContractFlags(config.llm),
           availableToolNames: allowedToolNames,
           defaultWorkingDirectory: workingDirectory,
           workspaceAliasRoot: this._hostWorkspacePath ?? undefined,
@@ -1974,6 +1977,7 @@ export class DaemonManager {
           verifierService: this._delegationVerifierService,
           agentDefinitions: this._agentDefinitions,
           logger: this.logger,
+          taskStore: this._taskTrackerStore,
         },
       },
     });
@@ -2005,6 +2009,7 @@ export class DaemonManager {
       hooks,
       approvalEngine: approvalEngine ?? undefined,
       memoryBackend,
+      taskStore: this._taskTrackerStore,
       delegation: this.resolveDelegationToolContext,
     };
     const voiceBridge = this.createOptionalVoiceBridge(
@@ -3502,6 +3507,7 @@ export class DaemonManager {
             verifierService: this._delegationVerifierService,
             agentDefinitions: this._agentDefinitions,
             logger: this.logger,
+            taskStore: this._taskTrackerStore,
           },
         },
       });
@@ -3613,10 +3619,11 @@ export class DaemonManager {
       getCollaborationProtocol: () => this._collaborationProtocol,
       resolveStopHookRuntime: () =>
         buildStopHookRuntime(this.gateway?.config.llm?.stopHooks),
-    }, metrics);
+    }, this._memoryBackend!, metrics);
     this._remoteJobManager = result.remoteJobManager;
     this._remoteSessionManager = result.remoteSessionManager;
     this._taskTrackerStore = result.taskTrackerStore;
+    await this._taskTrackerStore.repairRuntimeState();
     this._containerMCPConfigs = result.containerMCPConfigs;
     this._mcpManager = result.mcpManager;
     this._connectionManager = result.connectionManager;
@@ -4112,6 +4119,7 @@ export class DaemonManager {
       approvalEngine?: ApprovalEngine;
       memoryBackend?: MemoryBackend;
       delegation?: DelegationToolCompositionResolver;
+      taskStore?: TaskStore | null;
     },
     voiceSystemPrompt?: string,
   ): VoiceBridge | undefined {
@@ -4157,6 +4165,8 @@ export class DaemonManager {
       hooks: resolvedDeps.hooks,
       approvalEngine: resolvedDeps.approvalEngine,
       memoryBackend: resolvedDeps.memoryBackend,
+      taskStore: resolvedDeps.taskStore ?? null,
+      runtimeContractFlags: resolveRuntimeContractFlags(config.llm),
       sessionTokenBudget: resolveSessionTokenBudget(
         config.llm,
         contextWindowTokens,
@@ -5209,6 +5219,8 @@ export class DaemonManager {
     const baseSessionHandler = createSessionToolHandler({
       sessionId,
       baseHandler: baseToolHandler,
+      taskStore: this._taskTrackerStore,
+      runtimeContractFlags: resolveRuntimeContractFlags(this.gateway?.config.llm),
       availableToolNames: this.getAdvertisedToolNames(),
       defaultWorkingDirectory: this._hostWorkspacePath ?? undefined,
       workspaceAliasRoot: this._hostWorkspacePath ?? undefined,
@@ -5302,6 +5314,8 @@ export class DaemonManager {
     const baseSessionHandler = createSessionToolHandler({
       sessionId,
       baseHandler: this._baseToolHandler!,
+      taskStore: this._taskTrackerStore,
+      runtimeContractFlags: resolveRuntimeContractFlags(this.gateway?.config.llm),
       availableToolNames: this.getAdvertisedToolNames(),
       defaultWorkingDirectory: this._hostWorkspacePath ?? undefined,
       workspaceAliasRoot: this._hostWorkspacePath ?? undefined,
@@ -5712,6 +5726,7 @@ export class DaemonManager {
             updatedAt: Date.now(),
           });
         },
+        taskStore: this._taskTrackerStore,
         onSubagentSynthesis: (result) => {
           if (
             this._subagentActivityTraceBySession.get(msg.sessionId) !== turnTraceId

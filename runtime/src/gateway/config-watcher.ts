@@ -2979,6 +2979,18 @@ export function validateGatewayConfig(obj: unknown): ValidationResult {
   validateLlmSection(obj.llm, errors);
 
   validateMemorySection(obj.memory, errors);
+  if (
+    isRecord(obj.llm) &&
+    obj.llm.runtimeContractV2 === true &&
+    isRecord(obj.llm.asyncTasks) &&
+    obj.llm.asyncTasks.enabled === true &&
+    isRecord(obj.memory) &&
+    obj.memory.backend === "memory"
+  ) {
+    errors.push(
+      "memory.backend=memory is invalid when llm.runtimeContractV2 and llm.asyncTasks.enabled are both true",
+    );
+  }
   validateAuthSection(obj.auth, errors);
   validateAuthSecretRequirement(obj.gateway, obj.auth, errors);
   validateDesktopSection(obj.desktop, errors);

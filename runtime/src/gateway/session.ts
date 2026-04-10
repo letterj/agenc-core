@@ -10,6 +10,7 @@
 import { createHash } from "node:crypto";
 import type { LLMMessage } from "../llm/types.js";
 import type { ArtifactCompactionState } from "../memory/artifact-store.js";
+import type { RuntimeContractSnapshot } from "../runtime-contract/types.js";
 import { compactHistoryIntoArtifactContext } from "../llm/context-compaction.js";
 
 export const SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY =
@@ -22,6 +23,8 @@ export const SESSION_STATEFUL_ARTIFACT_RECORDS_METADATA_KEY =
   "statefulArtifactRecords";
 export const SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY =
   "activeTaskContext";
+export const SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY =
+  "runtimeContractSnapshot";
 
 export function clearStatefulContinuationMetadata(
   metadata: Record<string, unknown>,
@@ -31,6 +34,17 @@ export function clearStatefulContinuationMetadata(
   delete metadata[SESSION_STATEFUL_ARTIFACT_CONTEXT_METADATA_KEY];
   delete metadata[SESSION_STATEFUL_ARTIFACT_RECORDS_METADATA_KEY];
   delete metadata[SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY];
+  delete metadata[SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY];
+}
+
+export function buildSessionRuntimeContractSnapshot(
+  metadata: Record<string, unknown>,
+): RuntimeContractSnapshot | undefined {
+  const candidate = metadata[SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY];
+  if (typeof candidate !== "object" || candidate === null) {
+    return undefined;
+  }
+  return candidate as RuntimeContractSnapshot;
 }
 
 // ---------------------------------------------------------------------------

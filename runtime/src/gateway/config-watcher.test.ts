@@ -228,6 +228,29 @@ describe("validateGatewayConfig llm unlimited limit semantics", () => {
   });
 });
 
+describe("validateGatewayConfig durable async task prerequisites", () => {
+  it("rejects memory.backend=memory when runtime contract v2 async tasks are enabled", () => {
+    const result = validateGatewayConfig({
+      ...makeConfig(),
+      memory: {
+        backend: "memory",
+      },
+      llm: {
+        provider: "grok",
+        runtimeContractV2: true,
+        asyncTasks: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain(
+      "memory.backend=memory is invalid when llm.runtimeContractV2 and llm.asyncTasks.enabled are both true",
+    );
+  });
+});
+
 describe("validateGatewayConfig plugin host policy", () => {
   it("accepts plugin trust policy and plugin-backed channel wrapper fields", () => {
     const config = makeConfig();

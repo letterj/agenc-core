@@ -20,7 +20,9 @@ import { summarizeLLMFailureForSurface } from "./daemon-llm-failure.js";
 import {
   buildSessionActiveTaskContext,
   buildSessionStatefulOptions,
+  enrichRuntimeContractSnapshotForSession,
   persistSessionActiveTaskContext,
+  persistSessionRuntimeContractSnapshot,
   persistSessionStatefulContinuation,
   persistWebSessionRuntimeState,
 } from "./daemon-session-state.js";
@@ -54,6 +56,7 @@ import { buildAssistantDelegatedScopeMetadata } from "../utils/delegated-scope-t
 import type { AgentDefinition } from "./agent-loader.js";
 import type { DelegationVerifierService } from "./delegation-runtime.js";
 import type { SubAgentManager } from "./sub-agent.js";
+import type { TaskStore } from "../tools/system/task-tracker.js";
 
 interface WebChatTurnSignals {
   signalThinking: (sessionId: string) => void;
@@ -92,6 +95,7 @@ interface ExecuteWebChatConversationTurnParams {
   readonly subAgentManager?: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
   readonly verifierService?: Pick<DelegationVerifierService, "shouldVerifySubAgentResult"> | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
+  readonly taskStore?: TaskStore | null;
 }
 
 async function resolveWebChatTurnWorkspaceRoot(params: {
@@ -146,6 +150,7 @@ export async function executeWebChatConversationTurn(
     subAgentManager = null,
     verifierService = null,
     agentDefinitions,
+    taskStore = null,
   } = params;
 
   try {
@@ -315,7 +320,7 @@ export async function executeWebChatConversationTurn(
         },
       },
     });
-    const result =
+    const baseResult =
       rawResult.runtimeContractSnapshot?.flags.runtimeContractV2 === true
         ? rawResult
         : await applyLegacyTopLevelVerifier({
@@ -327,6 +332,12 @@ export async function executeWebChatConversationTurn(
           agentDefinitions,
           logger,
         });
+    const result = await enrichRuntimeContractSnapshotForSession({
+      sessionId: msg.sessionId,
+      result: baseResult,
+      taskStore,
+    });
+    persistSessionRuntimeContractSnapshot(session, result);
     recordToolRoutingOutcome(msg.sessionId, result.toolRoutingSummary);
 
     webChat.clearAbortController(msg.sessionId);

@@ -19,6 +19,7 @@
 
 import {
   checkRequestTimeout,
+  emitExecutionTrace,
   pushMessage,
 } from "./chat-executor-ctx-helpers.js";
 import {
@@ -91,6 +92,15 @@ export async function executeRequest(
     resetSessionTokens: helpers.resetSessionTokens,
   };
   const ctx = await initializeExecutionContext(params, deps, initHelpers);
+  emitExecutionTrace(ctx, {
+    type: "runtime_contract_snapshot",
+    phase: "initial",
+    callIndex: ctx.callIndex,
+    payload: {
+      stage: "initialized",
+      runtimeContract: ctx.runtimeContractSnapshot,
+    },
+  });
   const workflowEvidence = resolveWorkflowEvidenceFromRequiredToolEvidence({
     requiredToolEvidence: ctx.requiredToolEvidence,
     runtimeContext: {
@@ -191,6 +201,16 @@ export async function executeRequest(
       },
     });
   }
+
+  emitExecutionTrace(ctx, {
+    type: "runtime_contract_snapshot",
+    phase: "tool_followup",
+    callIndex: ctx.callIndex,
+    payload: {
+      stage: "finalized",
+      runtimeContract: ctx.runtimeContractSnapshot,
+    },
+  });
 
   return {
     content: ctx.finalContent,
