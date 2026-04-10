@@ -11,6 +11,7 @@ import {
   SUB_AGENT_SESSION_PREFIX,
   type SubAgentManager,
 } from "./sub-agent.js";
+import type { PersistentWorkerManager } from "./persistent-worker-manager.js";
 import type { GatewaySubagentFallbackBehavior } from "./types.js";
 import {
   createVerifierRequirement,
@@ -263,6 +264,7 @@ export class SubAgentLifecycleEmitter {
 
 export interface DelegationToolCompositionContext {
   readonly subAgentManager: SubAgentManager | null;
+  readonly workerManager?: PersistentWorkerManager | null;
   readonly policyEngine: DelegationPolicyEngine | null;
   readonly verifier: DelegationVerifierService | null;
   readonly lifecycleEmitter: SubAgentLifecycleEmitter | null;

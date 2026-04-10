@@ -67,6 +67,7 @@ export type TaskStatus =
 
 export type TaskKind =
   | "manual"
+  | "worker_assignment"
   | "subagent"
   | "verifier"
   | "background_run"
@@ -85,7 +86,7 @@ export type TaskEventType =
   | "deleted";
 
 export interface TaskExternalRef {
-  readonly kind: Exclude<TaskKind, "manual">;
+  readonly kind: Exclude<TaskKind, "manual" | "worker_assignment">;
   readonly id: string;
   readonly sessionId?: string;
   readonly runId?: string;
@@ -145,7 +146,7 @@ export interface TaskUpdatePatch {
   subject?: string;
   description?: string;
   activeForm?: string;
-  owner?: string;
+  owner?: string | null;
   metadata?: Record<string, unknown>;
   addBlocks?: readonly string[];
   addBlockedBy?: readonly string[];
@@ -955,7 +956,13 @@ export class TaskStore {
     if (patch.subject !== undefined) task.subject = patch.subject;
     if (patch.description !== undefined) task.description = patch.description;
     if (patch.activeForm !== undefined) task.activeForm = patch.activeForm;
-    if (patch.owner !== undefined) task.owner = patch.owner;
+    if (patch.owner !== undefined) {
+      if (patch.owner === null) {
+        delete task.owner;
+      } else {
+        task.owner = patch.owner;
+      }
+    }
     if (patch.metadata !== undefined) {
       const merged: Record<string, unknown> = { ...(task.metadata ?? {}) };
       for (const [key, value] of Object.entries(patch.metadata)) {
@@ -1201,6 +1208,84 @@ export class TaskStore {
         params.listId,
         cloned,
       );
+      return cloned;
+    });
+  }
+
+  async claimTask(params: {
+    readonly listId: string;
+    readonly taskId: string;
+    readonly owner: string;
+    readonly summary?: string;
+    readonly data?: Record<string, unknown>;
+  }): Promise<Task | undefined> {
+    return this.runExclusive(params.listId, async () => {
+      const list = await this.ensureListLoaded(params.listId);
+      const task = list.tasks.find((entry) => entry.id === params.taskId);
+      if (!task || task.status === "deleted" || task.status !== "pending") {
+        return undefined;
+      }
+      if (task.owner !== undefined || task.blockedBy.length > 0) {
+        return undefined;
+      }
+      task.owner = params.owner;
+      task.status = "in_progress";
+      if (params.summary !== undefined) {
+        task.summary = params.summary;
+      }
+      task.updatedAt = this.now();
+      task.revision += 1;
+      task.events.push(
+        this.buildEvent(
+          "started",
+          params.summary ?? `Task claimed by ${params.owner}`,
+          params.data,
+        ),
+      );
+      await this.persistList(list);
+      const cloned = cloneTask(task);
+      await this.emitTaskEvent("task_started", params.listId, cloned);
+      return cloned;
+    });
+  }
+
+  async releaseTaskClaim(params: {
+    readonly listId: string;
+    readonly taskId: string;
+    readonly owner?: string;
+    readonly summary?: string;
+    readonly data?: Record<string, unknown>;
+  }): Promise<Task | undefined> {
+    return this.runExclusive(params.listId, async () => {
+      const list = await this.ensureListLoaded(params.listId);
+      const task = list.tasks.find((entry) => entry.id === params.taskId);
+      if (!task || task.status === "deleted" || isTerminalTaskStatus(task.status)) {
+        return undefined;
+      }
+      if (
+        params.owner !== undefined &&
+        task.owner !== undefined &&
+        task.owner !== params.owner
+      ) {
+        return undefined;
+      }
+      delete task.owner;
+      task.status = "pending";
+      if (params.summary !== undefined) {
+        task.summary = params.summary;
+      }
+      task.updatedAt = this.now();
+      task.revision += 1;
+      task.events.push(
+        this.buildEvent(
+          "updated",
+          params.summary ?? "Task claim released",
+          params.data,
+        ),
+      );
+      await this.persistList(list);
+      const cloned = cloneTask(task);
+      await this.emitTaskEvent("task_updated", params.listId, cloned);
       return cloned;
     });
   }
@@ -1451,6 +1536,27 @@ export class TaskStore {
             } catch {
               // no-op
             }
+          }
+          if (
+            !isTerminalTaskStatus(task.status) &&
+            task.kind === "worker_assignment"
+          ) {
+            task.status = "pending";
+            delete task.owner;
+            task.summary =
+              task.summary ??
+              "Worker assignment was returned to the queue after runtime restart.";
+            task.events.push(
+              this.buildEvent(
+                "updated",
+                task.summary,
+                { reason: "worker_runtime_unavailable_after_restart" },
+              ),
+            );
+            task.updatedAt = this.now();
+            task.revision += 1;
+            changed = true;
+            continue;
           }
           if (
             !isTerminalTaskStatus(task.status) &&

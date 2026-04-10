@@ -70,8 +70,26 @@ export interface RuntimeTaskLayerSnapshot {
 export interface RuntimeWorkerLayerSnapshot {
   readonly configured: boolean;
   readonly effective: boolean;
-  readonly launchMode: "none" | "session_subagent" | "durable_task_handle";
+  readonly launchMode:
+    | "none"
+    | "session_subagent"
+    | "durable_task_handle"
+    | "persistent_worker_pool";
   readonly activePublicWorkers: number;
+  readonly stateCounts?: Partial<
+    Record<
+      | "starting"
+      | "running"
+      | "idle"
+      | "waiting_for_permission"
+      | "verifying"
+      | "completed"
+      | "failed"
+      | "cancelled",
+      number
+    >
+  >;
+  readonly latestReusableWorkerId?: string;
   readonly inactiveReason?: string;
 }
 
@@ -139,7 +157,25 @@ export interface RuntimeWorkerHandle {
   readonly id: string;
   readonly kind: string;
   readonly status: string;
+  readonly workerId: string;
+  readonly workerName: string;
+  readonly state:
+    | "starting"
+    | "running"
+    | "idle"
+    | "waiting_for_permission"
+    | "verifying"
+    | "completed"
+    | "failed"
+    | "cancelled";
   readonly taskId?: string;
+  readonly currentTaskId?: string;
+  readonly lastTaskId?: string;
+  readonly pendingTaskCount: number;
+  readonly continuationSessionId?: string;
+  readonly workingDirectory?: string;
+  readonly verifierRequirement?: VerifierRequirement;
+  readonly stopRequested: boolean;
   readonly summary?: string;
 }
 
@@ -234,8 +270,9 @@ export function createRuntimeContractSnapshot(
       effective: false,
       launchMode: "none",
       activePublicWorkers: 0,
+      stateCounts: {},
       inactiveReason: flags.persistentWorkersEnabled
-        ? "persistent_workers_not_implemented"
+        ? "persistent_worker_manager_uninitialized"
         : "flag_disabled",
     },
     mailboxLayer: {

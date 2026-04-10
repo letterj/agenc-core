@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ChatExecutor } from "../llm/chat-executor.js";
+import type { MemoryBackend } from "../memory/types.js";
+import { TaskStore } from "../tools/system/task-tracker.js";
 import type {
   IsolatedSessionContext,
   SubAgentSessionIdentity,
@@ -19,6 +21,7 @@ import {
   parseCoordinatorModeInput,
 } from "./coordinator-tool.js";
 import { executeCoordinatorModeTool } from "./tool-handler-factory-coordinator.js";
+import { PersistentWorkerManager } from "./persistent-worker-manager.js";
 
 function makeMockLLMProvider(
   outputs: readonly string[] = ["sub-agent output"],
@@ -56,6 +59,44 @@ function makeMockTool(name: string): Tool {
     execute: vi.fn(
       async (): Promise<ToolResult> => ({ content: "ok", isError: false }),
     ),
+  };
+}
+
+function createMemoryBackendStub(): MemoryBackend {
+  const kv = new Map<string, unknown>();
+  return {
+    name: "stub",
+    addEntry: async () => {
+      throw new Error("not implemented");
+    },
+    getThread: async () => [],
+    query: async () => [],
+    deleteThread: async () => 0,
+    listSessions: async () => [],
+    set: async (key: string, value: unknown) => {
+      kv.set(key, JSON.parse(JSON.stringify(value)));
+    },
+    get: async <T = unknown>(key: string) => {
+      const value = kv.get(key);
+      return value === undefined
+        ? undefined
+        : (JSON.parse(JSON.stringify(value)) as T);
+    },
+    delete: async (key: string) => kv.delete(key),
+    has: async (key: string) => kv.has(key),
+    listKeys: async (prefix?: string) =>
+      [...kv.keys()].filter((key) => !prefix || key.startsWith(prefix)),
+    getDurability: () => ({
+      level: "sync",
+      supportsFlush: true,
+      description: "test",
+    }),
+    flush: async () => {},
+    clear: async () => {
+      kv.clear();
+    },
+    close: async () => {},
+    healthCheck: async () => true,
   };
 }
 
@@ -113,6 +154,25 @@ async function waitForWorkerResult(
   throw new Error(`Timed out waiting for worker ${sessionId} to finish`);
 }
 
+async function waitForTaskTerminal(
+  store: TaskStore,
+  listId: string,
+  taskId: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const task = await store.getTask(listId, taskId);
+    if (
+      task?.status === "completed" ||
+      task?.status === "failed" ||
+      task?.status === "cancelled"
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for task ${taskId} to finish`);
+}
+
 describe("coordinator_mode", () => {
   it("parses list/stop/delegation actions", () => {
     expect(parseCoordinatorModeInput({ action: "list" })).toEqual({
@@ -129,7 +189,7 @@ describe("coordinator_mode", () => {
       ok: true,
       value: {
         action: "stop",
-        workerSessionId: "subagent:123",
+        workerId: "subagent:123",
       },
     });
 
@@ -143,8 +203,21 @@ describe("coordinator_mode", () => {
       expect.unreachable("expected follow-up action to parse");
     }
     expect(parsed.value.action).toBe("follow_up");
-    expect(parsed.value.workerSessionId).toBe("subagent:123");
+    expect(parsed.value.workerId).toBe("subagent:123");
     expect(parsed.value.request?.task).toBe("Continue with the next fix");
+
+    expect(
+      parseCoordinatorModeInput({
+        action: "spawn",
+        workerName: "builder",
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        action: "spawn",
+        workerName: "builder",
+      },
+    });
   });
 
   it("rejects invalid coordinator inputs", () => {
@@ -161,7 +234,7 @@ describe("coordinator_mode", () => {
     ).toEqual({
       ok: false,
       error:
-        'coordinator_mode action "stop" requires a non-empty "workerSessionId"',
+        'coordinator_mode action "stop" requires a non-empty "workerId"',
     });
 
     expect(
@@ -173,7 +246,7 @@ describe("coordinator_mode", () => {
     ).toEqual({
       ok: false,
       error:
-        'coordinator_mode action "spawn" does not accept "workerSessionId"; use "reuse" or "follow_up" instead',
+        'coordinator_mode action "spawn" does not accept "workerId"; use "reuse" or "follow_up" instead',
     });
   });
 
@@ -197,7 +270,7 @@ describe("coordinator_mode", () => {
       parentSessionId: "session-a",
       task: "Inspect logs",
     });
-    await settle();
+    await waitForWorkerResult(manager, reusableWorker);
 
     await manager.spawn({
       parentSessionId: "session-b",
@@ -310,5 +383,189 @@ describe("coordinator_mode", () => {
     } finally {
       executeSpy.mockRestore();
     }
+  });
+
+  it("lists persistent workers and reports the latest reusable worker id", async () => {
+    const memoryBackend = createMemoryBackendStub();
+    const taskStore = new TaskStore({ memoryBackend });
+    const manager = new SubAgentManager(makeManagerConfig());
+    const workerManager = new PersistentWorkerManager({
+      memoryBackend,
+      taskStore,
+      subAgentManager: manager,
+    });
+
+    const spawned = JSON.parse(
+      await executeCoordinatorModeTool({
+        toolArgs: {
+          action: "spawn",
+          workerName: "builder",
+          task: "Inspect the parser module",
+          tools: ["system.readFile"],
+        },
+        name: COORDINATOR_MODE_TOOL_NAME,
+        sessionId: "session-a",
+        toolCallId: "tool-call-persistent-spawn",
+        subAgentManager: manager,
+        workerManager,
+        taskStore,
+        lifecycleEmitter: null,
+        verifier: null as any,
+        runtimeContractFlags: {
+          persistentWorkersEnabled: true,
+        } as any,
+        availableToolNames: ["system.readFile"],
+        defaultWorkingDirectory: "/tmp/agenc-coordinator",
+        parentAllowedReadRoots: ["/tmp/agenc-coordinator"],
+        parentAllowedWriteRoots: ["/tmp/agenc-coordinator"],
+      }),
+    ) as {
+      success?: boolean;
+      workerId?: string;
+      task?: { id?: string };
+    };
+
+    expect(spawned.success).toBe(true);
+    expect(spawned.workerId).toBeTruthy();
+    expect(spawned.task?.id).toBeTruthy();
+
+    await waitForTaskTerminal(taskStore, "session-a", String(spawned.task?.id));
+
+    const listed = JSON.parse(
+      await executeCoordinatorModeTool({
+        toolArgs: { action: "list" },
+        name: COORDINATOR_MODE_TOOL_NAME,
+        sessionId: "session-a",
+        toolCallId: "tool-call-persistent-list",
+        subAgentManager: manager,
+        workerManager,
+        taskStore,
+        lifecycleEmitter: null,
+        verifier: null as any,
+        runtimeContractFlags: {
+          persistentWorkersEnabled: true,
+        } as any,
+        availableToolNames: ["system.readFile"],
+      }),
+    ) as {
+      success?: boolean;
+      workers?: Array<{
+        workerId?: string;
+        workerName?: string;
+        state?: string;
+        continuationSessionId?: string;
+      }>;
+      latestReusableWorkerId?: string;
+    };
+
+    expect(listed.success).toBe(true);
+    expect(listed.workers).toEqual([
+      expect.objectContaining({
+        workerId: spawned.workerId,
+        workerName: "builder",
+        state: "idle",
+        continuationSessionId: expect.stringMatching(/^subagent:/),
+      }),
+    ]);
+    expect(listed.latestReusableWorkerId).toBe(spawned.workerId);
+  });
+
+  it("queues follow-up work onto the latest compatible persistent worker", async () => {
+    const memoryBackend = createMemoryBackendStub();
+    const taskStore = new TaskStore({ memoryBackend });
+    const manager = new SubAgentManager(makeManagerConfig());
+    const workerManager = new PersistentWorkerManager({
+      memoryBackend,
+      taskStore,
+      subAgentManager: manager,
+    });
+
+    const initial = JSON.parse(
+      await executeCoordinatorModeTool({
+        toolArgs: {
+          action: "spawn",
+          workerName: "builder",
+          task: "Inspect the parser module",
+          tools: ["system.readFile"],
+        },
+        name: COORDINATOR_MODE_TOOL_NAME,
+        sessionId: "session-a",
+        toolCallId: "tool-call-persistent-seed",
+        subAgentManager: manager,
+        workerManager,
+        taskStore,
+        lifecycleEmitter: null,
+        verifier: null as any,
+        runtimeContractFlags: {
+          persistentWorkersEnabled: true,
+        } as any,
+        availableToolNames: ["system.readFile"],
+        defaultWorkingDirectory: "/tmp/agenc-coordinator",
+        parentAllowedReadRoots: ["/tmp/agenc-coordinator"],
+        parentAllowedWriteRoots: ["/tmp/agenc-coordinator"],
+      }),
+    ) as {
+      workerId?: string;
+      task?: { id?: string };
+    };
+
+    await waitForTaskTerminal(taskStore, "session-a", String(initial.task?.id));
+
+    const followUp = JSON.parse(
+      await executeCoordinatorModeTool({
+        toolArgs: {
+          action: "reuse",
+          task: "Inspect the lexer module",
+          tools: ["system.readFile"],
+        },
+        name: COORDINATOR_MODE_TOOL_NAME,
+        sessionId: "session-a",
+        toolCallId: "tool-call-persistent-reuse",
+        subAgentManager: manager,
+        workerManager,
+        taskStore,
+        lifecycleEmitter: null,
+        verifier: null as any,
+        runtimeContractFlags: {
+          persistentWorkersEnabled: true,
+        } as any,
+        availableToolNames: ["system.readFile"],
+        defaultWorkingDirectory: "/tmp/agenc-coordinator",
+        parentAllowedReadRoots: ["/tmp/agenc-coordinator"],
+        parentAllowedWriteRoots: ["/tmp/agenc-coordinator"],
+      }),
+    ) as {
+      success?: boolean;
+      workerId?: string;
+      task?: {
+        id?: string;
+        kind?: string;
+        status?: string;
+        waitTool?: string;
+        outputTool?: string;
+      };
+    };
+
+    expect(followUp.success).toBe(true);
+    expect(followUp.workerId).toBe(initial.workerId);
+    expect(followUp.task).toEqual(
+      expect.objectContaining({
+        kind: "worker_assignment",
+        status: "pending",
+        waitTool: "task.wait",
+        outputTool: "task.output",
+      }),
+    );
+
+    await waitForTaskTerminal(taskStore, "session-a", String(followUp.task?.id));
+
+    const completed = await taskStore.getTask(
+      "session-a",
+      String(followUp.task?.id),
+    );
+    expect(completed).toMatchObject({
+      status: "completed",
+      kind: "worker_assignment",
+    });
   });
 });

@@ -55,6 +55,7 @@ import { resolveTurnMaxToolRounds } from "./tool-round-budget.js";
 import { buildAssistantDelegatedScopeMetadata } from "../utils/delegated-scope-trust.js";
 import type { AgentDefinition } from "./agent-loader.js";
 import type { DelegationVerifierService } from "./delegation-runtime.js";
+import type { PersistentWorkerManager } from "./persistent-worker-manager.js";
 import type { SubAgentManager } from "./sub-agent.js";
 import type { TaskStore } from "../tools/system/task-tracker.js";
 
@@ -97,6 +98,7 @@ interface ExecuteWebChatConversationTurnParams {
     DelegationVerifierService,
     "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
   > | null;
+  readonly workerManager?: PersistentWorkerManager | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
   readonly taskStore?: TaskStore | null;
 }
@@ -339,6 +341,7 @@ export async function executeWebChatConversationTurn(
       sessionId: msg.sessionId,
       result: baseResult,
       taskStore,
+      workerManager: params.workerManager,
     });
     persistSessionRuntimeContractSnapshot(session, result);
     recordToolRoutingOutcome(msg.sessionId, result.toolRoutingSummary);

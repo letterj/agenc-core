@@ -9,6 +9,7 @@ import {
   updateRuntimeContractWorkerLayer,
 } from "../runtime-contract/types.js";
 import type { TaskStore } from "../tools/system/task-tracker.js";
+import type { PersistentWorkerManager } from "./persistent-worker-manager.js";
 import {
   MemoryArtifactStore,
   type ContextArtifactRecord,
@@ -405,6 +406,7 @@ export async function enrichRuntimeContractSnapshotForSession(params: {
   readonly sessionId: string;
   readonly result: ChatExecutorResult;
   readonly taskStore?: TaskStore | null;
+  readonly workerManager?: PersistentWorkerManager | null;
 }): Promise<ChatExecutorResult> {
   if (!params.result.runtimeContractSnapshot) {
     return params.result;
@@ -421,30 +423,44 @@ export async function enrichRuntimeContractSnapshotForSession(params: {
       taskLayer,
     });
 
-    const sessionTasks = params.taskStore.list(params.sessionId);
-    const activePublicWorkers = sessionTasks.filter(
-      (task) => task.kind !== "manual" && task.status === "in_progress",
-    ).length;
-    snapshot = updateRuntimeContractWorkerLayer({
-      snapshot,
-      workerLayer: {
-        configured:
-          snapshot.flags.asyncTasksEnabled ||
+    if (
+      snapshot.flags.persistentWorkersEnabled &&
+      params.workerManager
+    ) {
+      snapshot = updateRuntimeContractWorkerLayer({
+        snapshot,
+        workerLayer: await params.workerManager.describeRuntimeWorkerLayer(
+          params.sessionId,
           snapshot.flags.persistentWorkersEnabled,
-        effective: snapshot.flags.asyncTasksEnabled,
-        launchMode: snapshot.flags.asyncTasksEnabled
-          ? "durable_task_handle"
-          : "none",
-        activePublicWorkers,
-        ...(snapshot.flags.asyncTasksEnabled
-          ? {}
-          : {
-              inactiveReason: snapshot.flags.persistentWorkersEnabled
-                ? "persistent_workers_not_implemented"
-                : "flag_disabled",
-            }),
-      },
-    });
+        ),
+      });
+    } else {
+      const sessionTasks = params.taskStore.list(params.sessionId);
+      const activePublicWorkers = sessionTasks.filter(
+        (task) => task.kind !== "manual" && task.status === "in_progress",
+      ).length;
+      snapshot = updateRuntimeContractWorkerLayer({
+        snapshot,
+        workerLayer: {
+          configured:
+            snapshot.flags.asyncTasksEnabled ||
+            snapshot.flags.persistentWorkersEnabled,
+          effective: snapshot.flags.asyncTasksEnabled,
+          launchMode: snapshot.flags.asyncTasksEnabled
+            ? "durable_task_handle"
+            : "none",
+          activePublicWorkers,
+          stateCounts: {},
+          ...(snapshot.flags.asyncTasksEnabled
+            ? {}
+            : {
+                inactiveReason: snapshot.flags.persistentWorkersEnabled
+                  ? "persistent_worker_manager_uninitialized"
+                  : "flag_disabled",
+              }),
+        },
+      });
+    }
   }
 
   snapshot = updateRuntimeContractMailboxLayer({

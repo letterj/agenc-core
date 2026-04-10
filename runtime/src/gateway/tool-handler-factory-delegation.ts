@@ -124,7 +124,7 @@ function isDeferredDisclosureStoreTurn(input: ExecuteWithAgentInput): boolean {
   return CHILD_DEFERRED_DISCLOSURE_RE.test(combined);
 }
 
-function buildDelegatedChildPrompt(
+export function buildDelegatedChildPrompt(
   input: ExecuteWithAgentInput,
   options: {
     continuationAuthorized?: boolean;

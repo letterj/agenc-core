@@ -281,6 +281,7 @@ import {
   DurableSubrunOrchestrator,
   type DurableSubrunAdmissionDecision,
 } from "./durable-subrun-orchestrator.js";
+import { PersistentWorkerManager } from "./persistent-worker-manager.js";
 import { evaluateAutonomyCanaryAdmission } from "./autonomy-rollout.js";
 import {
   formatBackgroundRunAdmissionDenied,
@@ -1031,6 +1032,7 @@ export class DaemonManager {
   private _remoteJobManager: SystemRemoteJobManager | null = null;
   private _remoteSessionManager: SystemRemoteSessionManager | null = null;
   private _taskTrackerStore: TaskStore | null = null;
+  private _persistentWorkerManager: PersistentWorkerManager | null = null;
   private _sessionModelInfo = new Map<
     string,
     {
@@ -1085,6 +1087,7 @@ export class DaemonManager {
         this._subAgentRuntimeConfig?.unsafeBenchmarkMode === true;
       return {
         subAgentManager: this._subAgentManager,
+        workerManager: this._persistentWorkerManager,
         policyEngine: this._delegationPolicyEngine,
         verifier: this._delegationVerifierService,
         lifecycleEmitter: this._subAgentLifecycleEmitter,
@@ -1244,6 +1247,12 @@ export class DaemonManager {
   }
 
   private async destroySubAgentInfrastructure(): Promise<void> {
+    if (this._persistentWorkerManager) {
+      await this._persistentWorkerManager.handleRuntimeReset(
+        "subagent_infrastructure_destroyed",
+      );
+      this._persistentWorkerManager = null;
+    }
     const subAgentManager = this._subAgentManager;
     this._subAgentManager = null;
     const isolationManager = this._sessionIsolationManager;
@@ -1253,6 +1262,31 @@ export class DaemonManager {
       isolationManager,
       this.logger,
     );
+  }
+
+  private async configurePersistentWorkerManager(
+    config: GatewayConfig,
+  ): Promise<void> {
+    const flags = resolveRuntimeContractFlags(config.llm);
+    if (
+      !flags.persistentWorkersEnabled ||
+      !this._memoryBackend ||
+      !this._taskTrackerStore ||
+      !this._subAgentManager
+    ) {
+      this._persistentWorkerManager = null;
+      return;
+    }
+
+    const manager = new PersistentWorkerManager({
+      memoryBackend: this._memoryBackend,
+      taskStore: this._taskTrackerStore,
+      subAgentManager: this._subAgentManager,
+      approvalEngine: this._approvalEngine,
+      logger: this.logger,
+    });
+    await manager.repairRuntimeState();
+    this._persistentWorkerManager = manager;
   }
 
   private async configureSubAgentInfrastructure(
@@ -1352,10 +1386,6 @@ export class DaemonManager {
         if (manager) {
           await manager.destroyContext(sessionIdentity);
         }
-        this.dropTaskTrackerSession(
-          sessionIdentity.subagentSessionId,
-          "subagent_teardown",
-        );
         await cleanupDesktopSession(
           sessionIdentity.subagentSessionId,
           {
@@ -1445,6 +1475,7 @@ export class DaemonManager {
         this.getActiveDelegationAggressiveness(resolved),
       childProviderStrategy: resolved.childProviderStrategy,
     });
+    await this.configurePersistentWorkerManager(config);
 
     // Cut 5.6: load declarative agent definitions from the built-in
     // runtime/src/gateway/agent-definitions/ directory and from the
@@ -3017,6 +3048,15 @@ export class DaemonManager {
       const subAgentChanged = diff.safe.some((key) =>
         key.startsWith("llm.subagents."),
       );
+      if (llmChanged) {
+        void this.configurePersistentWorkerManager(gateway.config).catch(
+          (error) => {
+            this.logger.error(
+              `Failed to reconfigure persistent workers: ${toErrorMessage(error)}`,
+            );
+          },
+        );
+      }
       if (subAgentChanged) {
         void this.configureSubAgentInfrastructure(gateway.config).catch(
           (error) => {
@@ -3194,6 +3234,7 @@ export class DaemonManager {
         /* no-op: static routing, nothing to record */
       },
       subAgentManager: this._subAgentManager,
+      workerManager: this._persistentWorkerManager,
       verifierService: this._delegationVerifierService,
       agentDefinitions: this._agentDefinitions,
     };
@@ -3624,6 +3665,7 @@ export class DaemonManager {
     this._remoteSessionManager = result.remoteSessionManager;
     this._taskTrackerStore = result.taskTrackerStore;
     await this._taskTrackerStore.repairRuntimeState();
+    await this.configurePersistentWorkerManager(config);
     this._containerMCPConfigs = result.containerMCPConfigs;
     this._mcpManager = result.mcpManager;
     this._connectionManager = result.connectionManager;
@@ -3637,20 +3679,6 @@ export class DaemonManager {
       },
       logger: this.logger,
     });
-  }
-
-  private dropTaskTrackerSession(sessionId: string, reason: string): void {
-    const normalizedSessionId = sessionId.trim();
-    if (!normalizedSessionId || !this._taskTrackerStore) {
-      return;
-    }
-    const dropped = this._taskTrackerStore.dropList(normalizedSessionId);
-    if (dropped) {
-      this.logger.debug("Dropped task tracker state for session", {
-        sessionId: normalizedSessionId,
-        reason,
-      });
-    }
   }
 
   private handleIncomingSocialMessage(
@@ -3751,7 +3779,6 @@ export class DaemonManager {
 
     const historySessionId = resolveSessionId(webSessionId);
     sessionMgr.reset(historySessionId);
-    this.dropTaskTrackerSession(webSessionId, "session_reset");
     this._chatExecutor?.resetSessionTokens(webSessionId);
     this._sessionModelInfo.delete(webSessionId);
     await progressTracker?.clear(webSessionId);
@@ -5649,6 +5676,7 @@ export class DaemonManager {
       contextWindowTokens,
       traceConfig,
       turnTraceId,
+      workerManager: this._persistentWorkerManager,
     });
   }
 
@@ -5668,6 +5696,7 @@ export class DaemonManager {
     contextWindowTokens?: number;
     traceConfig: ResolvedTraceLoggingConfig;
     turnTraceId: string;
+    workerManager?: PersistentWorkerManager | null;
   }): Promise<ChatExecutorResult | undefined> {
     const {
       msg,
@@ -5685,6 +5714,7 @@ export class DaemonManager {
       contextWindowTokens,
       traceConfig,
       turnTraceId,
+      workerManager,
     } = params;
 
     this._activeSessionTraceIds.set(msg.sessionId, turnTraceId);
@@ -5727,6 +5757,7 @@ export class DaemonManager {
           });
         },
         taskStore: this._taskTrackerStore,
+        workerManager,
         onSubagentSynthesis: (result) => {
           if (
             this._subagentActivityTraceBySession.get(msg.sessionId) !== turnTraceId
@@ -5951,7 +5982,6 @@ export class DaemonManager {
         this._connectionManager = null;
       }
       if (this._taskTrackerStore !== null) {
-        this._taskTrackerStore.reset();
         this._taskTrackerStore = null;
       }
       if (this._memoryBackend !== null) {

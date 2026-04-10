@@ -8,6 +8,7 @@ import {
   TASK_TRACKER_TOOL_NAMES,
 } from "./task-tracker.js";
 import type { Tool, ToolResult } from "../types.js";
+import type { MemoryBackend } from "../../memory/types.js";
 
 interface ParsedResult {
   readonly raw: ToolResult;
@@ -18,6 +19,44 @@ function findTool(tools: readonly Tool[], name: string): Tool {
   const tool = tools.find((t) => t.name === name);
   if (!tool) throw new Error(`tool not found: ${name}`);
   return tool;
+}
+
+function createMemoryBackendStub(): MemoryBackend {
+  const kv = new Map<string, unknown>();
+  return {
+    name: "stub",
+    addEntry: async () => {
+      throw new Error("not implemented");
+    },
+    getThread: async () => [],
+    query: async () => [],
+    deleteThread: async () => 0,
+    listSessions: async () => [],
+    set: async (key: string, value: unknown) => {
+      kv.set(key, JSON.parse(JSON.stringify(value)));
+    },
+    get: async <T = unknown>(key: string) => {
+      const value = kv.get(key);
+      return value === undefined
+        ? undefined
+        : (JSON.parse(JSON.stringify(value)) as T);
+    },
+    delete: async (key: string) => kv.delete(key),
+    has: async (key: string) => kv.has(key),
+    listKeys: async (prefix?: string) =>
+      [...kv.keys()].filter((key) => !prefix || key.startsWith(prefix)),
+    getDurability: () => ({
+      level: "sync",
+      supportsFlush: true,
+      description: "test",
+    }),
+    flush: async () => {},
+    clear: async () => {
+      kv.clear();
+    },
+    close: async () => {},
+    healthCheck: async () => true,
+  };
 }
 
 async function callTool(
@@ -221,6 +260,89 @@ describe("task-tracker", () => {
     it("returns empty for an unknown task list", async () => {
       const result = await callTool(list, { [TASK_LIST_ARG]: "unknown-session" });
       expect(result.body.count).toBe(0);
+    });
+  });
+
+  describe("runtime claim semantics", () => {
+    it("claims pending worker assignments for a specific owner", async () => {
+      const task = await store.createRuntimeTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        kind: "worker_assignment",
+        subject: "Implement parser step",
+        description: "Handle the next bounded worker assignment",
+        status: "pending",
+        summary: "Queued for a worker.",
+      });
+
+      const claimed = await store.claimTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        taskId: task.id,
+        owner: "worker-1",
+        summary: "Claimed by worker-1.",
+      });
+
+      expect(claimed).toMatchObject({
+        id: task.id,
+        kind: "worker_assignment",
+        status: "in_progress",
+        owner: "worker-1",
+        summary: "Claimed by worker-1.",
+      });
+    });
+
+    it("releases claimed worker assignments back to pending", async () => {
+      const task = await store.createRuntimeTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        kind: "worker_assignment",
+        subject: "Implement lexer step",
+        description: "Handle the next bounded worker assignment",
+        status: "pending",
+      });
+      await store.claimTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        taskId: task.id,
+        owner: "worker-2",
+      });
+
+      const released = await store.releaseTaskClaim({
+        listId: DEFAULT_TASK_LIST_ID,
+        taskId: task.id,
+        owner: "worker-2",
+        summary: "Returned to the queue.",
+      });
+
+      expect(released).toMatchObject({
+        id: task.id,
+        status: "pending",
+        summary: "Returned to the queue.",
+      });
+      expect(released?.owner).toBeUndefined();
+    });
+
+    it("requeues in-flight worker assignments during runtime repair", async () => {
+      const repairStore = new TaskStore({
+        memoryBackend: createMemoryBackendStub(),
+      });
+
+      const task = await repairStore.createRuntimeTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        kind: "worker_assignment",
+        subject: "Implement expansion step",
+        description: "Handle the next bounded worker assignment",
+        status: "in_progress",
+        owner: "worker-3",
+        summary: "Running worker assignment.",
+      });
+
+      await repairStore.repairRuntimeState();
+
+      const repaired = await repairStore.getTask(DEFAULT_TASK_LIST_ID, task.id);
+      expect(repaired).toMatchObject({
+        id: task.id,
+        status: "pending",
+      });
+      expect(repaired?.owner).toBeUndefined();
+      expect(repaired?.summary).toMatch(/returned to the queue|worker assignment/i);
     });
   });
 

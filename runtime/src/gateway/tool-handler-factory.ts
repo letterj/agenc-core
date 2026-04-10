@@ -2472,6 +2472,7 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
     }
     const delegationContext = delegation?.();
     const subAgentManager = delegationContext?.subAgentManager ?? null;
+    const workerManager = delegationContext?.workerManager ?? null;
     const policyEngine = delegationContext?.policyEngine ?? null;
     const verifier = delegationContext?.verifier ?? null;
     const lifecycleEmitter = delegationContext?.lifecycleEmitter ?? null;
@@ -2960,6 +2961,7 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
               sessionId,
               toolCallId,
               subAgentManager,
+              workerManager,
               lifecycleEmitter,
               verifier,
               taskStore,

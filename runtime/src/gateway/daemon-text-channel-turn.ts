@@ -35,6 +35,7 @@ import {
 import { applyLegacyTopLevelVerifier } from "./top-level-verifier.js";
 import type { AgentDefinition } from "./agent-loader.js";
 import type { DelegationVerifierService } from "./delegation-runtime.js";
+import type { PersistentWorkerManager } from "./persistent-worker-manager.js";
 import type { SubAgentManager } from "./sub-agent.js";
 import type { TaskStore } from "../tools/system/task-tracker.js";
 import { filterSystemPromptForToolRouting } from "./system-prompt-routing.js";
@@ -130,6 +131,7 @@ interface ExecuteTextChannelTurnParams {
     DelegationVerifierService,
     "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
   > | null;
+  readonly workerManager?: PersistentWorkerManager | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
   readonly taskStore?: TaskStore | null;
 }
@@ -322,6 +324,7 @@ export async function executeTextChannelTurn(
     sessionId: msg.sessionId,
     result: baseResult,
     taskStore,
+    workerManager: params.workerManager,
   });
   persistSessionRuntimeContractSnapshot(session, result);
   recordToolRoutingOutcome(msg.sessionId, result.toolRoutingSummary);

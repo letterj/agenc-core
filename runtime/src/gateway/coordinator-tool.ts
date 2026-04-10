@@ -26,7 +26,8 @@ type CoordinatorModeAction =
 
 export interface CoordinatorModeInput {
   readonly action: CoordinatorModeAction;
-  readonly workerSessionId?: string;
+  readonly workerId?: string;
+  readonly workerName?: string;
   readonly request?: ExecuteWithAgentInput;
 }
 
@@ -71,8 +72,9 @@ function normalizeDelegationError(error: string): string {
   return error.replaceAll("execute_with_agent", COORDINATOR_MODE_TOOL_NAME);
 }
 
-function resolveWorkerSessionId(args: Record<string, unknown>): string | undefined {
+function resolveWorkerId(args: Record<string, unknown>): string | undefined {
   return (
+    toNonEmptyString(args.workerId) ??
     toNonEmptyString(args.workerSessionId) ??
     toNonEmptyString(args.worker_session_id) ??
     toNonEmptyString(args.subagentSessionId) ??
@@ -92,7 +94,10 @@ export function parseCoordinatorModeInput(
     };
   }
 
-  const workerSessionId = resolveWorkerSessionId(args);
+  const workerId = resolveWorkerId(args);
+  const workerName =
+    toNonEmptyString(args.workerName) ??
+    toNonEmptyString(args.worker_name);
 
   if (action === "list") {
     return {
@@ -102,27 +107,46 @@ export function parseCoordinatorModeInput(
   }
 
   if (action === "stop") {
-    if (!workerSessionId) {
+    if (!workerId) {
       return {
         ok: false,
         error:
-          'coordinator_mode action "stop" requires a non-empty "workerSessionId"',
+          'coordinator_mode action "stop" requires a non-empty "workerId"',
       };
     }
     return {
       ok: true,
       value: {
         action,
-        workerSessionId,
+        workerId,
       },
     };
   }
 
-  if (action === "spawn" && workerSessionId) {
+  if (action === "spawn" && workerId) {
     return {
       ok: false,
       error:
-        'coordinator_mode action "spawn" does not accept "workerSessionId"; use "reuse" or "follow_up" instead',
+        'coordinator_mode action "spawn" does not accept "workerId"; use "reuse" or "follow_up" instead',
+    };
+  }
+
+  const hasDelegationRequest =
+    typeof args.task === "string" ||
+    typeof args.objective === "string";
+  if (!hasDelegationRequest) {
+    if (action === "spawn") {
+      return {
+        ok: true,
+        value: {
+          action,
+          ...(workerName ? { workerName } : {}),
+        },
+      };
+    }
+    return {
+      ok: false,
+      error: `coordinator_mode action "${action}" requires a child request`,
     };
   }
 
@@ -142,14 +166,15 @@ export function parseCoordinatorModeInput(
     };
   }
 
-  const resolvedWorkerSessionId =
-    workerSessionId ?? parsedRequest.value.continuationSessionId;
+  const resolvedWorkerId =
+    workerId ?? parsedRequest.value.continuationSessionId;
 
   return {
     ok: true,
     value: {
       action,
-      ...(resolvedWorkerSessionId ? { workerSessionId: resolvedWorkerSessionId } : {}),
+      ...(resolvedWorkerId ? { workerId: resolvedWorkerId } : {}),
+      ...(workerName ? { workerName } : {}),
       request: parsedRequest.value,
     },
   };
@@ -168,10 +193,20 @@ export function createCoordinatorModeTool(): Tool {
           description:
             'Worker coordination action: "list", "spawn", "reuse", "follow_up", or "stop".',
         },
+        workerId: {
+          type: "string",
+          description:
+            "Optional persistent worker id to reuse, follow up, or stop. Legacy workerSessionId aliases still resolve.",
+        },
         workerSessionId: {
           type: "string",
           description:
-            "Optional existing worker session to reuse, follow up, or stop. If omitted on reuse/follow_up, the latest successful worker is selected.",
+            "Legacy alias for workerId. Existing child session ids also resolve to the owning persistent worker when possible.",
+        },
+        workerName: {
+          type: "string",
+          description:
+            "Optional stable worker name when spawning a persistent worker.",
         },
         task: {
           type: "string",
