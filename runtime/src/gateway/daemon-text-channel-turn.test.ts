@@ -370,6 +370,15 @@ describe("executeTextChannelTurn", () => {
         })),
       },
       verifierService: {
+        resolveVerifierRequirement: vi.fn(() => ({
+          required: true,
+          profiles: ["generic"],
+          probeCategories: ["build"],
+          mutationPolicy: "read_only_workspace",
+          allowTempArtifacts: false,
+          bootstrapSource: "disabled",
+          rationale: ["test"],
+        })),
         shouldVerifySubAgentResult: vi.fn(() => true),
       },
     });

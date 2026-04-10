@@ -118,7 +118,10 @@ export interface ChannelWiringDeps {
   ): void;
 
   readonly subAgentManager?: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
-  readonly verifierService?: Pick<DelegationVerifierService, "shouldVerifySubAgentResult"> | null;
+  readonly verifierService?: Pick<
+    DelegationVerifierService,
+    "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
+  > | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
 }
 

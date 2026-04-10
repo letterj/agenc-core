@@ -88,6 +88,8 @@ const TOOL_DEFAULT_CWD_NAMES = new Set([
   "desktop.bash",
   "system.processStart",
   "system.serverStart",
+  "verification.listProbes",
+  "verification.runProbe",
 ]);
 const SESSION_ALLOWED_ROOT_TOOL_NAMES = new Set([
   "system.readFile",
@@ -3169,6 +3171,11 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
     });
 
     if (isSubAgentSession && lifecycleEmitter) {
+      const verifierRequirement = verifier?.resolveVerifierRequirement({
+        runtimeRequired: runtimeContractFlags?.verifierRuntimeRequired,
+        projectBootstrap: runtimeContractFlags?.verifierProjectBootstrap,
+        workspaceRoot: defaultWorkingDirectory ?? scopedFilesystemRoot,
+      });
       lifecycleEmitter.emit({
         type: 'subagents.tool.result',
         timestamp: Date.now(),
@@ -3180,7 +3187,9 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
           durationMs,
           isError,
           toolCallId,
-          verifyRequested: verifier?.shouldVerifySubAgentResult() ?? false,
+          ...(verifierRequirement
+            ? { verifierRequirement }
+            : {}),
         },
       });
     }

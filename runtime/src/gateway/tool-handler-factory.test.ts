@@ -1695,6 +1695,15 @@ describe("createSessionToolHandler", () => {
       snapshot: vi.fn(() => ({ spawnDecisionThreshold: 0.7 })),
     };
     const verifier = {
+      resolveVerifierRequirement: vi.fn(() => ({
+        required: true,
+        profiles: ["generic"],
+        probeCategories: ["build"],
+        mutationPolicy: "read_only_workspace",
+        allowTempArtifacts: false,
+        bootstrapSource: "disabled",
+        rationale: ["test"],
+      })),
       shouldVerifySubAgentResult: vi.fn(() => true),
     };
     const lifecycleEmitter = {
@@ -1730,9 +1739,11 @@ describe("createSessionToolHandler", () => {
     expect(lifecycleEmitter.emit).toHaveBeenCalledTimes(2);
     expect(lifecycleEvents[0].type).toBe("subagents.tool.executing");
     expect(lifecycleEvents[1].type).toBe("subagents.tool.result");
-    expect((lifecycleEvents[1].payload as { verifyRequested?: boolean }).verifyRequested).toBe(
-      true,
-    );
+    expect(
+      (lifecycleEvents[1].payload as {
+        verifierRequirement?: { required?: boolean };
+      }).verifierRequirement?.required,
+    ).toBe(true);
 
     const executingCount = sentMessages.filter((m) => m.type === "tools.executing").length;
     const resultCount = sentMessages.filter((m) => m.type === "tools.result").length;
@@ -1798,6 +1809,15 @@ describe("createSessionToolHandler", () => {
       })),
     };
     const verifier = {
+      resolveVerifierRequirement: vi.fn(() => ({
+        required: true,
+        profiles: ["generic"],
+        probeCategories: ["build"],
+        mutationPolicy: "read_only_workspace",
+        allowTempArtifacts: false,
+        bootstrapSource: "disabled",
+        rationale: ["test"],
+      })),
       shouldVerifySubAgentResult: vi.fn(() => true),
     };
     const lifecycleEmitter = {

@@ -21,6 +21,10 @@ import type { Logger } from "../utils/logger.js";
 import type { AgentDefinition } from "./agent-loader.js";
 import type { DelegationVerifierService } from "./delegation-runtime.js";
 import { isSubAgentSessionId } from "./delegation-runtime.js";
+import {
+  extractVerificationProbeCoverage,
+  type VerifierRequirement,
+} from "./verifier-probes.js";
 import type {
   SubAgentConfig,
   SubAgentManager,
@@ -38,8 +42,10 @@ const DEFAULT_VERIFY_TOOLS = [
   "system.readFile",
   "system.listDir",
   "system.stat",
-  "system.bash",
+  "verification.listProbes",
+  "verification.runProbe",
 ] as const;
+const ALLOWED_VERIFY_TOOLS = new Set<string>(DEFAULT_VERIFY_TOOLS);
 
 const DEFAULT_VERIFY_SYSTEM_PROMPT =
   "You are a verification agent. Your job is to try to break the claimed implementation with real checks. " +
@@ -103,7 +109,7 @@ interface TopLevelVerifierParams {
   readonly subAgentManager: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
   readonly verifierService: Pick<
     DelegationVerifierService,
-    "shouldVerifySubAgentResult"
+    "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
   > | null;
   readonly taskStore?: TaskStore | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
@@ -122,6 +128,7 @@ export interface TopLevelVerifierValidationResult {
   readonly blockingMessage?: string;
   readonly exhaustedDetail?: string;
   readonly taskId?: string;
+  readonly verifierRequirement?: VerifierRequirement;
 }
 
 function truncate(text: string, max: number): string {
@@ -136,8 +143,16 @@ function selectVerifyDefinition(
   readonly systemPrompt: string;
 } {
   const match = definitions?.find((definition) => definition.name === "verify");
+  const rawTools = match?.tools?.length ? match.tools : DEFAULT_VERIFY_TOOLS;
+  const tools = rawTools
+    .filter((toolName) => ALLOWED_VERIFY_TOOLS.has(toolName))
+    .concat(
+      [...DEFAULT_VERIFY_TOOLS].filter((toolName) =>
+        !rawTools.includes(toolName)
+      ),
+    );
   return {
-    tools: match?.tools?.length ? match.tools : DEFAULT_VERIFY_TOOLS,
+    tools,
     systemPrompt:
       match?.body.trim().length
         ? match.body.trim()
@@ -151,6 +166,7 @@ function buildVerifierPrompt(params: {
   readonly sourceArtifacts: readonly string[];
   readonly targetArtifacts: readonly string[];
   readonly assistantContent: string;
+  readonly verifierRequirement: VerifierRequirement;
 }): string {
   const lines = [
     "Verify the implementation result for this parent request.",
@@ -179,9 +195,20 @@ function buildVerifierPrompt(params: {
     lines.push("Parent completion summary:");
     lines.push(truncate(params.assistantContent.trim(), 1200));
   }
+  if (params.verifierRequirement.profiles.length > 0) {
+    lines.push("");
+    lines.push(
+      `Required verifier profiles: ${params.verifierRequirement.profiles.join(", ")}`,
+    );
+  }
+  if (params.verifierRequirement.probeCategories.length > 0) {
+    lines.push(
+      `Required probe categories before PASS: ${params.verifierRequirement.probeCategories.join(", ")}`,
+    );
+  }
   lines.push("");
   lines.push(
-    "Run concrete checks, inspect the target artifacts directly, and report whether the implementation actually holds up.",
+    "Inspect the target artifacts directly, call verification.listProbes, run concrete verification probes, and report whether the implementation actually holds up.",
   );
   return lines.join("\n");
 }
@@ -200,6 +227,27 @@ function buildVerifierBlockingMessage(params: {
     "",
     "Use tools to fix the implementation until verification passes. Do not restate completion while verifier failures remain.",
   ].join("\n");
+}
+
+function buildVerifierCoverageSummary(params: {
+  readonly missingCategories: readonly string[];
+  readonly missingProfiles: readonly string[];
+}): string {
+  const parts: string[] = [];
+  if (params.missingCategories.length > 0) {
+    parts.push(
+      `required probe categories were not run: ${params.missingCategories.join(", ")}`,
+    );
+  }
+  if (params.missingProfiles.length > 0) {
+    parts.push(
+      `required verifier profiles were not exercised: ${params.missingProfiles.join(", ")}`,
+    );
+  }
+  if (parts.length === 0) {
+    return "Verifier passed without running the required probe coverage.";
+  }
+  return `Verifier passed without sufficient runtime evidence because ${parts.join("; ")}.`;
 }
 
 function parseStructuredVerifierSnapshot(result: SubAgentResult | null): {
@@ -294,10 +342,15 @@ function shouldRunTopLevelVerifier(params: TopLevelVerifierParams): boolean {
   }
   const targetArtifacts = params.result.turnExecutionContract.targetArtifacts ?? [];
   if (targetArtifacts.length === 0) return false;
-  if (!params.verifierService) {
-    return true;
-  }
-  return params.verifierService.shouldVerifySubAgentResult(true);
+  if (!params.verifierService) return true;
+  return params.verifierService.resolveVerifierRequirement({
+    requested: true,
+    runtimeRequired:
+      params.result.runtimeContractSnapshot?.flags.verifierRuntimeRequired,
+    projectBootstrap:
+      params.result.runtimeContractSnapshot?.flags.verifierProjectBootstrap,
+    workspaceRoot: params.result.turnExecutionContract.workspaceRoot,
+  }).required;
 }
 
 export async function runTopLevelVerifierValidation(
@@ -342,6 +395,14 @@ export async function runTopLevelVerifierValidation(
   const workspaceRoot = normalizeWorkspaceRoot(
     params.result.turnExecutionContract.workspaceRoot,
   );
+  const verifierRequirement = params.verifierService.resolveVerifierRequirement({
+    requested: true,
+    runtimeRequired:
+      params.result.runtimeContractSnapshot?.flags.verifierRuntimeRequired,
+    projectBootstrap:
+      params.result.runtimeContractSnapshot?.flags.verifierProjectBootstrap,
+    workspaceRoot,
+  });
   const sourceArtifacts = normalizeArtifactPaths(
     params.result.turnExecutionContract.sourceArtifacts ?? [],
     workspaceRoot,
@@ -380,6 +441,7 @@ export async function runTopLevelVerifierValidation(
       sourceArtifacts,
       targetArtifacts,
       assistantContent: params.result.content,
+      verifierRequirement,
     }),
     systemPrompt: definition.systemPrompt,
     tools: definition.tools,
@@ -403,6 +465,8 @@ export async function runTopLevelVerifierValidation(
         metadata: {
           _runtime: {
             verification: true,
+            verifierProfiles: verifierRequirement.profiles,
+            verifierProbeCategories: verifierRequirement.probeCategories,
           },
         },
         summary: "Runtime verifier started.",
@@ -461,19 +525,53 @@ export async function runTopLevelVerifierValidation(
       },
       summary: "Top-level verifier worker could not be started.",
       exhaustedDetail: "Top-level verifier worker could not be started.",
+      verifierRequirement,
       ...(verifierTaskId ? { taskId: verifierTaskId } : {}),
     };
   }
 
   const verifierResult = await subAgentManager.waitForResult(childSessionId);
   const parsed = parseVerifierSnapshot(verifierResult);
-  const runtimeVerifier = toRuntimeVerifierVerdict(parsed);
+  const coverage = extractVerificationProbeCoverage(verifierResult?.toolCalls ?? []);
+  const missingCategories =
+    parsed.snapshot.overall === "pass"
+      ? verifierRequirement.probeCategories.filter(
+          (category) => !coverage.categories.includes(category),
+        )
+      : [];
+  const missingProfiles =
+    parsed.snapshot.overall === "pass"
+      ? verifierRequirement.profiles.filter(
+          (profile) =>
+            profile !== "generic" &&
+            !coverage.profiles.includes(profile),
+        )
+      : [];
+  const coverageBlocked =
+    parsed.snapshot.overall === "pass" &&
+    verifierRequirement.required &&
+    (coverage.probeIds.length === 0 ||
+      missingCategories.length > 0 ||
+      missingProfiles.length > 0);
+  const effectiveParsed = coverageBlocked
+    ? {
+        snapshot: { performed: true, overall: "retry" } as const,
+        summary: buildVerifierCoverageSummary({
+          missingCategories:
+            coverage.probeIds.length === 0
+              ? ["at least one verification probe"]
+              : missingCategories,
+          missingProfiles,
+        }),
+      }
+    : parsed;
+  const runtimeVerifier = toRuntimeVerifierVerdict(effectiveParsed);
   if (params.taskStore && verifierTaskId) {
     await params.taskStore.finalizeRuntimeTask({
       listId: params.sessionId,
       taskId: verifierTaskId,
-      status: parsed.snapshot.overall === "pass" ? "completed" : "failed",
-      summary: parsed.summary,
+      status: effectiveParsed.snapshot.overall === "pass" ? "completed" : "failed",
+      summary: effectiveParsed.summary,
       output: verifierResult?.output,
       structuredOutput: verifierResult?.structuredOutput?.parsed,
       usage:
@@ -489,48 +587,55 @@ export async function runTopLevelVerifierValidation(
       eventData: {
         verifierSessionId: childSessionId,
         verdict: runtimeVerifier.overall,
+        probeIds: coverage.probeIds,
+        profiles: coverage.profiles,
+        categories: coverage.categories,
       },
     });
   }
-  if (parsed.snapshot.overall !== "pass") {
+  if (effectiveParsed.snapshot.overall !== "pass") {
     params.logger?.warn(
       "Top-level verifier did not pass",
       {
         sessionId: params.sessionId,
         verifierSessionId: childSessionId,
-        verdict: parsed.snapshot.overall,
+        verdict: effectiveParsed.snapshot.overall,
       },
     );
   }
-  if (!parsed.snapshot.performed) {
+  if (!effectiveParsed.snapshot.performed) {
     return {
       outcome: "fail_closed",
-      verifier: parsed.snapshot,
+      verifier: effectiveParsed.snapshot,
       runtimeVerifier,
-      summary: parsed.summary,
-      exhaustedDetail: `Top-level verifier retry: ${parsed.summary}`,
+      summary: effectiveParsed.summary,
+      exhaustedDetail: `Top-level verifier retry: ${effectiveParsed.summary}`,
+      verifierRequirement,
       ...(verifierTaskId ? { taskId: verifierTaskId } : {}),
     };
   }
-  if (parsed.snapshot.overall === "pass") {
+  if (effectiveParsed.snapshot.overall === "pass") {
     return {
       outcome: "pass",
-      verifier: parsed.snapshot,
+      verifier: effectiveParsed.snapshot,
       runtimeVerifier,
-      summary: parsed.summary,
+      summary: effectiveParsed.summary,
+      verifierRequirement,
       ...(verifierTaskId ? { taskId: verifierTaskId } : {}),
     };
   }
   return {
     outcome: "retry_with_blocking_message",
-    verifier: parsed.snapshot,
+    verifier: effectiveParsed.snapshot,
     runtimeVerifier,
-    summary: parsed.summary,
+    summary: effectiveParsed.summary,
     blockingMessage: buildVerifierBlockingMessage({
-      summary: parsed.summary,
+      summary: effectiveParsed.summary,
       verdict: runtimeVerifier.overall,
     }),
-    exhaustedDetail: `Top-level verifier ${parsed.snapshot.overall}: ${parsed.summary}`,
+    exhaustedDetail:
+      `Top-level verifier ${effectiveParsed.snapshot.overall}: ${effectiveParsed.summary}`,
+    verifierRequirement,
     ...(verifierTaskId ? { taskId: verifierTaskId } : {}),
   };
 }
@@ -622,7 +727,7 @@ export async function applyLegacyTopLevelVerifier(
     readonly subAgentManager: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
     readonly verifierService: Pick<
       DelegationVerifierService,
-      "shouldVerifySubAgentResult"
+      "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
     > | null;
     readonly agentDefinitions?: readonly AgentDefinition[];
     readonly logger?: Logger;

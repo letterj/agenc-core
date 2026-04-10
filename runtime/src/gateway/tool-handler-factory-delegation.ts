@@ -402,6 +402,7 @@ async function finalizeDelegationTask(params: {
   readonly toolName: string;
   readonly objective: string;
   readonly toolCallId: string;
+  readonly verifierRequirement?: Record<string, unknown>;
 }): Promise<void> {
   const childResult = params.result;
   const childCompleted = childResult?.completionState === "completed";
@@ -435,7 +436,9 @@ async function finalizeDelegationTask(params: {
         providerName: childResult?.providerName,
         output: normalizedChildOutput,
         toolCallId: params.toolCallId,
-        verifyRequested: false,
+        ...(params.verifierRequirement
+          ? { verifierRequirement: params.verifierRequirement }
+          : {}),
       },
     });
     await params.taskStore.finalizeRuntimeTask({
@@ -443,18 +446,21 @@ async function finalizeDelegationTask(params: {
       taskId: params.taskId,
       status: "completed",
       summary: "Delegated worker completed successfully.",
-      output: normalizedChildOutput,
-      usage: childResult?.tokenUsage as unknown as Record<string, unknown> | undefined,
-      externalRef: {
-        kind: "subagent",
-        id: params.childSessionId,
-        sessionId: params.childSessionId,
-      },
-      eventData: {
-        durationMs: childResult?.durationMs,
-        toolCalls: childResult?.toolCalls.length ?? 0,
-      },
-    });
+        output: normalizedChildOutput,
+        usage: childResult?.tokenUsage as unknown as Record<string, unknown> | undefined,
+        externalRef: {
+          kind: "subagent",
+          id: params.childSessionId,
+          sessionId: params.childSessionId,
+        },
+        eventData: {
+          durationMs: childResult?.durationMs,
+          toolCalls: childResult?.toolCalls.length ?? 0,
+          ...(params.verifierRequirement
+            ? { verifierRequirement: params.verifierRequirement }
+            : {}),
+        },
+      });
     return;
   }
 
@@ -709,6 +715,11 @@ export async function executeDelegationTool(
           : undefined,
       }
       : effectiveInput;
+  const verifierRequirement = verifier?.resolveVerifierRequirement({
+    runtimeRequired: params.runtimeContractFlags?.verifierRuntimeRequired,
+    projectBootstrap: params.runtimeContractFlags?.verifierProjectBootstrap,
+    workspaceRoot: workingDirectory,
+  });
   let runtimeTaskId: string | undefined;
   if (taskStore) {
     try {
@@ -727,6 +738,16 @@ export async function executeDelegationTool(
             : {}),
           ...(effectiveExecutionContext
             ? { executionContext: effectiveExecutionContext }
+            : {}),
+          ...(verifierRequirement
+            ? {
+                _runtime: {
+                  verification: verifierRequirement.required,
+                  verifierProfiles: verifierRequirement.profiles,
+                  verifierProbeCategories: verifierRequirement.probeCategories,
+                },
+                verifierRequirement,
+              }
             : {}),
         },
         summary: "Delegated worker started.",
@@ -937,6 +958,9 @@ export async function executeDelegationTool(
           toolName: name,
           objective,
           toolCallId,
+          ...(verifierRequirement
+            ? { verifierRequirement: verifierRequirement as unknown as Record<string, unknown> }
+            : {}),
         }),
       )
       .catch(async (error) => {
@@ -991,9 +1015,11 @@ export async function executeDelegationTool(
         outputReady: false,
         waitTool: "task.wait",
         outputTool: "task.output",
+        ...(verifierRequirement ? { verifierRequirement } : {}),
       },
       waitTool: "task.wait",
       outputTool: "task.output",
+      ...(verifierRequirement ? { verifierRequirement } : {}),
     });
   }
 
@@ -1057,7 +1083,7 @@ export async function executeDelegationTool(
           providerName: childResult.providerName,
           output: normalizedChildOutput,
           toolCallId,
-          verifyRequested: verifier?.shouldVerifySubAgentResult() ?? false,
+          ...(verifierRequirement ? { verifierRequirement } : {}),
         },
       });
       if (taskStore && runtimeTaskId) {
@@ -1080,6 +1106,7 @@ export async function executeDelegationTool(
           eventData: {
             durationMs: childResult.durationMs,
             toolCalls: childResult.toolCalls.length,
+            ...(verifierRequirement ? { verifierRequirement } : {}),
           },
         });
       }
@@ -1101,6 +1128,7 @@ export async function executeDelegationTool(
         stopReason: childResult.stopReason,
         stopReasonDetail: childResult.stopReasonDetail,
         validationCode: childResult.validationCode,
+        ...(verifierRequirement ? { verifierRequirement } : {}),
       });
     }
 
@@ -1146,6 +1174,7 @@ export async function executeDelegationTool(
           durationMs: childResult.durationMs,
           toolCalls: childResult.toolCalls.length,
           failedToolCalls: failedChildToolCalls,
+          ...(verifierRequirement ? { verifierRequirement } : {}),
         },
       });
     }
@@ -1167,6 +1196,7 @@ export async function executeDelegationTool(
       stopReason: childResult.stopReason,
       stopReasonDetail: childResult.stopReasonDetail,
       validationCode: childResult.validationCode,
+      ...(verifierRequirement ? { verifierRequirement } : {}),
     });
   }
 }

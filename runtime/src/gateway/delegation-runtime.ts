@@ -12,6 +12,11 @@ import {
   type SubAgentManager,
 } from "./sub-agent.js";
 import type { GatewaySubagentFallbackBehavior } from "./types.js";
+import {
+  createVerifierRequirement,
+  type VerifierRequirement,
+  type ProjectVerifierBootstrap,
+} from "./verifier-probes.js";
 
 interface DelegationPolicyRuntimeConfig {
   readonly enabled: boolean;
@@ -174,6 +179,7 @@ interface DelegationVerifierRuntimeConfig {
 
 export class DelegationVerifierService {
   private config: DelegationVerifierRuntimeConfig;
+  private bootstrapCache = new Map<string, ProjectVerifierBootstrap>();
 
   constructor(config: DelegationVerifierRuntimeConfig) {
     this.config = { ...config };
@@ -187,11 +193,27 @@ export class DelegationVerifierService {
     return { ...this.config };
   }
 
+  resolveVerifierRequirement(params?: {
+    readonly requested?: boolean;
+    readonly runtimeRequired?: boolean;
+    readonly projectBootstrap?: boolean;
+    readonly workspaceRoot?: string;
+  }): VerifierRequirement {
+    return createVerifierRequirement({
+      enabled: this.config.enabled,
+      requested:
+        params?.requested === true || this.config.forceVerifier === true,
+      runtimeRequired: params?.runtimeRequired,
+      projectBootstrap: params?.projectBootstrap,
+      workspaceRoot: params?.workspaceRoot,
+      bootstrapCache: this.bootstrapCache,
+    });
+  }
+
   shouldVerifySubAgentResult(
     requested = false,
   ): boolean {
-    if (!this.config.enabled) return false;
-    return this.config.forceVerifier || requested;
+    return this.resolveVerifierRequirement({ requested }).required;
   }
 }
 

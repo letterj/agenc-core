@@ -276,7 +276,11 @@ describe("top-level artifact evidence gate", () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), "agenc-acceptance-probe-"));
     const sourcePath = join(workspaceRoot, "src/main.txt");
     mkdirSync(join(workspaceRoot, "src"), { recursive: true });
-    writeFileSync(join(workspaceRoot, "Makefile"), "all:\n\t@echo ok\n", "utf8");
+    writeFileSync(
+      join(workspaceRoot, "Makefile"),
+      "all:\n\t@if grep -q good src/main.txt; then echo ok; else echo build failed >&2; exit 2; fi\n",
+      "utf8",
+    );
 
     const provider = createMockProvider("primary", {
       chat: vi
@@ -335,12 +339,6 @@ describe("top-level artifact evidence gate", () => {
         );
         return safeJson({ ok: true, path: targetPath });
       }
-      if (name === "system.bash" && args.command === "make") {
-        const current = readFileSync(sourcePath, "utf8");
-        return current.includes("good")
-          ? safeJson({ exitCode: 0, stdout: "ok" })
-          : safeJson({ exitCode: 2, stderr: "build failed" });
-      }
       return safeJson({ exitCode: 0, stdout: "ok" });
     });
     const executor = new ChatExecutor({ providers: [provider], toolHandler });
@@ -354,7 +352,7 @@ describe("top-level artifact evidence gate", () => {
 
       expect(result.stopReason).toBe("completed");
       expect(result.toolCalls.filter((call) => call.name === "system.writeFile")).toHaveLength(2);
-      expect(result.toolCalls.filter((call) => call.name === "system.bash")).toHaveLength(2);
+      expect(result.toolCalls.filter((call) => call.name === "verification.runProbe")).toHaveLength(2);
       expect((provider.chat as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(4);
       expect((provider.chat as ReturnType<typeof vi.fn>).mock.calls[2]?.[1]).toMatchObject({
         toolChoice: "required",
@@ -478,6 +476,15 @@ describe("top-level artifact evidence gate", () => {
             waitForResult: vi.fn(async () => null),
           },
           verifierService: {
+            resolveVerifierRequirement: vi.fn(() => ({
+              required: true,
+              profiles: ["generic"],
+              probeCategories: ["build"],
+              mutationPolicy: "read_only_workspace",
+              allowTempArtifacts: false,
+              bootstrapSource: "disabled",
+              rationale: ["test"],
+            })),
             shouldVerifySubAgentResult: vi.fn(() => true),
           },
         },

@@ -2000,6 +2000,13 @@ export async function executeToolCallLoop(
             ...(validation.verifierTaskId
               ? { taskId: validation.verifierTaskId }
               : {}),
+            ...(validation.verifierRequirement
+              ? {
+                  bootstrapSource: validation.verifierRequirement.bootstrapSource,
+                  profiles: validation.verifierRequirement.profiles,
+                  probeCategories: validation.verifierRequirement.probeCategories,
+                }
+              : {}),
             stageStatus: verifierStageStatus,
             ...(validation.outcome === "skipped" && validation.reason
               ? { skipReason: validation.reason }

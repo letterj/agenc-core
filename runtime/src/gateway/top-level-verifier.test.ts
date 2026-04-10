@@ -6,6 +6,7 @@ import {
   applyLegacyTopLevelVerifier,
   runTopLevelVerifierValidation,
 } from "./top-level-verifier.js";
+import type { VerifierRequirement } from "./verifier-probes.js";
 
 function createResult(
   overrides: Partial<ChatExecutorResult> = {},
@@ -65,6 +66,30 @@ function createResult(
   };
 }
 
+function createVerifierRequirement(
+  overrides: Partial<VerifierRequirement> = {},
+): VerifierRequirement {
+  return {
+    required: true,
+    profiles: ["generic"],
+    probeCategories: ["build"],
+    mutationPolicy: "read_only_workspace",
+    allowTempArtifacts: false,
+    bootstrapSource: "disabled",
+    rationale: ["test requirement"],
+    ...overrides,
+  };
+}
+
+function createVerifierService(
+  requirement: VerifierRequirement = createVerifierRequirement(),
+) {
+  return {
+    resolveVerifierRequirement: vi.fn(() => requirement),
+    shouldVerifySubAgentResult: vi.fn(() => requirement.required),
+  };
+}
+
 describe("runTopLevelVerifierValidation", () => {
   it("spawns the verifier worker with grounded read evidence", async () => {
     const spawn = vi.fn(async () => "subagent:verify-1");
@@ -91,15 +116,13 @@ describe("runTopLevelVerifierValidation", () => {
       userRequest: "Implement every phase from PLAN.md",
       result: createResult(),
       subAgentManager: { spawn, waitForResult },
-      verifierService: {
-        shouldVerifySubAgentResult: vi.fn(() => true),
-      },
+      verifierService: createVerifierService(),
       agentDefinitions: [
         {
           name: "verify",
           description: "Verification worker",
           model: "inherit",
-          tools: ["system.readFile", "system.bash"],
+          tools: ["system.readFile", "system.bash", "verification.runProbe"],
           maxTurns: 8,
           source: "built-in",
           filePath: "/tmp/verify.md",
@@ -111,7 +134,13 @@ describe("runTopLevelVerifierValidation", () => {
     expect(spawn).toHaveBeenCalledWith(
       expect.objectContaining({
         systemPrompt: "Verifier system prompt",
-        tools: ["system.readFile", "system.bash"],
+        tools: [
+          "system.readFile",
+          "verification.runProbe",
+          "system.listDir",
+          "system.stat",
+          "verification.listProbes",
+        ],
         structuredOutput: expect.objectContaining({
           enabled: true,
           schema: expect.objectContaining({
@@ -157,9 +186,7 @@ describe("runTopLevelVerifierValidation", () => {
       userRequest: "Implement every phase from PLAN.md",
       result: createResult(),
       subAgentManager: { spawn, waitForResult },
-      verifierService: {
-        shouldVerifySubAgentResult: vi.fn(() => true),
-      },
+      verifierService: createVerifierService(),
     });
 
     expect(decision.outcome).toBe("retry_with_blocking_message");
@@ -184,9 +211,7 @@ describe("runTopLevelVerifierValidation", () => {
         },
       }),
       subAgentManager: { spawn, waitForResult: vi.fn(async () => null) },
-      verifierService: {
-        shouldVerifySubAgentResult: vi.fn(() => true),
-      },
+      verifierService: createVerifierService(),
     });
 
     expect(spawn).not.toHaveBeenCalled();
@@ -206,6 +231,51 @@ describe("runTopLevelVerifierValidation", () => {
     expect(decision.outcome).toBe("fail_closed");
     expect(decision.runtimeVerifier.overall).toBe("retry");
     expect(decision.summary).toContain("runtime is unavailable");
+  });
+
+  it("blocks PASS verdicts that skip required probe coverage", async () => {
+    const spawn = vi.fn(async () => "subagent:verify-coverage");
+    const waitForResult = vi.fn(async () => ({
+      sessionId: "subagent:verify-coverage",
+      output: "All good.\nVERDICT: PASS",
+      success: true,
+      durationMs: 20,
+      toolCalls: [
+        {
+          name: "system.readFile",
+          args: { path: "/workspace/src/main.c" },
+          result: '{"ok":true}',
+          isError: false,
+          durationMs: 2,
+        },
+      ],
+      structuredOutput: {
+        type: "json_schema",
+        name: "agenc_top_level_verifier_decision",
+        parsed: {
+          verdict: "pass",
+          summary: "Verifier thinks the build is correct.",
+        },
+      },
+      completionState: "completed",
+      stopReason: "completed",
+    }));
+
+    const decision = await runTopLevelVerifierValidation({
+      sessionId: "session:test",
+      userRequest: "Implement every phase from PLAN.md",
+      result: createResult(),
+      subAgentManager: { spawn, waitForResult },
+      verifierService: createVerifierService(
+        createVerifierRequirement({
+          profiles: ["generic", "cli"],
+          probeCategories: ["build", "smoke"],
+        }),
+      ),
+    });
+
+    expect(decision.outcome).toBe("retry_with_blocking_message");
+    expect(decision.summary).toContain("required probe categories");
   });
 });
 
@@ -235,9 +305,7 @@ describe("applyLegacyTopLevelVerifier", () => {
       userRequest: "Implement every phase from PLAN.md",
       result: createResult(),
       subAgentManager: { spawn, waitForResult },
-      verifierService: {
-        shouldVerifySubAgentResult: vi.fn(() => true),
-      },
+      verifierService: createVerifierService(),
     });
 
     expect(updated.completionState).toBe("partial");

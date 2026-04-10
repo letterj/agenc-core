@@ -452,6 +452,7 @@ export function buildCompletionValidators(params: {
           exhaustedDetail: validation.exhaustedDetail,
           verifier: validation.runtimeVerifier,
           verifierTaskId: validation.taskId,
+          verifierRequirement: validation.verifierRequirement,
         };
       },
     },

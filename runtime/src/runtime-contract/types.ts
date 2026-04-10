@@ -1,4 +1,10 @@
 import type { DelegationOutputValidationCode } from "../utils/delegation-validation.js";
+import type { AcceptanceProbeCategory } from "../gateway/subagent-orchestrator-types.js";
+import type {
+  VerifierBootstrapSource,
+  VerifierProfileKind,
+  VerifierRequirement,
+} from "../gateway/verifier-probes.js";
 
 export type CompletionValidatorId =
   | "artifact_evidence"
@@ -78,9 +84,12 @@ export interface RuntimeMailboxLayerSnapshot {
 export interface RuntimeVerifierStageSnapshot {
   readonly bootstrapConfigured: boolean;
   readonly bootstrapAttempted: boolean;
+  readonly bootstrapSource?: VerifierBootstrapSource;
   readonly runtimeRequired: boolean;
   readonly launcherKind: "none" | "subagent";
   readonly taskId?: string;
+  readonly profiles?: readonly VerifierProfileKind[];
+  readonly probeCategories?: readonly AcceptanceProbeCategory[];
   readonly stageStatus:
     | "inactive"
     | "pending"
@@ -116,6 +125,7 @@ export interface CompletionValidatorResult {
   readonly validationCode?: DelegationOutputValidationCode;
   readonly verifier?: RuntimeVerifierVerdict;
   readonly verifierTaskId?: string;
+  readonly verifierRequirement?: VerifierRequirement;
 }
 
 export interface CompletionValidatorContext {
@@ -218,6 +228,9 @@ export function createRuntimeContractSnapshot(
       bootstrapAttempted: false,
       runtimeRequired: flags.verifierRuntimeRequired,
       launcherKind: flags.verifierRuntimeRequired ? "subagent" : "none",
+      bootstrapSource: flags.verifierProjectBootstrap ? "fallback" : "disabled",
+      profiles: [],
+      probeCategories: [],
       stageStatus: flags.verifierRuntimeRequired ? "pending" : "inactive",
       ...(flags.verifierRuntimeRequired
         ? {}

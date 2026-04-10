@@ -1,5 +1,9 @@
 import type { WorkflowRequestCompletionContract } from "./request-completion.js";
 import { normalizeWorkflowRequestMilestones } from "./request-completion.js";
+import type {
+  AcceptanceProbeCategory,
+} from "../gateway/subagent-orchestrator-types.js";
+import type { VerifierProfileKind } from "../gateway/verifier-probes.js";
 
 export const REQUEST_TASK_RUNTIME_METADATA_KEY = "_runtime";
 
@@ -7,6 +11,8 @@ export interface NormalizedRequestTaskRuntimeMetadata {
   readonly hasRuntimeMetadata: boolean;
   readonly milestoneIds: readonly string[];
   readonly verification: boolean;
+  readonly verifierProfiles: readonly VerifierProfileKind[];
+  readonly verifierProbeCategories: readonly AcceptanceProbeCategory[];
   readonly malformed: boolean;
   readonly errors: readonly string[];
 }
@@ -17,6 +23,31 @@ function isPlainObject(
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isVerifierProfileKind(value: string): value is VerifierProfileKind {
+  return (
+    value === "generic" ||
+    value === "cli" ||
+    value === "api" ||
+    value === "browser" ||
+    value === "infra"
+  );
+}
+
+function isAcceptanceProbeCategory(
+  value: string,
+): value is AcceptanceProbeCategory {
+  return (
+    value === "build" ||
+    value === "typecheck" ||
+    value === "lint" ||
+    value === "test" ||
+    value === "smoke" ||
+    value === "api_smoke" ||
+    value === "browser_e2e" ||
+    value === "infra_validate"
+  );
+}
+
 export function normalizeRequestTaskRuntimeMetadata(
   metadata: unknown,
 ): NormalizedRequestTaskRuntimeMetadata {
@@ -25,6 +56,8 @@ export function normalizeRequestTaskRuntimeMetadata(
       hasRuntimeMetadata: false,
       milestoneIds: [],
       verification: false,
+      verifierProfiles: [],
+      verifierProbeCategories: [],
       malformed: false,
       errors: [],
     };
@@ -36,6 +69,8 @@ export function normalizeRequestTaskRuntimeMetadata(
       hasRuntimeMetadata: false,
       milestoneIds: [],
       verification: false,
+      verifierProfiles: [],
+      verifierProbeCategories: [],
       malformed: false,
       errors: [],
     };
@@ -46,6 +81,8 @@ export function normalizeRequestTaskRuntimeMetadata(
       hasRuntimeMetadata: true,
       milestoneIds: [],
       verification: false,
+      verifierProfiles: [],
+      verifierProbeCategories: [],
       malformed: true,
       errors: [
         `metadata.${REQUEST_TASK_RUNTIME_METADATA_KEY} must be a plain object`,
@@ -99,10 +136,65 @@ export function normalizeRequestTaskRuntimeMetadata(
     }
   }
 
+  const verifierProfiles: VerifierProfileKind[] = [];
+  if (rawRuntime.verifierProfiles !== undefined) {
+    if (!Array.isArray(rawRuntime.verifierProfiles)) {
+      errors.push(
+        `metadata.${REQUEST_TASK_RUNTIME_METADATA_KEY}.verifierProfiles must be an array of verifier profile ids`,
+      );
+    } else {
+      const seen = new Set<VerifierProfileKind>();
+      for (const entry of rawRuntime.verifierProfiles) {
+        if (typeof entry !== "string" || !isVerifierProfileKind(entry.trim())) {
+          errors.push(
+            `metadata.${REQUEST_TASK_RUNTIME_METADATA_KEY}.verifierProfiles must contain only known verifier profile ids`,
+          );
+          continue;
+        }
+        const normalized = entry.trim() as VerifierProfileKind;
+        if (seen.has(normalized)) {
+          continue;
+        }
+        seen.add(normalized);
+        verifierProfiles.push(normalized);
+      }
+    }
+  }
+
+  const verifierProbeCategories: AcceptanceProbeCategory[] = [];
+  if (rawRuntime.verifierProbeCategories !== undefined) {
+    if (!Array.isArray(rawRuntime.verifierProbeCategories)) {
+      errors.push(
+        `metadata.${REQUEST_TASK_RUNTIME_METADATA_KEY}.verifierProbeCategories must be an array of verification categories`,
+      );
+    } else {
+      const seen = new Set<AcceptanceProbeCategory>();
+      for (const entry of rawRuntime.verifierProbeCategories) {
+        if (
+          typeof entry !== "string" ||
+          !isAcceptanceProbeCategory(entry.trim())
+        ) {
+          errors.push(
+            `metadata.${REQUEST_TASK_RUNTIME_METADATA_KEY}.verifierProbeCategories must contain only known verification categories`,
+          );
+          continue;
+        }
+        const normalized = entry.trim() as AcceptanceProbeCategory;
+        if (seen.has(normalized)) {
+          continue;
+        }
+        seen.add(normalized);
+        verifierProbeCategories.push(normalized);
+      }
+    }
+  }
+
   return {
     hasRuntimeMetadata: true,
     milestoneIds,
     verification,
+    verifierProfiles,
+    verifierProbeCategories,
     malformed: errors.length > 0,
     errors,
   };

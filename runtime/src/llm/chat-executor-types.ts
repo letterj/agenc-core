@@ -526,7 +526,10 @@ export interface ChatExecutorConfig {
   readonly completionValidation?: {
     readonly topLevelVerifier?: {
       readonly subAgentManager?: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
-      readonly verifierService?: Pick<DelegationVerifierService, "shouldVerifySubAgentResult"> | null;
+      readonly verifierService?: Pick<
+        DelegationVerifierService,
+        "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
+      > | null;
       readonly agentDefinitions?: readonly AgentDefinition[];
       readonly logger?: import("../utils/logger.js").Logger;
       readonly taskStore?: TaskStore | null;

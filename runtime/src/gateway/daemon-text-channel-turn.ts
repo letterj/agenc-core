@@ -126,7 +126,10 @@ interface ExecuteTextChannelTurnParams {
   ) => void;
   readonly persistToDaemonMemory?: boolean;
   readonly subAgentManager?: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
-  readonly verifierService?: Pick<DelegationVerifierService, "shouldVerifySubAgentResult"> | null;
+  readonly verifierService?: Pick<
+    DelegationVerifierService,
+    "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
+  > | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
   readonly taskStore?: TaskStore | null;
 }

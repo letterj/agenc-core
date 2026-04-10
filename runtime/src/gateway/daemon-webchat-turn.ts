@@ -93,7 +93,10 @@ interface ExecuteWebChatConversationTurnParams {
   readonly onModelInfo?: (result: ChatExecutorResult) => void;
   readonly onSubagentSynthesis?: (result: ChatExecutorResult) => void;
   readonly subAgentManager?: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
-  readonly verifierService?: Pick<DelegationVerifierService, "shouldVerifySubAgentResult"> | null;
+  readonly verifierService?: Pick<
+    DelegationVerifierService,
+    "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
+  > | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
   readonly taskStore?: TaskStore | null;
 }

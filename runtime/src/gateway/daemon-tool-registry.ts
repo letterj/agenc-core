@@ -41,6 +41,7 @@ import {
   createTaskTrackerTools,
   TaskStore,
 } from "../tools/system/task-tracker.js";
+import { createVerificationTools } from "../tools/system/verification.js";
 import { runStopHookPhase, type StopHookRuntime } from "../llm/hooks/stop-hooks.js";
 import { resolveBrowserToolMode } from "./browser-tool-mode.js";
 import { createExecuteWithAgentTool } from "./delegation-tool.js";
@@ -355,6 +356,7 @@ export async function createDaemonToolRegistry(
       },
     }),
   );
+  registry.registerAll(createVerificationTools());
   registry.register(createExecuteWithAgentTool());
   registry.register(createCoordinatorModeTool());
   const walletResult = await loadWallet(config);
