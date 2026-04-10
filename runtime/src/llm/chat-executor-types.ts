@@ -611,6 +611,7 @@ export interface ExecutionContext {
   responseModel?: string;
   response?: LLMResponse;
   finalContent: string;
+  lastModelStreamedContent: string;
   compacted: boolean;
   compactedArtifactContext?: ArtifactCompactionState;
   stopReason: LLMPipelineStopReason;
@@ -753,6 +754,7 @@ export function buildDefaultExecutionContext(
     responseModel: undefined,
     response: undefined,
     finalContent: "",
+    lastModelStreamedContent: "",
     compacted: params.compacted,
     compactedArtifactContext: params.stateful?.artifactContext,
     stopReason: "completed",

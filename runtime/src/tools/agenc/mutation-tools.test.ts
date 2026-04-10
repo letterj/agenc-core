@@ -71,6 +71,12 @@ function makeRawAgent(authority: PublicKey) {
   };
 }
 
+function makeAgentRegistrationData(agentIdSeed: number) {
+  const data = new Uint8Array(72);
+  data.set(new Uint8Array(32).fill(agentIdSeed), 8);
+  return data;
+}
+
 function createRpcChain(signature: string) {
   return {
     accountsPartial: vi.fn().mockReturnThis(),
@@ -154,6 +160,32 @@ describe('agenc mutation tools', () => {
 
     expect(result.isError).toBe(true);
     expect(String(parseJson(result).error)).toContain('agenc-runtime agent register');
+  });
+
+  it('agenc.claimTask lists signer agent choices when auto-discovery finds multiple registrations', async () => {
+    const program = createMockProgram();
+    const firstAgentPda = PublicKey.unique();
+    const secondAgentPda = PublicKey.unique();
+    program.provider.connection.getProgramAccounts.mockResolvedValue([
+      { pubkey: secondAgentPda, account: { data: makeAgentRegistrationData(2) } },
+      { pubkey: firstAgentPda, account: { data: makeAgentRegistrationData(1) } },
+    ]);
+    const tool = createClaimTaskTool(program as never, silentLogger);
+
+    const result = await tool.execute({ taskPda: TASK_PDA.toBase58() });
+    const parsed = parseJson(result) as { agents: Array<Record<string, unknown>> } & Record<string, unknown>;
+    const expectedAgentPdas = [firstAgentPda.toBase58(), secondAgentPda.toBase58()].sort();
+
+    expect(result.isError).toBe(true);
+    expect(parsed).toMatchObject({
+      code: 'MULTIPLE_AGENT_REGISTRATIONS',
+      status: 'requires_input',
+      authority: SIGNER.toBase58(),
+      count: 2,
+    });
+    expect(String(parsed.error)).toContain('workerAgentPda');
+    expect(parsed.agents.map((agent) => agent.agentPda)).toEqual(expectedAgentPdas);
+    expect(parsed.agents.every((agent) => agent.registered === true)).toBe(true);
   });
 
   it('agenc.completeTask validates proofHash length', async () => {

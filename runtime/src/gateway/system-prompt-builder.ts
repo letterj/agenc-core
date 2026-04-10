@@ -313,7 +313,7 @@ export async function buildSystemPrompt(
     "For marketplace read prompts, use `agenc.inspectMarketplace` first.\n" +
     "For `agenc.inspectMarketplace` reputation requests, only pass `subject` or `agentPda` when the user or a prior tool result provides a real base58 agent PDA.\n" +
     "Never invent aliases, labels, or placeholder names for `agentPda`.\n" +
-    "If no explicit agent PDA is available, omit `subject` and `agentPda` so the tool can return the `requires_input` placeholder.";
+    "If no explicit agent PDA is available, omit `subject` and `agentPda`; treat a `requires_input` reputation result as a request for a listed agent PDA, not proof that no agent is registered.";
 
   const additionalContext =
     desktopContext +

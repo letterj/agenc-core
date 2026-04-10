@@ -225,7 +225,45 @@ const SOLANA_RPC_REQUIRED =
 const AGENT_ACCT_DISCRIMINATOR = Buffer.from([
   130, 53, 100, 103, 121, 77, 148, 19,
 ]);
+const AGENT_ID_OFFSET = 8;
+const AGENT_AUTHORITY_OFFSET = 40;
 const ZERO_AGENT_ID = new Uint8Array(32);
+
+interface SignerAgentChoice {
+  registered: true;
+  authority: string;
+  agentPda: string;
+  agentId: string;
+}
+
+class MultipleSignerAgentsError extends Error {
+  readonly code = "MULTIPLE_AGENT_REGISTRATIONS";
+  readonly authority: string;
+  readonly agents: SignerAgentChoice[];
+
+  constructor(authority: PublicKey, agents: SignerAgentChoice[]) {
+    super(
+      "Multiple agent registrations found for signer wallet. Provide agentPda with one of the listed agentPda values.",
+    );
+    this.name = "MultipleSignerAgentsError";
+    this.authority = authority.toBase58();
+    this.agents = agents;
+  }
+}
+
+function signerAgentChoicesFromMatches(
+  authority: PublicKey,
+  matches: ReadonlyArray<{ pubkey: PublicKey; account: { data: Uint8Array } }>,
+): SignerAgentChoice[] {
+  return matches
+    .map((match) => ({
+      registered: true as const,
+      authority: authority.toBase58(),
+      agentPda: match.pubkey.toBase58(),
+      agentId: Buffer.from(match.account.data.subarray(AGENT_ID_OFFSET, AGENT_AUTHORITY_OFFSET)).toString("hex"),
+    }))
+    .sort((left, right) => left.agentPda.localeCompare(right.agentPda));
+}
 
 function parseToolError(result: ToolResult): string {
   if (!result.isError) return "Unknown tool failure";
@@ -357,7 +395,7 @@ async function resolveSignerAgent(
             bytes: bs58.default.encode(AGENT_ACCT_DISCRIMINATOR),
           },
         },
-        { memcmp: { offset: 40, bytes: authority.toBase58() } },
+        { memcmp: { offset: AGENT_AUTHORITY_OFFSET, bytes: authority.toBase58() } },
       ],
     },
   );
@@ -366,15 +404,15 @@ async function resolveSignerAgent(
     throw new Error("No agent registration found for signer wallet");
   }
   if (matches.length > 1) {
-    throw new Error("Multiple agent registrations found for signer wallet");
+    throw new MultipleSignerAgentsError(authority, signerAgentChoicesFromMatches(authority, matches));
   }
 
   const raw = await (program.account as any).agentRegistration.fetch(
-    matches[0].pubkey,
+    matches[0]!.pubkey,
   );
   const agent = parseAgentState(raw as Record<string, unknown>);
   return {
-    agentPda: matches[0].pubkey,
+    agentPda: matches[0]!.pubkey,
     agentId: agent.agentId,
     authority,
   };
@@ -1610,10 +1648,19 @@ export async function runMarketReputationSummaryCommand(
     });
     return 0;
   } catch (error) {
+    const multipleAgentDetails = error instanceof MultipleSignerAgentsError
+      ? {
+          reasonCode: error.code,
+          authority: error.authority,
+          count: error.agents.length,
+          agents: error.agents,
+        }
+      : {};
     context.error({
       status: "error",
       code: "MARKET_REPUTATION_SUMMARY_FAILED",
       message: error instanceof Error ? error.message : String(error),
+      ...multipleAgentDetails,
     });
     return 1;
   }

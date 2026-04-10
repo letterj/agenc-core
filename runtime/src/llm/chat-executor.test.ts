@@ -757,6 +757,50 @@ describe("ChatExecutor", () => {
       );
     });
 
+    it("uses streamed post-tool content when the terminal provider payload is empty", async () => {
+      const toolHandler = vi
+        .fn()
+        .mockResolvedValue('{"status":"requires_input"}');
+      const onStreamChunk = vi.fn();
+      const provider = createMockProvider("primary", {
+        chatStream: vi
+          .fn<
+            [LLMMessage[], StreamProgressCallback, LLMChatOptions?],
+            Promise<LLMResponse>
+          >()
+          .mockResolvedValueOnce(
+            mockResponse({
+              content: "",
+              finishReason: "tool_calls",
+              toolCalls: [
+                { id: "tc-1", name: "agenc.getReputationSummary", arguments: "{}" },
+              ],
+            }),
+          )
+          .mockImplementationOnce(async (_messages, stream) => {
+            stream({ content: "Yes, but your signer wallet ", done: false });
+            stream({ content: "already has registered agents.", done: true });
+            return mockResponse({ content: "", finishReason: "stop" });
+          }),
+      });
+
+      const executor = new ChatExecutor({
+        providers: [provider],
+        toolHandler,
+        onStreamChunk,
+      });
+      const result = await executor.execute(createParams());
+
+      expect(result.stopReason).toBe("completed");
+      expect(result.content).toBe(
+        "Yes, but your signer wallet already has registered agents.",
+      );
+      expect(onStreamChunk).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "Yes, but your signer wallet " }),
+      );
+      expect(result.content).not.toContain("Model returned empty content");
+    });
+
     it("surfaces timeout detail instead of summarizing tool output when tool follow-up never starts", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-04-08T00:00:00.000Z"));

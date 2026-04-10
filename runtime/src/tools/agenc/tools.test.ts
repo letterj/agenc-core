@@ -32,6 +32,12 @@ function fixedBytes(value: string, size = 64) {
   return bytes;
 }
 
+function makeAgentRegistrationData(agentIdSeed: number) {
+  const data = new Uint8Array(72);
+  data.set(new Uint8Array(32).fill(agentIdSeed), 8);
+  return data;
+}
+
 function makeSkillAccount({
   id,
   author,
@@ -383,8 +389,9 @@ describe('agenc query tools', () => {
     });
   });
 
-  it('agenc.inspectMarketplace returns a reputation placeholder when no subject is provided', async () => {
+  it('agenc.inspectMarketplace returns a reputation placeholder when no subject or signer is available', async () => {
     const program = createMockProgram();
+    (program.provider as { publicKey: PublicKey | null }).publicKey = null;
     const summarySpy = vi.spyOn(
       marketplaceSerialization,
       'buildMarketplaceReputationSummaryForAgent',
@@ -406,7 +413,67 @@ describe('agenc query tools', () => {
     expect(summarySpy).not.toHaveBeenCalled();
   });
 
-  it('agenc.inspectMarketplace overview keeps reputation in requires-input state without a subject', async () => {
+  it('agenc.inspectMarketplace returns an unregistered signer summary when no signer registration exists', async () => {
+    const program = createMockProgram();
+    const summarySpy = vi.spyOn(
+      marketplaceSerialization,
+      'buildMarketplaceReputationSummaryForAgent',
+    );
+
+    const tool = createInspectMarketplaceTool(program as never, silentLogger);
+    const result = await tool.execute({ surface: 'reputation' });
+    const parsed = parseJson(result);
+
+    expect(result.isError).toBeUndefined();
+    expect(parsed).toMatchObject({
+      surface: 'reputation',
+      status: 'not_found',
+      count: 0,
+      subject: program.provider.publicKey.toBase58(),
+      items: [
+        {
+          registered: false,
+          authority: program.provider.publicKey.toBase58(),
+        },
+      ],
+    });
+    expect(parsed.message).toContain('No agent registration found');
+    expect(summarySpy).not.toHaveBeenCalled();
+  });
+
+  it('agenc.inspectMarketplace lists signer agent choices when multiple registrations exist', async () => {
+    const program = createMockProgram();
+    const firstAgentPda = PublicKey.unique();
+    const secondAgentPda = PublicKey.unique();
+    const summarySpy = vi.spyOn(
+      marketplaceSerialization,
+      'buildMarketplaceReputationSummaryForAgent',
+    );
+
+    (program.provider.connection.getProgramAccounts as any).mockResolvedValue([
+      { pubkey: secondAgentPda, account: { data: makeAgentRegistrationData(2) } },
+      { pubkey: firstAgentPda, account: { data: makeAgentRegistrationData(1) } },
+    ]);
+
+    const tool = createInspectMarketplaceTool(program as never, silentLogger);
+    const result = await tool.execute({ surface: 'reputation' });
+    const parsed = parseJson(result);
+    const expectedAgentPdas = [firstAgentPda.toBase58(), secondAgentPda.toBase58()].sort();
+
+    expect(result.isError).toBeUndefined();
+    expect(parsed).toMatchObject({
+      surface: 'reputation',
+      status: 'requires_input',
+      count: 2,
+      subject: program.provider.publicKey.toBase58(),
+    });
+    expect(parsed.message).toContain('Multiple agent registrations found');
+    expect(parsed.items.map((item: Record<string, unknown>) => item.agentPda)).toEqual(expectedAgentPdas);
+    expect(parsed.items.every((item: Record<string, unknown>) => item.registered === true)).toBe(true);
+    expect(summarySpy).not.toHaveBeenCalled();
+  });
+
+  it('agenc.inspectMarketplace overview reports signer reputation as not found without a registration', async () => {
     const program = createMockProgram();
     const summarySpy = vi.spyOn(
       marketplaceSerialization,
@@ -423,13 +490,13 @@ describe('agenc query tools', () => {
 
     expect(result.isError).toBeUndefined();
     expect(parsed.surface).toBe('marketplace');
-    expect(parsed.status).toBe('requires_input');
+    expect(parsed.status).toBe('ok');
     expect(parsed.count).toBe(5);
     expect(parsed.overview.reputation).toMatchObject({
-      status: 'requires_input',
+      status: 'not_found',
       count: 0,
     });
-    expect(parsed.overview.reputation.message).toContain('Provide <agentPda>');
+    expect(parsed.overview.reputation.message).toContain('No agent registration found');
     expect(summarySpy).not.toHaveBeenCalled();
   });
 

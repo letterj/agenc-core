@@ -1697,6 +1697,14 @@ export async function executeToolCallLoop(
   }
 
   ctx.finalContent = ctx.response?.content ?? "";
+  if (
+    !ctx.finalContent &&
+    ctx.lastModelStreamedContent.trim().length > 0 &&
+    ctx.allToolCalls.length > 0 &&
+    ctx.stopReason === "completed"
+  ) {
+    ctx.finalContent = ctx.lastModelStreamedContent;
+  }
   const missingFinalToolFollowupAnswer =
     !ctx.finalContent &&
     ctx.allToolCalls.length > 0 &&

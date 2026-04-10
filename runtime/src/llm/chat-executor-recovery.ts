@@ -31,6 +31,22 @@ const DESKTOP_BIASED_SYSTEM_COMMANDS = new Set([
   "playwright",
   "gdb",
 ]);
+
+function isRequiresInputToolResult(
+  parsedResult: Record<string, unknown> | null,
+): boolean {
+  return parsedResult?.status === "requires_input";
+}
+
+function extractRequiresInputCode(
+  parsedResult: Record<string, unknown> | null,
+): string {
+  const code = parsedResult?.code;
+  return typeof code === "string" && code.trim().length > 0
+    ? code.trim()
+    : "requires_input";
+}
+
 function extractDeniedCommand(failureText: string): string | undefined {
   const quotedDouble = failureText.match(/command\s+"([^"]+)"\s+is denied/i);
   if (quotedDouble && quotedDouble[1]?.trim().length) {
@@ -1325,6 +1341,17 @@ export function inferRecoveryHint(
 
   if (!didToolCallFail(call.isError, call.result)) return undefined;
 
+  if (isRequiresInputToolResult(parsedResult)) {
+    const code = extractRequiresInputCode(parsedResult);
+    return {
+      key: `${call.name}-requires-input:${code.toLowerCase()}`,
+      message:
+        `The tool returned \`status: "requires_input"\` (${code}). ` +
+        "Do not retry the same tool call with the same arguments. Ask the user for the missing input explicitly, using any choices listed in the tool result. " +
+        "For multiple AgenC agent registrations, ask the user to choose one listed `agentPda`/`creatorAgentPda` instead of selecting one automatically.",
+    };
+  }
+
   const failureText = extractToolFailureText(call);
   const failureTextLower = failureText.toLowerCase();
   if (
@@ -1791,4 +1818,3 @@ export function inferRecoveryHint(
 
   return undefined;
 }
-

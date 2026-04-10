@@ -176,6 +176,41 @@ function createReadOnlyProgramContext(deps: WebChatDeps): ReturnType<typeof crea
   return createReadOnlyProgram(deps.connection);
 }
 
+interface SignerAgentChoice {
+  registered: true;
+  authority: string;
+  agentPda: string;
+  agentId: string;
+}
+
+class MultipleSignerAgentsError extends Error {
+  readonly authority: string;
+  readonly agents: SignerAgentChoice[];
+
+  constructor(authority: PublicKey, agents: SignerAgentChoice[]) {
+    super(
+      'Multiple agent registrations found for signer wallet. Provide agentPda with one of the listed agentPda values.',
+    );
+    this.name = 'MultipleSignerAgentsError';
+    this.authority = authority.toBase58();
+    this.agents = agents;
+  }
+}
+
+function signerAgentChoicesFromMatches(
+  authority: PublicKey,
+  matches: ReadonlyArray<{ pubkey: PublicKey; account: { data: Uint8Array } }>,
+): SignerAgentChoice[] {
+  return matches
+    .map((match) => ({
+      registered: true as const,
+      authority: authority.toBase58(),
+      agentPda: match.pubkey.toBase58(),
+      agentId: Buffer.from(match.account.data.subarray(AGENT_ID_OFFSET, AGENT_AUTHORITY_OFFSET)).toString('hex'),
+    }))
+    .sort((left, right) => left.agentPda.localeCompare(right.agentPda));
+}
+
 async function resolveSignerAgent(program: ReturnType<typeof createProgram>): Promise<{
   agentPda: PublicKey;
   agentId: Uint8Array;
@@ -190,7 +225,7 @@ async function resolveSignerAgent(program: ReturnType<typeof createProgram>): Pr
   const matches = await program.provider.connection.getProgramAccounts(program.programId, {
     filters: [
       { memcmp: { offset: 0, bytes: bs58.default.encode(AGENT_ACCT_DISCRIMINATOR) } },
-      { memcmp: { offset: 40, bytes: authority.toBase58() } },
+      { memcmp: { offset: AGENT_AUTHORITY_OFFSET, bytes: authority.toBase58() } },
     ],
   });
 
@@ -198,17 +233,17 @@ async function resolveSignerAgent(program: ReturnType<typeof createProgram>): Pr
     throw new Error('No agent registration found for signer wallet');
   }
   if (matches.length > 1) {
-    throw new Error('Multiple agent registrations found for signer wallet');
+    throw new MultipleSignerAgentsError(authority, signerAgentChoicesFromMatches(authority, matches));
   }
 
-  const agentData = matches[0].account.data as Buffer;
+  const agentData = matches[0]!.account.data as Buffer;
   if (agentData.length < 72) {
     throw new Error('Signer agent registration account is truncated');
   }
 
   return {
-    agentPda: matches[0].pubkey,
-    agentId: new Uint8Array(agentData.subarray(8, 40)),
+    agentPda: matches[0]!.pubkey,
+    agentId: new Uint8Array(agentData.subarray(AGENT_ID_OFFSET, AGENT_AUTHORITY_OFFSET)),
     authority,
   };
 }
@@ -941,7 +976,22 @@ async function handleMarketReputationSummary(
     let signerAgent: Awaited<ReturnType<typeof resolveSignerAgent>> | null = null;
     try {
       signerAgent = await resolveSignerAgent(program);
-    } catch {
+    } catch (error) {
+      if (error instanceof MultipleSignerAgentsError) {
+        send({
+          type: 'market.reputation.summary',
+          payload: {
+            status: 'requires_input',
+            registered: false,
+            authority: error.authority,
+            message: error.message,
+            count: error.agents.length,
+            agents: error.agents,
+          },
+          id,
+        });
+        return;
+      }
       send({
         type: 'market.reputation.summary',
         payload: buildMarketplaceUnregisteredSummary({ authority }),
@@ -1675,6 +1725,8 @@ async function handlePolicySimulate(
  * so we parse sequentially rather than using fixed offsets.
  */
 const AGENT_ACCT_DISCRIMINATOR = Buffer.from([130, 53, 100, 103, 121, 77, 148, 19]);
+const AGENT_ID_OFFSET = 8;
+const AGENT_AUTHORITY_OFFSET = 40;
 /** Minimum byte length for an agent account (all variable-length strings empty). */
 const AGENT_ACCT_MIN_LENGTH = 132;
 

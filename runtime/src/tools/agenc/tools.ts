@@ -93,6 +93,9 @@ const DESCRIPTION_BYTES = 64;
 const TASK_ID_BYTES = 32;
 const MAX_U64 = (1n << 64n) - 1n;
 const DUMMY_AGENT_ID = new Uint8Array(32);
+const AGENT_DISCRIMINATOR = Buffer.from([130, 53, 100, 103, 121, 77, 148, 19]);
+const AGENT_ID_OFFSET = 8;
+const AGENT_AUTHORITY_OFFSET = AGENT_ID_OFFSET + TASK_ID_BYTES;
 
 /**
  * Dedup guard for createTask — prevents the LLM from calling createTask
@@ -257,6 +260,66 @@ function parseKnownRewardMint(input: unknown): [PublicKey | null, ToolResult | n
   return [mint, null];
 }
 
+interface SignerAgentChoice {
+  registered: true;
+  authority: string;
+  agentPda: string;
+  agentId: string;
+}
+
+function ambiguousSignerAgentsResult(authority: PublicKey, agents: SignerAgentChoice[]): ToolResult {
+  return {
+    content: safeStringify({
+      error:
+        'Multiple agent registrations found for signer wallet. Provide creatorAgentPda with one of the listed agentPda values.',
+      code: 'MULTIPLE_AGENT_REGISTRATIONS',
+      status: 'requires_input',
+      authority: authority.toBase58(),
+      count: agents.length,
+      agents,
+    }),
+    isError: true,
+  };
+}
+
+async function findSignerAgentChoices(
+  program: Program<AgencCoordination>,
+  authority: PublicKey,
+): Promise<SignerAgentChoice[]> {
+  // Use raw getProgramAccounts to bypass Anchor deserialization bug with enum repr.
+  const bs58 = await import('bs58');
+  const matches = await program.provider.connection.getProgramAccounts(program.programId, {
+    filters: [
+      { memcmp: { offset: 0, bytes: bs58.default.encode(AGENT_DISCRIMINATOR) } },
+      { memcmp: { offset: AGENT_AUTHORITY_OFFSET, bytes: authority.toBase58() } },
+    ],
+  });
+
+  return matches
+    .map((match) => ({
+      registered: true as const,
+      authority: authority.toBase58(),
+      agentPda: match.pubkey.toBase58(),
+      agentId: bytesToHex(match.account.data.subarray(AGENT_ID_OFFSET, AGENT_AUTHORITY_OFFSET)),
+    }))
+    .sort((left, right) => left.agentPda.localeCompare(right.agentPda));
+}
+
+function buildAmbiguousSignerAgentsSurface(
+  authority: PublicKey,
+  agents: SignerAgentChoice[],
+): MarketplaceInspectSurface {
+  return buildMarketplaceInspectSurface({
+    surface: 'reputation',
+    status: 'requires_input',
+    subject: authority.toBase58(),
+    message:
+      'Multiple agent registrations found for signer wallet. Provide one of the listed agentPda values to inspect reputation deterministically.',
+    items: agents,
+    count: agents.length,
+  });
+}
+
 async function resolveCreatorAgentPda(
   program: Program<AgencCoordination>,
   creator: PublicKey,
@@ -267,25 +330,16 @@ async function resolveCreatorAgentPda(
     return [pda, err];
   }
 
-  // Use raw getProgramAccounts to bypass Anchor deserialization bug with enum repr
-  const bs58 = await import('bs58');
-  const AGENT_DISCRIMINATOR = Buffer.from([130, 53, 100, 103, 121, 77, 148, 19]);
-  const AGENT_AUTHORITY_OFFSET = 40; // 8 (disc) + 32 (agent_id)
-  const matches = await program.provider.connection.getProgramAccounts(program.programId, {
-    filters: [
-      { memcmp: { offset: 0, bytes: bs58.default.encode(AGENT_DISCRIMINATOR) } },
-      { memcmp: { offset: AGENT_AUTHORITY_OFFSET, bytes: creator.toBase58() } },
-    ],
-  });
+  const matches = await findSignerAgentChoices(program, creator);
 
   if (matches.length === 0) {
     return [null, errorResult('No agent registration found for signer wallet. Run `agenc-runtime agent register --rpc <url>` first, or provide creatorAgentPda.')];
   }
   if (matches.length > 1) {
-    return [null, errorResult('Multiple agent registrations found for signer wallet. Provide creatorAgentPda.')];
+    return [null, ambiguousSignerAgentsResult(creator, matches)];
   }
 
-  return [matches[0].pubkey, null];
+  return [new PublicKey(matches[0]!.agentPda), null];
 }
 
 function isMissingAccountError(err: unknown): boolean {
@@ -709,7 +763,36 @@ async function buildMarketplaceReputationSurface(
   const requestedSubject =
     typeof requestedAgentPda === 'string' ? requestedAgentPda.trim() : requestedAgentPda;
   if (requestedSubject === undefined || requestedSubject === null || requestedSubject === '') {
-    return buildMarketplaceReputationInspectPlaceholder();
+    const authority = program.provider.publicKey;
+    if (!authority) {
+      return buildMarketplaceReputationInspectPlaceholder();
+    }
+
+    const matches = await findSignerAgentChoices(program, authority);
+    if (matches.length === 0) {
+      return buildMarketplaceInspectSurface({
+        surface: 'reputation',
+        status: 'not_found',
+        subject: authority.toBase58(),
+        message: 'No agent registration found for signer wallet.',
+        items: [buildMarketplaceUnregisteredSummary({ authority: authority.toBase58() })],
+        count: 0,
+      });
+    }
+    if (matches.length > 1) {
+      return buildAmbiguousSignerAgentsSurface(authority, matches);
+    }
+
+    const [summary, summaryErr] = await loadReputationSummary(program, matches[0]!.agentPda);
+    if (summaryErr || !summary) {
+      throw new Error(parseToolErrorMessage(summaryErr) ?? 'Unable to inspect marketplace reputation');
+    }
+    return buildMarketplaceInspectSurface({
+      surface: 'reputation',
+      subject: summary.agentPda ?? summary.authority ?? null,
+      items: [summary],
+      count: 1,
+    });
   }
   const [summary, summaryErr] = await loadReputationSummary(program, requestedSubject);
   if (summaryErr || !summary) {

@@ -51,6 +51,37 @@ describe("chat-executor-recovery", () => {
     expect(hint?.message).toContain("system.sandboxJobStart");
   });
 
+  it("tells the model to ask for required input instead of retrying requires_input tools", () => {
+    const hint = inferRecoveryHint({
+      name: "agenc.registerAgent",
+      args: {
+        capabilities: ["marketplace"],
+      },
+      result: JSON.stringify({
+        status: "requires_input",
+        code: "MULTIPLE_AGENT_REGISTRATIONS",
+        error:
+          "Multiple agent registrations found for signer wallet. Provide creatorAgentPda with one of the listed agentPda values.",
+        agents: [
+          {
+            agentPda: "11111111111111111111111111111111",
+          },
+        ],
+      }),
+      isError: true,
+      durationMs: 5,
+    });
+
+    expect(hint).toBeDefined();
+    expect(hint?.key).toBe(
+      "agenc.registerAgent-requires-input:multiple_agent_registrations",
+    );
+    expect(hint?.message).toContain('status: "requires_input"');
+    expect(hint?.message).toContain("Do not retry the same tool call");
+    expect(hint?.message).toContain("agentPda");
+    expect(hint?.message).toContain("creatorAgentPda");
+  });
+
   it("injects a recovery hint for stale CMake cache path mismatches", () => {
     const hint = inferRecoveryHint({
       name: "system.bash",

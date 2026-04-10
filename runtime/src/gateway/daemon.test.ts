@@ -267,7 +267,7 @@ describe("DaemonManager host workspace prompt and memory resolution", () => {
       expect(prompt).toContain("Host workspace agent");
       expect(prompt).toContain("For `agenc.inspectMarketplace` reputation requests");
       expect(prompt).toContain("Never invent aliases, labels, or placeholder names for `agentPda`");
-      expect(prompt).toContain("return the `requires_input` placeholder");
+      expect(prompt).toContain("not proof that no agent is registered");
     } finally {
       await rm(hostPath, { recursive: true, force: true });
     }

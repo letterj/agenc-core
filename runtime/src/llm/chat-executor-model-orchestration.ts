@@ -379,6 +379,16 @@ export async function callModelForPhase(
     },
   });
   let next: FallbackResult;
+  let streamedContent = "";
+  const passThroughStreamChunk = input.onStreamChunk;
+  const onStreamChunk: StreamProgressCallback | undefined = passThroughStreamChunk
+    ? (chunk) => {
+      if (chunk.content.length > 0) {
+        streamedContent += chunk.content;
+      }
+      passThroughStreamChunk(chunk);
+    }
+    : undefined;
   try {
     next = await callWithFallback(
       {
@@ -390,7 +400,7 @@ export async function callModelForPhase(
         maxCooldownMs: deps.maxCooldownMs,
       },
       effectiveCallMessages,
-      input.onStreamChunk,
+      onStreamChunk,
       effectiveCallSections,
       {
         requestDeadlineAt: ctx.requestDeadlineAt,
@@ -437,6 +447,7 @@ export async function callModelForPhase(
     throw annotated.error;
   }
   ctx.modelCalls++;
+  ctx.lastModelStreamedContent = streamedContent;
   ctx.providerName = next.providerName;
   ctx.responseModel = next.response.model;
   ctx.providerEvidence = mergeProviderEvidence(
