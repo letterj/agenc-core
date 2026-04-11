@@ -11,7 +11,13 @@ import {
   SUB_AGENT_SESSION_PREFIX,
   type SubAgentManager,
 } from "./sub-agent.js";
+import type { PersistentWorkerManager } from "./persistent-worker-manager.js";
 import type { GatewaySubagentFallbackBehavior } from "./types.js";
+import {
+  createVerifierRequirement,
+  type VerifierRequirement,
+  type ProjectVerifierBootstrap,
+} from "./verifier-probes.js";
 
 interface DelegationPolicyRuntimeConfig {
   readonly enabled: boolean;
@@ -129,15 +135,6 @@ export class DelegationPolicyEngine {
       };
     }
 
-    if (input.isSubAgentSession) {
-      return {
-        allowed: false,
-        reason: "Sub-agent sessions cannot invoke delegation tools",
-        matchedRule: "subagent_delegation_blocked",
-        threshold: this.config.spawnDecisionThreshold,
-      };
-    }
-
     // Parent sessions may be constrained by explicit allow/deny lists.
     const forbidden = new Set(this.config.forbiddenParentTools ?? []);
     if (forbidden.has(input.toolName)) {
@@ -174,6 +171,7 @@ interface DelegationVerifierRuntimeConfig {
 
 export class DelegationVerifierService {
   private config: DelegationVerifierRuntimeConfig;
+  private bootstrapCache = new Map<string, ProjectVerifierBootstrap>();
 
   constructor(config: DelegationVerifierRuntimeConfig) {
     this.config = { ...config };
@@ -187,11 +185,27 @@ export class DelegationVerifierService {
     return { ...this.config };
   }
 
+  resolveVerifierRequirement(params?: {
+    readonly requested?: boolean;
+    readonly runtimeRequired?: boolean;
+    readonly projectBootstrap?: boolean;
+    readonly workspaceRoot?: string;
+  }): VerifierRequirement {
+    return createVerifierRequirement({
+      enabled: this.config.enabled,
+      requested:
+        params?.requested === true || this.config.forceVerifier === true,
+      runtimeRequired: params?.runtimeRequired,
+      projectBootstrap: params?.projectBootstrap,
+      workspaceRoot: params?.workspaceRoot,
+      bootstrapCache: this.bootstrapCache,
+    });
+  }
+
   shouldVerifySubAgentResult(
     requested = false,
   ): boolean {
-    if (!this.config.enabled) return false;
-    return this.config.forceVerifier || requested;
+    return this.resolveVerifierRequirement({ requested }).required;
   }
 }
 
@@ -250,6 +264,7 @@ export class SubAgentLifecycleEmitter {
 
 export interface DelegationToolCompositionContext {
   readonly subAgentManager: SubAgentManager | null;
+  readonly workerManager?: PersistentWorkerManager | null;
   readonly policyEngine: DelegationPolicyEngine | null;
   readonly verifier: DelegationVerifierService | null;
   readonly lifecycleEmitter: SubAgentLifecycleEmitter | null;

@@ -19,6 +19,7 @@ import {
   TASK_LIST_ARG,
   TASK_TRACKER_TOOL_NAMES,
 } from "../tools/system/task-tracker.js";
+import type { TaskStore } from "../tools/system/task-tracker.js";
 import {
   didToolCallFail,
   enrichToolResultMetadata,
@@ -63,6 +64,7 @@ import {
   resolveExecutionEnvelopeArtifactRelations,
   type ExecutionEnvelope,
 } from "../workflow/execution-envelope.js";
+import type { RuntimeContractFlags } from "../runtime-contract/types.js";
 import type { RuntimeIncidentDiagnostics } from "../telemetry/incident-diagnostics.js";
 import {
   FaultInjectionError,
@@ -86,6 +88,8 @@ const TOOL_DEFAULT_CWD_NAMES = new Set([
   "desktop.bash",
   "system.processStart",
   "system.serverStart",
+  "verification.listProbes",
+  "verification.runProbe",
 ]);
 const SESSION_ALLOWED_ROOT_TOOL_NAMES = new Set([
   "system.readFile",
@@ -2357,6 +2361,10 @@ interface SessionToolHandlerConfig {
   effectLedger?: EffectLedger;
   /** Optional channel/source label attached to emitted effect records. */
   effectChannel?: string;
+  /** Durable task registry used for public task handles. */
+  taskStore?: TaskStore | null;
+  /** Runtime-contract feature flags that gate handle-first delegation. */
+  runtimeContractFlags?: RuntimeContractFlags;
 }
 
 // ============================================================================
@@ -2398,6 +2406,8 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
     resolvePolicyScope,
     effectLedger,
     effectChannel,
+    taskStore,
+    runtimeContractFlags,
     resolveWorkspaceContext,
   } = config;
   let toolCallSeq = 0;
@@ -2462,6 +2472,7 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
     }
     const delegationContext = delegation?.();
     const subAgentManager = delegationContext?.subAgentManager ?? null;
+    const workerManager = delegationContext?.workerManager ?? null;
     const policyEngine = delegationContext?.policyEngine ?? null;
     const verifier = delegationContext?.verifier ?? null;
     const lifecycleEmitter = delegationContext?.lifecycleEmitter ?? null;
@@ -2932,6 +2943,8 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
             subAgentManager,
             lifecycleEmitter,
             verifier,
+            taskStore,
+            runtimeContractFlags,
             availableToolNames,
             defaultWorkingDirectory: effectiveDefaultWorkingDirectory,
             parentAllowedReadRoots: delegatedParentAllowedRoots,
@@ -2948,8 +2961,11 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
               sessionId,
               toolCallId,
               subAgentManager,
+              workerManager,
               lifecycleEmitter,
               verifier,
+              taskStore,
+              runtimeContractFlags,
               availableToolNames,
               defaultWorkingDirectory: effectiveDefaultWorkingDirectory,
               parentAllowedReadRoots: delegatedParentAllowedRoots,
@@ -3157,6 +3173,11 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
     });
 
     if (isSubAgentSession && lifecycleEmitter) {
+      const verifierRequirement = verifier?.resolveVerifierRequirement({
+        runtimeRequired: runtimeContractFlags?.verifierRuntimeRequired,
+        projectBootstrap: runtimeContractFlags?.verifierProjectBootstrap,
+        workspaceRoot: defaultWorkingDirectory ?? scopedFilesystemRoot,
+      });
       lifecycleEmitter.emit({
         type: 'subagents.tool.result',
         timestamp: Date.now(),
@@ -3168,7 +3189,9 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
           durationMs,
           isError,
           toolCallId,
-          verifyRequested: verifier?.shouldVerifySubAgentResult() ?? false,
+          ...(verifierRequirement
+            ? { verifierRequirement }
+            : {}),
         },
       });
     }

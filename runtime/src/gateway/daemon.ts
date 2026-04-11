@@ -43,6 +43,8 @@ import type {
 import type { Logger } from "../utils/logger.js";
 import { silentLogger } from "../utils/logger.js";
 import {
+  buildRuntimeContractVerifierTraceId,
+  buildRuntimeContractWorkerTraceId,
   logTraceErrorEvent,
   logTraceEvent,
   resolveTraceFanoutEnabled,
@@ -96,9 +98,11 @@ import {
   createChatExecutor,
   buildPermissionRulesFromAllowDeny,
 } from "./chat-executor-factory.js";
+import { resolveRuntimeContractFlags } from "../runtime-contract/flags.js";
 import {
   normalizeToolCallArguments,
 } from "../llm/chat-executor-tool-utils.js";
+import { buildStopHookRuntime } from "../llm/hooks/stop-hooks.js";
 import {
   getProviderNativeAdvertisedToolNames,
 } from "../llm/provider-native-search.js";
@@ -279,6 +283,15 @@ import {
   DurableSubrunOrchestrator,
   type DurableSubrunAdmissionDecision,
 } from "./durable-subrun-orchestrator.js";
+import {
+  PersistentWorkerManager,
+  type PersistentWorkerTraceEvent,
+} from "./persistent-worker-manager.js";
+import {
+  PersistentWorkerMailbox,
+  type PersistentWorkerMailboxTraceEvent,
+} from "./persistent-worker-mailbox.js";
+import { WorktreeIsolationManager } from "./worktree-isolation.js";
 import { evaluateAutonomyCanaryAdmission } from "./autonomy-rollout.js";
 import {
   formatBackgroundRunAdmissionDenied,
@@ -303,6 +316,7 @@ import {
 import {
   createDaemonToolRegistry,
 } from "./daemon-tool-registry.js";
+import type { TopLevelVerifierTraceEvent } from "./top-level-verifier.js";
 import {
   wireSocial as wireSocialStandalone,
   wireAutonomousFeatures as wireAutonomousFeaturesStandalone,
@@ -1029,6 +1043,7 @@ export class DaemonManager {
   private _remoteJobManager: SystemRemoteJobManager | null = null;
   private _remoteSessionManager: SystemRemoteSessionManager | null = null;
   private _taskTrackerStore: TaskStore | null = null;
+  private _persistentWorkerManager: PersistentWorkerManager | null = null;
   private _sessionModelInfo = new Map<
     string,
     {
@@ -1083,6 +1098,7 @@ export class DaemonManager {
         this._subAgentRuntimeConfig?.unsafeBenchmarkMode === true;
       return {
         subAgentManager: this._subAgentManager,
+        workerManager: this._persistentWorkerManager,
         policyEngine: this._delegationPolicyEngine,
         verifier: this._delegationVerifierService,
         lifecycleEmitter: this._subAgentLifecycleEmitter,
@@ -1242,6 +1258,12 @@ export class DaemonManager {
   }
 
   private async destroySubAgentInfrastructure(): Promise<void> {
+    if (this._persistentWorkerManager) {
+      await this._persistentWorkerManager.handleRuntimeReset(
+        "subagent_infrastructure_destroyed",
+      );
+      this._persistentWorkerManager = null;
+    }
     const subAgentManager = this._subAgentManager;
     this._subAgentManager = null;
     const isolationManager = this._sessionIsolationManager;
@@ -1251,6 +1273,106 @@ export class DaemonManager {
       isolationManager,
       this.logger,
     );
+  }
+
+  private async configurePersistentWorkerManager(
+    config: GatewayConfig,
+  ): Promise<void> {
+    const flags = resolveRuntimeContractFlags(config.llm);
+    const traceConfig = resolveTraceLoggingConfig(config.logging);
+    if (
+      !flags.persistentWorkersEnabled ||
+      !this._memoryBackend ||
+      !this._taskTrackerStore ||
+      !this._subAgentManager
+    ) {
+      this._persistentWorkerManager = null;
+      return;
+    }
+
+    const mailbox = flags.mailboxEnabled
+      ? new PersistentWorkerMailbox({
+          memoryBackend: this._memoryBackend,
+          logger: this.logger,
+          ...(traceConfig.enabled
+            ? {
+                onTraceEvent: async (
+                  event: PersistentWorkerMailboxTraceEvent,
+                ) => {
+                  logTraceEvent(
+                    this.logger,
+                    `runtime_contract.mailbox.${event.action}`,
+                    {
+                      traceId: buildRuntimeContractWorkerTraceId(
+                        event.parentSessionId,
+                        event.workerId,
+                      ),
+                      sessionId: event.parentSessionId,
+                      workerId: event.workerId,
+                      messageId: event.messageId,
+                      messageType: event.messageType,
+                      direction: event.direction,
+                      status: event.status,
+                      timestamp: event.timestamp,
+                      ...(event.taskId ? { taskId: event.taskId } : {}),
+                      ...(event.correlationId
+                        ? { correlationId: event.correlationId }
+                        : {}),
+                    },
+                    traceConfig.maxChars,
+                  );
+                },
+              }
+            : {}),
+        })
+      : null;
+
+    const manager = new PersistentWorkerManager({
+      memoryBackend: this._memoryBackend,
+      taskStore: this._taskTrackerStore,
+      subAgentManager: this._subAgentManager,
+      approvalEngine: this._approvalEngine,
+      mailbox,
+      worktreeIsolation: flags.workerIsolationWorktree
+        ? new WorktreeIsolationManager({ logger: this.logger })
+        : null,
+      worktreeIsolationEnabled: flags.workerIsolationWorktree,
+      remoteIsolationEnabled: flags.workerIsolationRemote,
+      remoteSessionManager: this._remoteSessionManager,
+      logger: this.logger,
+      ...(traceConfig.enabled
+        ? {
+            onTraceEvent: async (event: PersistentWorkerTraceEvent) => {
+              logTraceEvent(
+                this.logger,
+                `runtime_contract.worker.${event.type}`,
+                {
+                  traceId: buildRuntimeContractWorkerTraceId(
+                    event.parentSessionId,
+                    event.workerId,
+                  ),
+                  sessionId: event.parentSessionId,
+                  workerId: event.workerId,
+                  timestamp: event.timestamp,
+                  ...(event.taskId ? { taskId: event.taskId } : {}),
+                  ...(event.workerState ? { workerState: event.workerState } : {}),
+                  ...(event.summary ? { summary: event.summary } : {}),
+                  ...(event.verifierVerdict
+                    ? { verifierVerdict: event.verifierVerdict }
+                    : {}),
+                  ...(event.executionLocation
+                    ? { executionLocation: event.executionLocation }
+                    : {}),
+                  ...(event.reason ? { reason: event.reason } : {}),
+                },
+                traceConfig.maxChars,
+              );
+            },
+          }
+        : {}),
+    });
+    await manager.repairRuntimeState();
+    this._persistentWorkerManager = manager;
   }
 
   private async configureSubAgentInfrastructure(
@@ -1350,10 +1472,6 @@ export class DaemonManager {
         if (manager) {
           await manager.destroyContext(sessionIdentity);
         }
-        this.dropTaskTrackerSession(
-          sessionIdentity.subagentSessionId,
-          "subagent_teardown",
-        );
         await cleanupDesktopSession(
           sessionIdentity.subagentSessionId,
           {
@@ -1395,6 +1513,8 @@ export class DaemonManager {
         createSessionToolHandler({
           sessionId: sessionIdentity.subagentSessionId,
           baseHandler: baseToolHandler,
+          taskStore: this._taskTrackerStore,
+          runtimeContractFlags: resolveRuntimeContractFlags(config.llm),
           availableToolNames: allowedToolNames,
           defaultWorkingDirectory: workingDirectory,
           workspaceAliasRoot: this._hostWorkspacePath ?? undefined,
@@ -1441,16 +1561,16 @@ export class DaemonManager {
         this.getActiveDelegationAggressiveness(resolved),
       childProviderStrategy: resolved.childProviderStrategy,
     });
+    await this.configurePersistentWorkerManager(config);
 
     // Cut 5.6: load declarative agent definitions from the built-in
     // runtime/src/gateway/agent-definitions/ directory and from the
-    // user-level ~/.agenc/agents/ directory. This is the claude_code
-    // shape for AgentDefinition — each .md file declares an agent
-    // with a name, description, allowed tools, and a system prompt in
-    // the markdown body. The definitions are logged for visibility
-    // so operators can confirm which agents are loaded. Future work
-    // will wire them into the sub-agent orchestrator as a replacement
-    // for the economics-based spawn decision path.
+    // user-level ~/.agenc/agents/ directory. Each .md file declares
+    // an agent with a name, description, allowed tools, and a system
+    // prompt in the markdown body. The definitions are logged for
+    // visibility so operators can confirm which agents are loaded.
+    // Future work will wire them into the sub-agent orchestrator as a
+    // replacement for the economics-based spawn decision path.
     try {
       this._agentDefinitions = loadAgentDefinitions();
       if (this._agentDefinitions.length > 0) {
@@ -1927,6 +2047,7 @@ export class DaemonManager {
     const resolvedSubAgentConfig = resolveSubAgentRuntimeConfig(config.llm, {
       unsafeBenchmarkMode: this.yolo,
     });
+    const traceConfig = resolveTraceLoggingConfig(config.logging);
     await this.refreshHostToolingProfile({
       enabled: resolvedSubAgentConfig.enabled,
       logging: config.logging,
@@ -1968,6 +2089,40 @@ export class DaemonManager {
         toolAllowList: config.policy?.toolAllowList,
         toolDenyList: config.policy?.toolDenyList,
       }),
+      completionValidation: {
+        topLevelVerifier: {
+          subAgentManager: this._subAgentManager,
+          verifierService: this._delegationVerifierService,
+          agentDefinitions: this._agentDefinitions,
+          logger: this.logger,
+          taskStore: this._taskTrackerStore,
+          remoteJobManager: this._remoteJobManager,
+          ...(traceConfig.enabled
+            ? {
+                onTraceEvent: async (event: TopLevelVerifierTraceEvent) => {
+                  logTraceEvent(
+                    this.logger,
+                    `runtime_contract.verifier.${event.type}`,
+                    {
+                      traceId: buildRuntimeContractVerifierTraceId(
+                        event.sessionId,
+                        event.taskId,
+                      ),
+                      sessionId: event.sessionId,
+                      ...(event.taskId ? { taskId: event.taskId } : {}),
+                      ...(event.launcherKind
+                        ? { launcherKind: event.launcherKind }
+                        : {}),
+                      ...(event.summary ? { summary: event.summary } : {}),
+                      ...(event.verdict ? { verdict: event.verdict } : {}),
+                    },
+                    traceConfig.maxChars,
+                  );
+                },
+              }
+            : {}),
+        },
+      },
     });
 
     const sessionMgr = this.createSessionManager(hooks);
@@ -1997,6 +2152,7 @@ export class DaemonManager {
       hooks,
       approvalEngine: approvalEngine ?? undefined,
       memoryBackend,
+      taskStore: this._taskTrackerStore,
       delegation: this.resolveDelegationToolContext,
     };
     const voiceBridge = this.createOptionalVoiceBridge(
@@ -2206,6 +2362,8 @@ export class DaemonManager {
         logger: this.logger,
         notifier,
         traceProviderPayloads,
+        resolveStopHookRuntime: () =>
+          buildStopHookRuntime(gateway.config.llm?.stopHooks),
       });
       this._durableSubrunOrchestrator = new DurableSubrunOrchestrator({
         supervisor: this._backgroundRunSupervisor,
@@ -3002,6 +3160,15 @@ export class DaemonManager {
       const subAgentChanged = diff.safe.some((key) =>
         key.startsWith("llm.subagents."),
       );
+      if (llmChanged) {
+        void this.configurePersistentWorkerManager(gateway.config).catch(
+          (error) => {
+            this.logger.error(
+              `Failed to reconfigure persistent workers: ${toErrorMessage(error)}`,
+            );
+          },
+        );
+      }
       if (subAgentChanged) {
         void this.configureSubAgentInfrastructure(gateway.config).catch(
           (error) => {
@@ -3179,6 +3346,7 @@ export class DaemonManager {
         /* no-op: static routing, nothing to record */
       },
       subAgentManager: this._subAgentManager,
+      workerManager: this._persistentWorkerManager,
       verifierService: this._delegationVerifierService,
       agentDefinitions: this._agentDefinitions,
     };
@@ -3444,6 +3612,7 @@ export class DaemonManager {
         newConfig.llm,
         { unsafeBenchmarkMode: this.yolo },
       );
+      const traceConfig = resolveTraceLoggingConfig(newConfig.logging);
       await this.refreshHostToolingProfile({
         enabled: resolvedSubAgentConfig.enabled,
         logging: newConfig.logging,
@@ -3486,6 +3655,40 @@ export class DaemonManager {
           toolAllowList: newConfig.policy?.toolAllowList,
           toolDenyList: newConfig.policy?.toolDenyList,
         }),
+        completionValidation: {
+          topLevelVerifier: {
+            subAgentManager: this._subAgentManager,
+            verifierService: this._delegationVerifierService,
+            agentDefinitions: this._agentDefinitions,
+            logger: this.logger,
+            taskStore: this._taskTrackerStore,
+            remoteJobManager: this._remoteJobManager,
+            ...(traceConfig.enabled
+              ? {
+                  onTraceEvent: async (event: TopLevelVerifierTraceEvent) => {
+                    logTraceEvent(
+                      this.logger,
+                      `runtime_contract.verifier.${event.type}`,
+                      {
+                        traceId: buildRuntimeContractVerifierTraceId(
+                          event.sessionId,
+                          event.taskId,
+                        ),
+                        sessionId: event.sessionId,
+                        ...(event.taskId ? { taskId: event.taskId } : {}),
+                        ...(event.launcherKind
+                          ? { launcherKind: event.launcherKind }
+                          : {}),
+                        ...(event.summary ? { summary: event.summary } : {}),
+                        ...(event.verdict ? { verdict: event.verdict } : {}),
+                      },
+                      traceConfig.maxChars,
+                    );
+                  },
+                }
+              : {}),
+          },
+        },
       });
 
       const providerNames = providers.map((p) => p.name).join(" → ") || "none";
@@ -3593,10 +3796,14 @@ export class DaemonManager {
       getAgentMessaging: () => this._agentMessaging,
       getAgentFeed: () => this._agentFeed,
       getCollaborationProtocol: () => this._collaborationProtocol,
-    }, metrics);
+      resolveStopHookRuntime: () =>
+        buildStopHookRuntime(this.gateway?.config.llm?.stopHooks),
+    }, this._memoryBackend!, metrics);
     this._remoteJobManager = result.remoteJobManager;
     this._remoteSessionManager = result.remoteSessionManager;
     this._taskTrackerStore = result.taskTrackerStore;
+    await this._taskTrackerStore.repairRuntimeState();
+    await this.configurePersistentWorkerManager(config);
     this._containerMCPConfigs = result.containerMCPConfigs;
     this._mcpManager = result.mcpManager;
     this._connectionManager = result.connectionManager;
@@ -3610,20 +3817,6 @@ export class DaemonManager {
       },
       logger: this.logger,
     });
-  }
-
-  private dropTaskTrackerSession(sessionId: string, reason: string): void {
-    const normalizedSessionId = sessionId.trim();
-    if (!normalizedSessionId || !this._taskTrackerStore) {
-      return;
-    }
-    const dropped = this._taskTrackerStore.dropList(normalizedSessionId);
-    if (dropped) {
-      this.logger.debug("Dropped task tracker state for session", {
-        sessionId: normalizedSessionId,
-        reason,
-      });
-    }
   }
 
   private handleIncomingSocialMessage(
@@ -3724,7 +3917,6 @@ export class DaemonManager {
 
     const historySessionId = resolveSessionId(webSessionId);
     sessionMgr.reset(historySessionId);
-    this.dropTaskTrackerSession(webSessionId, "session_reset");
     this._chatExecutor?.resetSessionTokens(webSessionId);
     this._sessionModelInfo.delete(webSessionId);
     await progressTracker?.clear(webSessionId);
@@ -4092,6 +4284,7 @@ export class DaemonManager {
       approvalEngine?: ApprovalEngine;
       memoryBackend?: MemoryBackend;
       delegation?: DelegationToolCompositionResolver;
+      taskStore?: TaskStore | null;
     },
     voiceSystemPrompt?: string,
   ): VoiceBridge | undefined {
@@ -4137,6 +4330,8 @@ export class DaemonManager {
       hooks: resolvedDeps.hooks,
       approvalEngine: resolvedDeps.approvalEngine,
       memoryBackend: resolvedDeps.memoryBackend,
+      taskStore: resolvedDeps.taskStore ?? null,
+      runtimeContractFlags: resolveRuntimeContractFlags(config.llm),
       sessionTokenBudget: resolveSessionTokenBudget(
         config.llm,
         contextWindowTokens,
@@ -5189,6 +5384,8 @@ export class DaemonManager {
     const baseSessionHandler = createSessionToolHandler({
       sessionId,
       baseHandler: baseToolHandler,
+      taskStore: this._taskTrackerStore,
+      runtimeContractFlags: resolveRuntimeContractFlags(this.gateway?.config.llm),
       availableToolNames: this.getAdvertisedToolNames(),
       defaultWorkingDirectory: this._hostWorkspacePath ?? undefined,
       workspaceAliasRoot: this._hostWorkspacePath ?? undefined,
@@ -5282,6 +5479,8 @@ export class DaemonManager {
     const baseSessionHandler = createSessionToolHandler({
       sessionId,
       baseHandler: this._baseToolHandler!,
+      taskStore: this._taskTrackerStore,
+      runtimeContractFlags: resolveRuntimeContractFlags(this.gateway?.config.llm),
       availableToolNames: this.getAdvertisedToolNames(),
       defaultWorkingDirectory: this._hostWorkspacePath ?? undefined,
       workspaceAliasRoot: this._hostWorkspacePath ?? undefined,
@@ -5615,6 +5814,7 @@ export class DaemonManager {
       contextWindowTokens,
       traceConfig,
       turnTraceId,
+      workerManager: this._persistentWorkerManager,
     });
   }
 
@@ -5634,6 +5834,7 @@ export class DaemonManager {
     contextWindowTokens?: number;
     traceConfig: ResolvedTraceLoggingConfig;
     turnTraceId: string;
+    workerManager?: PersistentWorkerManager | null;
   }): Promise<ChatExecutorResult | undefined> {
     const {
       msg,
@@ -5651,6 +5852,7 @@ export class DaemonManager {
       contextWindowTokens,
       traceConfig,
       turnTraceId,
+      workerManager,
     } = params;
 
     this._activeSessionTraceIds.set(msg.sessionId, turnTraceId);
@@ -5692,6 +5894,8 @@ export class DaemonManager {
             updatedAt: Date.now(),
           });
         },
+        taskStore: this._taskTrackerStore,
+        workerManager,
         onSubagentSynthesis: (result) => {
           if (
             this._subagentActivityTraceBySession.get(msg.sessionId) !== turnTraceId
@@ -5916,7 +6120,6 @@ export class DaemonManager {
         this._connectionManager = null;
       }
       if (this._taskTrackerStore !== null) {
-        this._taskTrackerStore.reset();
         this._taskTrackerStore = null;
       }
       if (this._memoryBackend !== null) {

@@ -215,6 +215,7 @@ import {
   type FaultInjectionPoint,
   type RuntimeFaultInjector,
 } from "../eval/fault-injection.js";
+import { hasStopHookHandlers, runStopHookPhase } from "../llm/hooks/stop-hooks.js";
 
 // ---------------------------------------------------------------------------
 // Domain-dependent free functions (kept here to avoid circular deps)
@@ -490,6 +491,7 @@ export class BackgroundRunSupervisor {
   private readonly resolvePolicyScope?: BackgroundRunSupervisorConfig["resolvePolicyScope"];
   private readonly telemetry?: TelemetryCollector;
   private readonly notifier?: BackgroundRunNotifier;
+  private readonly resolveStopHookRuntime?: BackgroundRunSupervisorConfig["resolveStopHookRuntime"];
   private readonly effectLedger?: EffectLedger;
   private readonly incidentDiagnostics?: RuntimeIncidentDiagnostics;
   private readonly faultInjector?: RuntimeFaultInjector;
@@ -527,6 +529,7 @@ export class BackgroundRunSupervisor {
     this.resolvePolicyScope = config.resolvePolicyScope;
     this.telemetry = config.telemetry;
     this.notifier = config.notifier;
+    this.resolveStopHookRuntime = config.resolveStopHookRuntime;
     this.effectLedger = config.effectLedger;
     this.incidentDiagnostics = config.incidentDiagnostics;
     this.faultInjector = config.faultInjector;
@@ -3341,6 +3344,109 @@ export class BackgroundRunSupervisor {
     });
   }
 
+  private resetIdleHookBlockStreak(run: ActiveBackgroundRun): void {
+    if ((run.budgetState.idleHookBlockStreak ?? 0) === 0) {
+      return;
+    }
+    run.budgetState = {
+      ...run.budgetState,
+      idleHookBlockStreak: 0,
+    };
+  }
+
+  private async maybeHandleWorkerIdleStopHooks(params: {
+    readonly run: ActiveBackgroundRun;
+    readonly sessionId: string;
+    readonly nextCheckMs: number;
+  }): Promise<boolean> {
+    const { run, sessionId, nextCheckMs } = params;
+    const runtime = this.resolveStopHookRuntime?.();
+    if (!runtime || !hasStopHookHandlers(runtime, "WorkerIdle")) {
+      this.resetIdleHookBlockStreak(run);
+      return false;
+    }
+
+    const hookResult = await runStopHookPhase({
+      runtime,
+      phase: "WorkerIdle",
+      matchKey: run.id,
+      context: {
+        phase: "WorkerIdle",
+        sessionId,
+        workerIdle: {
+          runId: run.id,
+          objective: run.objective,
+          pendingSignals: run.pendingSignals.length,
+          nextCheckMs,
+          idleHookBlockStreak: run.budgetState.idleHookBlockStreak ?? 0,
+        },
+      },
+    });
+    if (hookResult.outcome === "pass") {
+      this.resetIdleHookBlockStreak(run);
+      return false;
+    }
+
+    const nextStreak = (run.budgetState.idleHookBlockStreak ?? 0) + 1;
+    run.budgetState = {
+      ...run.budgetState,
+      idleHookBlockStreak: nextStreak,
+    };
+
+    const blockMessage = truncate(
+      hookResult.outcome === "prevent_continuation"
+        ? hookResult.stopReason ??
+          "Background run was blocked by the worker-idle stop-hook chain."
+        : hookResult.blockingMessage ??
+          "Background run was blocked by the worker-idle stop-hook chain.",
+      MAX_USER_UPDATE_CHARS,
+    );
+    const blockSummary = truncate(
+      `Background run idle hook blocked continuation: ${blockMessage}`,
+      200,
+    );
+
+    if (nextStreak >= 3) {
+      await this.parkBlockedRun(run, {
+        state: "blocked",
+        userUpdate: blockMessage,
+        internalSummary: blockSummary,
+        shouldNotifyUser: true,
+      });
+      return true;
+    }
+
+    const retryDelayMs = clampPollIntervalMs(
+      Math.max(BUSY_RETRY_INTERVAL_MS, nextCheckMs * Math.max(1, nextStreak)),
+      {
+        maxMs: resolveRunNextCheckClampMaxMs(run),
+      },
+    );
+    await this.progressTracker?.append({
+      sessionId,
+      type: "decision",
+      summary: blockSummary,
+    });
+    await this.publishUpdateIfChanged(run, blockMessage);
+    this.scheduleHeartbeat(run, undefined);
+    this.onStatus?.(sessionId, {
+      phase: "background_wait",
+      detail: `Retrying worker-idle validation in ~${Math.max(1, Math.ceil(retryDelayMs / 1000))}s`,
+    });
+    await this.persistRun(run, {
+      type: "cycle_working",
+      summary: blockSummary,
+      timestamp: this.now(),
+      data: {
+        nextCheckMs: retryDelayMs,
+        idleHookBlockStreak: nextStreak,
+        hookIds: hookResult.hookOutcomes.map((outcome) => outcome.hookId),
+      },
+    });
+    this.schedule(run, retryDelayMs, "timer");
+    return true;
+  }
+
   private async handleWorkingDecision(params: {
     run: ActiveBackgroundRun;
     sessionId: string;
@@ -3393,6 +3499,17 @@ export class BackgroundRunSupervisor {
       await this.publishUpdateIfChanged(run, decision.userUpdate);
     }
     if (!this.isActiveRun(run)) {
+      return true;
+    }
+    if (hasPendingSignals || hasReadyQueuedWakes) {
+      this.resetIdleHookBlockStreak(run);
+    } else if (
+      await this.maybeHandleWorkerIdleStopHooks({
+        run,
+        sessionId,
+        nextCheckMs,
+      })
+    ) {
       return true;
     }
     if (!hasPendingSignals && !hasReadyQueuedWakes) {

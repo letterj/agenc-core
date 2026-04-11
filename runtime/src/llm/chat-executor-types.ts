@@ -60,12 +60,31 @@ import type {
   DelegationOutputValidationCode,
 } from "../utils/delegation-validation.js";
 import type { HostToolingProfile } from "../gateway/host-tooling.js";
+import type { AgentDefinition } from "../gateway/agent-loader.js";
+import type { DelegationVerifierService } from "../gateway/delegation-runtime.js";
+import type { SubAgentManager } from "../gateway/sub-agent.js";
+import type { TaskStore } from "../tools/system/task-tracker.js";
+import type { SystemRemoteJobManager } from "../tools/system/remote-job.js";
 import type { ActiveTaskContext, TurnExecutionContract } from "./turn-execution-contract-types.js";
+import type {
+  RuntimeContractFlags,
+  RuntimeContractSnapshot,
+} from "../runtime-contract/types.js";
+import type { StopHookRuntime } from "./hooks/stop-hooks.js";
+import { createRuntimeContractSnapshot } from "../runtime-contract/types.js";
 import { RuntimeError, RuntimeErrorCodes } from "../types/errors.js";
+import {
+  createToolProtocolState,
+  type ToolProtocolState,
+} from "./tool-protocol-state.js";
 import {
   createPerIterationCompactionState,
   type PerIterationCompactionState,
 } from "./compact/index.js";
+import {
+  createRequestTaskProgressState,
+  type RequestTaskProgressState,
+} from "./request-task-progress.js";
 
 // ============================================================================
 // Error classes
@@ -126,19 +145,35 @@ export interface ToolCallRecord {
   readonly result: string;
   readonly isError: boolean;
   readonly durationMs: number;
+  readonly toolCallId?: string;
+  readonly synthetic?: boolean;
+  readonly protocolRepairReason?: string;
 }
 
 type ChatExecutionTraceEventType =
+  | "completion_validator_finished"
+  | "completion_validator_started"
+  | "completion_validation_finished"
+  | "completion_validation_started"
   | "compaction_triggered"
   | "context_injected"
   | "model_call_prepared"
   | "recovery_hints_injected"
   | "route_expanded"
+  | "runtime_contract_snapshot"
+  | "stop_hook_blocked"
+  | "stop_hook_execution_finished"
+  | "stop_hook_exhausted"
+  | "stop_hook_retry_requested"
   | "stop_gate_intervention"
   | "tool_arguments_invalid"
   | "tool_loop_stuck_detected"
   | "tool_dispatch_finished"
   | "tool_dispatch_started"
+  | "tool_protocol_opened"
+  | "tool_protocol_repaired"
+  | "tool_protocol_result_recorded"
+  | "tool_protocol_violation"
   | "tool_rejected";
 
 export interface ChatExecutionTraceEvent {
@@ -329,6 +364,10 @@ export interface ChatExecutorResult {
   readonly completionState: WorkflowCompletionState;
   /** Structured progress snapshot for long-horizon resume/recovery flows. */
   readonly completionProgress?: WorkflowProgressSnapshot;
+  /** Verifier snapshot observed by the executor-owned completion chain. */
+  readonly verifierSnapshot?: import("../workflow/completion-state.js").PlannerVerificationSnapshot;
+  /** Runtime-contract flags, validator outcomes, and verifier state for this turn. */
+  readonly runtimeContractSnapshot?: RuntimeContractSnapshot;
   /** Single preflight execution contract that governed this turn. */
   readonly turnExecutionContract: TurnExecutionContract;
   /** Typed task carryover emitted for the next compatible turn, when applicable. */
@@ -485,6 +524,30 @@ export interface ChatExecutorConfig {
   readonly modelRoutingPolicy?: ModelRoutingPolicy;
   /** Force all calls in this executor instance into one run class (used for child runs). */
   readonly defaultRunClass?: RuntimeRunClass;
+  /** Resolved runtime-contract flags active for this executor instance. */
+  readonly runtimeContractFlags?: RuntimeContractFlags;
+  /** Optional runtime-owned stop-hook chain used by validators and task/worker gates. */
+  readonly stopHookRuntime?: StopHookRuntime;
+  /** Optional runtime services for executor-owned completion validation. */
+  readonly completionValidation?: {
+    readonly topLevelVerifier?: {
+      readonly subAgentManager?: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
+      readonly verifierService?: Pick<
+        DelegationVerifierService,
+        "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
+      > | null;
+      readonly agentDefinitions?: readonly AgentDefinition[];
+      readonly logger?: import("../utils/logger.js").Logger;
+      readonly taskStore?: TaskStore | null;
+      readonly remoteJobManager?: Pick<
+        SystemRemoteJobManager,
+        "start" | "handleWebhook"
+      > | null;
+      readonly onTraceEvent?: (
+        event: import("../gateway/top-level-verifier.js").TopLevelVerifierTraceEvent,
+      ) => void | Promise<void>;
+    };
+  };
 }
 
 // ============================================================================
@@ -515,6 +578,7 @@ export interface FallbackResult {
   afterBudget: ChatPromptShape;
   budgetDiagnostics: PromptBudgetDiagnostics;
   durationMs: number;
+  streamedContent: string;
 }
 
 export interface RecoveryHint {
@@ -599,6 +663,8 @@ export interface ExecutionContext {
   };
   readonly trace?: ChatExecuteParams["trace"];
   readonly defaultRunClass?: RuntimeRunClass;
+  readonly runtimeContractFlags: RuntimeContractFlags;
+  readonly completionValidation?: ChatExecutorConfig["completionValidation"];
 
   // --- Mutable accumulator state ---
   history: readonly LLMMessage[];
@@ -612,6 +678,7 @@ export interface ExecutionContext {
   allToolCalls: ToolCallRecord[];
   failedToolCalls: number;
   activeRecoveryHintKeys: string[];
+  activeRuntimeReminderKeys: Set<string>;
   providerEvidence: LLMProviderEvidence | undefined;
   usedFallback: boolean;
   providerName: string;
@@ -623,6 +690,9 @@ export interface ExecutionContext {
   compactedArtifactContext?: ArtifactCompactionState;
   stopReason: LLMPipelineStopReason;
   completionState: WorkflowCompletionState;
+  verifierSnapshot?: import("../workflow/completion-state.js").PlannerVerificationSnapshot;
+  runtimeContractSnapshot: RuntimeContractSnapshot;
+  toolProtocolState: ToolProtocolState;
   stopReasonDetail?: string;
   validationCode?: DelegationOutputValidationCode;
   activeRoutedToolNames: readonly string[];
@@ -630,6 +700,7 @@ export interface ExecutionContext {
   routedToolsExpanded: boolean;
   routedToolMisses: number;
   plannerSummaryState: FullPlannerSummaryState;
+  requestTaskState: RequestTaskProgressState;
   completedRequestMilestoneIds: readonly string[];
   economicsState: RuntimeEconomicsState;
   /**
@@ -682,6 +753,8 @@ interface BuildExecutionContextConfig {
   readonly plannerEnabled: boolean;
   readonly defaultRunClass?: RuntimeRunClass;
   readonly economicsPolicy: RuntimeEconomicsPolicy;
+  readonly runtimeContractFlags: RuntimeContractFlags;
+  readonly completionValidation?: ChatExecutorConfig["completionValidation"];
 }
 
 /** Build the default ExecutionContext object with all mutable state initialized. */
@@ -740,6 +813,8 @@ export function buildDefaultExecutionContext(
         executionEnvelope: params.requiredToolEvidence.executionEnvelope,
       }
       : undefined,
+    runtimeContractFlags: config.runtimeContractFlags,
+    completionValidation: config.completionValidation,
 
     // --- Mutable accumulator state ---
     history: params.history,
@@ -757,6 +832,7 @@ export function buildDefaultExecutionContext(
     allToolCalls: [],
     failedToolCalls: 0,
     activeRecoveryHintKeys: [],
+    activeRuntimeReminderKeys: new Set<string>(),
     providerEvidence: undefined,
     usedFallback: false,
     providerName: config.providerName,
@@ -768,6 +844,11 @@ export function buildDefaultExecutionContext(
     compactedArtifactContext: params.stateful?.artifactContext,
     stopReason: "completed",
     completionState: "completed",
+    verifierSnapshot: undefined,
+    runtimeContractSnapshot: createRuntimeContractSnapshot(
+      config.runtimeContractFlags,
+    ),
+    toolProtocolState: createToolProtocolState(),
     stopReasonDetail: undefined,
     validationCode: undefined,
     activeRoutedToolNames: params.initialRoutedToolNames,
@@ -785,6 +866,7 @@ export function buildDefaultExecutionContext(
       estimatedRecallsAvoided: 0,
       diagnostics: [] as PlannerDiagnostic[],
     },
+    requestTaskState: createRequestTaskProgressState(),
     completedRequestMilestoneIds: [],
     economicsState,
     perIterationCompaction: createPerIterationCompactionState(),

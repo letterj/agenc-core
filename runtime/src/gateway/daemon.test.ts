@@ -187,6 +187,8 @@ describe("DaemonManager host workspace prompt and memory resolution", () => {
       expect(prompt).toContain("local engineering and automation tasks");
       expect(prompt).toContain("Start executing immediately");
       expect(prompt).toContain("Never end the turn with only a plan");
+      expect(prompt).toContain("metadata._runtime.milestoneIds");
+      expect(prompt).toContain("metadata._runtime.verification");
       expect(prompt).not.toContain("AgenC protocol");
       expect(prompt).not.toContain("Solana");
       expect(prompt).not.toContain("# Identity");
@@ -2248,10 +2250,10 @@ describe("DaemonManager", () => {
     expect(registrationArgs.programId?.toBase58()).toBe(programId);
   });
 
-  it("drops web-session task tracker state during session reset", async () => {
+  it("preserves durable web-session task tracker state during session reset", async () => {
     const dm = new DaemonManager({ configPath: "/tmp/config.json" });
     const taskStore = new TaskStore();
-    taskStore.create("web-session-1", {
+    await taskStore.createTask("web-session-1", {
       subject: "Existing task",
       description: "Should be dropped on reset",
     });
@@ -2278,16 +2280,16 @@ describe("DaemonManager", () => {
     });
 
     expect(sessionMgr.reset).toHaveBeenCalledWith("history:web-session-1");
-    expect(taskStore.create("web-session-1", {
+    expect((await taskStore.createTask("web-session-1", {
       subject: "Replacement task",
       description: "Fresh list after reset",
-    }).id).toBe("1");
+    })).id).toBe("2");
   });
 
-  it("drops subagent task tracker state when subagent contexts are destroyed", async () => {
+  it("preserves durable subagent task tracker state when subagent contexts are destroyed", async () => {
     const dm = new DaemonManager({ configPath: "/tmp/config.json" });
     const taskStore = new TaskStore();
-    taskStore.create("subagent:child-1", {
+    await taskStore.createTask("subagent:child-1", {
       subject: "Subagent task",
       description: "Should be dropped during teardown",
     });
@@ -2326,18 +2328,18 @@ describe("DaemonManager", () => {
       parentSessionId: "parent-session-1",
       subagentSessionId: "subagent:child-1",
     });
-    expect(taskStore.create("subagent:child-1", {
+    expect((await taskStore.createTask("subagent:child-1", {
       subject: "Replacement subagent task",
       description: "Fresh list after teardown",
-    }).id).toBe("1");
+    })).id).toBe("2");
 
     await (dm as any).destroySubAgentInfrastructure();
   });
 
-  it("clears the shared task tracker store when the daemon stops", async () => {
+  it("leaves durable task tracker state intact when the daemon stops", async () => {
     const dm = new DaemonManager({ configPath: "/tmp/config.json" });
     const taskStore = new TaskStore();
-    taskStore.create("session-stop-1", {
+    await taskStore.createTask("session-stop-1", {
       subject: "Stop cleanup",
       description: "Should be cleared during daemon shutdown",
     });
@@ -2346,10 +2348,10 @@ describe("DaemonManager", () => {
     await dm.stop();
 
     expect((dm as any)._taskTrackerStore).toBeNull();
-    expect(taskStore.create("session-stop-1", {
+    expect((await taskStore.createTask("session-stop-1", {
       subject: "Replacement stop cleanup",
       description: "Fresh list after stop",
-    }).id).toBe("1");
+    })).id).toBe("2");
   });
 
   it("disables host execution deny lists when yolo mode is enabled", async () => {

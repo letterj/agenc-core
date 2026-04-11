@@ -1,7 +1,7 @@
 /**
  * `normalizeMessagesForAPI` — pure function that prepares an in-memory
- * `LLMMessage[]` for an API call. Mirrors
- * `claude_code/utils/messages.ts:normalizeMessagesForAPI`.
+ * `LLMMessage[]` for an API call. Mirrors the reference runtime's
+ * message-normalization path.
  *
  * The runtime previously scattered this normalization across
  * `chat-executor-text.ts`, `chat-executor.ts`, and provider adapters.
@@ -23,8 +23,8 @@
  *      (Anthropic, xAI Grok 4) can pin stable prefixes. Phase J tags
  *      the LAST system message, the LAST non-tool user message, and
  *      the LAST tool result that survived the normalization above.
- *      These are the three cut points claude_code marks in its
- *      reference path. Providers that do not support cache_control
+ *      These are the three cut points the reference runtime uses.
+ *      Providers that do not support cache_control
  *      silently ignore the tag.
  *
  * @module
@@ -40,8 +40,13 @@ const BOUNDARY_PREFIXES = [
   "[boundary]",
 ];
 
+export interface NormalizeMessagesForAPIOptions {
+  readonly dropOrphanToolMessages?: boolean;
+}
+
 export function normalizeMessagesForAPI(
   messages: readonly LLMMessage[],
+  options?: NormalizeMessagesForAPIOptions,
 ): readonly LLMMessage[] {
   const stripped: LLMMessage[] = [];
   for (const message of messages) {
@@ -91,9 +96,11 @@ export function normalizeMessagesForAPI(
     }
   }
 
-  // Drop orphan tool messages.
+  // Drop orphan tool messages unless the caller needs to preserve
+  // them for downstream protocol repair.
   const seenToolCallIds = new Set<string>();
   const final: LLMMessage[] = [];
+  const dropOrphanToolMessages = options?.dropOrphanToolMessages !== false;
   for (const message of merged) {
     if (message.role === "assistant" && message.toolCalls) {
       for (const call of message.toolCalls) {
@@ -104,7 +111,10 @@ export function normalizeMessagesForAPI(
       const toolCallId =
         (message as { toolCallId?: string }).toolCallId ??
         (message as { tool_call_id?: string }).tool_call_id;
-      if (!toolCallId || !seenToolCallIds.has(toolCallId)) {
+      if (
+        dropOrphanToolMessages &&
+        (!toolCallId || !seenToolCallIds.has(toolCallId))
+      ) {
         continue;
       }
     }
@@ -122,8 +132,8 @@ export function normalizeMessagesForAPI(
  * Tag the last system message, the last non-tool user message, and
  * the last tool message with a `cacheControl: "ephemeral"` marker so
  * providers that support prompt caching (Anthropic, xAI Grok 4) can
- * pin stable prefixes. Mirrors the three-cut-point strategy in
- * `claude_code/utils/messages.ts`.
+ * pin stable prefixes. Mirrors the reference runtime's three-cut-point
+ * strategy.
  *
  * The tag is an optional camelCase field on the message object. The
  * core `LLMMessage` type does not declare it as required — provider

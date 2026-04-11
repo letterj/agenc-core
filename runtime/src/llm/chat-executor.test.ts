@@ -716,6 +716,53 @@ describe("ChatExecutor", () => {
       ]);
     });
 
+    it("continues the tool loop when tool calls are present even if finishReason is stop", async () => {
+      const toolHandler = vi.fn().mockResolvedValue("tool result");
+      const provider = createMockProvider("primary", {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce(
+            mockResponse({
+              content: "",
+              finishReason: "stop",
+              toolCalls: [
+                { id: "tc-1", name: "search", arguments: '{"query":"test"}' },
+              ],
+            }),
+          )
+          .mockResolvedValueOnce(mockResponse({ content: "final answer" })),
+      });
+
+      const executor = new ChatExecutor({ providers: [provider], toolHandler });
+      const result = await executor.execute(createParams());
+
+      expect(result.stopReason).toBe("completed");
+      expect(result.content).toBe("final answer");
+      expect(toolHandler).toHaveBeenCalledWith("search", { query: "test" });
+      expect(result.runtimeContractSnapshot?.toolProtocol.repairCount).toBe(0);
+    });
+
+    it("fails closed when the provider reports tool_calls without any tool calls", async () => {
+      const provider = createMockProvider("primary", {
+        chat: vi.fn().mockResolvedValue(
+          mockResponse({
+            content: "I will keep going.",
+            finishReason: "tool_calls",
+            toolCalls: [],
+          }),
+        ),
+      });
+
+      const executor = new ChatExecutor({ providers: [provider] });
+      const result = await executor.execute(createParams());
+
+      expect(result.stopReason).toBe("validation_error");
+      expect(result.content).toContain(
+        "Provider returned finishReason \"tool_calls\" without any tool calls",
+      );
+      expect(result.runtimeContractSnapshot?.toolProtocol.violationCount).toBe(1);
+    });
+
 
     it("does not turn an empty post-tool follow-up into a fake tool-result success", async () => {
       const toolHandler = vi
@@ -840,7 +887,7 @@ describe("ChatExecutor", () => {
       }
     });
 
-    it("summarizes structured tool payloads when max tool rounds end before a final answer", async () => {
+    it("fails closed to the stop detail when max tool rounds end with another unresolved tool turn", async () => {
       const toolHandler = vi.fn().mockResolvedValue(
         JSON.stringify({
           path: "/tmp/project",
@@ -881,10 +928,11 @@ describe("ChatExecutor", () => {
       const result = await executor.execute(createParams());
 
       expect(result.stopReason).toBe("tool_calls");
-      expect(result.content).toContain("Operation completed. Result");
-      expect(result.content).toContain("package.json");
-      expect(result.content).toContain('"entries"');
+      expect(result.content).toContain("Reached max tool rounds (1)");
+      expect(result.content).not.toContain("Operation completed. Result");
       expect(provider.chat).toHaveBeenCalledTimes(2);
+      expect(result.toolCalls.filter((call) => call.synthetic)).toHaveLength(1);
+      expect(result.runtimeContractSnapshot?.toolProtocol.repairCount).toBe(1);
     });
 
     it("sanitizes screenshot tool payloads and keeps image artifacts out-of-band", async () => {
@@ -1306,13 +1354,13 @@ describe("ChatExecutor", () => {
       const result = await executor.execute(createParams());
 
       const record = result.toolCalls[0];
-      expect(record).toEqual({
+      expect(record).toEqual(expect.objectContaining({
         name: "fetch",
         args: { url: "https://example.com" },
         result: "result-data",
         isError: false,
         durationMs: expect.any(Number),
-      });
+      }));
     });
 
     it("suppresses narrative file-creation claims when tools never wrote files", async () => {

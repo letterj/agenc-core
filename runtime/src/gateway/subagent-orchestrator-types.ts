@@ -170,7 +170,15 @@ export interface PackageAuthoringState {
   readonly testFileCount: number;
 }
 
-export type AcceptanceProbeCategory = "build" | "typecheck" | "lint" | "test";
+export type AcceptanceProbeCategory =
+  | "build"
+  | "typecheck"
+  | "lint"
+  | "test"
+  | "smoke"
+  | "api_smoke"
+  | "browser_e2e"
+  | "infra_validate";
 
 export interface AcceptanceProbePlan {
   readonly name: string;

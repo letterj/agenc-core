@@ -9,6 +9,7 @@ import type {
   LLMProvider,
   LLMMessage,
   LLMStatefulResumeAnchor,
+  LLMStreamChunk,
   LLMToolChoice,
   StreamProgressCallback,
 } from "./types.js";
@@ -158,12 +159,14 @@ export async function callWithFallback(
   );
   // Cut 5.8: pass the budgeted history through normalizeMessagesForAPI
   // before handing it to the provider. This drops boundary/snip system
-  // messages, merges consecutive user messages, drops empty assistant
-  // content (except the last message), and prunes orphan tool results
-  // whose tool_call_id no longer matches a preceding assistant
-  // tool_calls entry.
+  // messages, merges consecutive user messages, and drops empty
+  // assistant content (except the last message). Orphan tool results
+  // stay in the history here so downstream tool-turn repair can
+  // close the protocol instead of silently discarding evidence.
   const boundedMessages: LLMMessage[] = [
-    ...normalizeMessagesForAPI(budgeted.messages),
+    ...normalizeMessagesForAPI(budgeted.messages, {
+      dropOrphanToolMessages: false,
+    }),
   ];
   const afterBudget = estimatePromptShape(boundedMessages);
   const budgetDiagnostics = budgeted.diagnostics;
@@ -268,7 +271,15 @@ export async function callWithFallback(
     let attempts = 0;
     while (true) {
       try {
-        const streamChunkCallback = onStreamChunk;
+        let streamedContent = "";
+        const streamChunkCallback = onStreamChunk
+          ? (chunk: LLMStreamChunk) => {
+            if (chunk.content.length > 0) {
+              streamedContent += chunk.content;
+            }
+            onStreamChunk(chunk);
+          }
+          : undefined;
         const shouldStream =
           transport === "chat_stream" && streamChunkCallback !== undefined;
         const remainingProviderMs =
@@ -339,6 +350,7 @@ export async function callWithFallback(
           beforeBudget,
           afterBudget,
           budgetDiagnostics,
+          streamedContent,
         };
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));

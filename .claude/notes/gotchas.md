@@ -23,3 +23,7 @@
 ## Declarative agent definitions are inert until the sub-agent runtime can carry a per-child system prompt
 - Loading `runtime/src/gateway/agent-definitions/*.md` into `Daemon._agentDefinitions` is not enough by itself; the child needs the markdown body wired into its own system prompt, not merely stuffed into the user task text.
 - Without a per-child system prompt override, verifier workers fall back to the generic sub-agent prompt and the `verify.md` contract never actually governs the child turn.
+
+## Required verifier runtime dependencies must fail closed
+- When `verifierRuntimeRequired` is enabled, missing top-level verifier runtime wiring must end the turn as verifier retry / validation error instead of quietly downgrading to `skipped`.
+- Treat verifier eligibility checks separately from runtime dependency availability checks or the executor will silently accept an unverifiable completion.

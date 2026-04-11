@@ -18,15 +18,19 @@ import { toErrorMessage } from "../utils/async.js";
 import { buildChatUsagePayload } from "./chat-usage.js";
 import { summarizeLLMFailureForSurface } from "./daemon-llm-failure.js";
 import {
+  buildRuntimeContractStatusSnapshotForSession,
   buildSessionActiveTaskContext,
   buildSessionStatefulOptions,
+  enrichRuntimeContractSnapshotForSession,
   persistSessionActiveTaskContext,
+  persistSessionRuntimeContractSnapshot,
+  persistSessionRuntimeContractStatusSnapshot,
   persistSessionStatefulContinuation,
   persistWebSessionRuntimeState,
 } from "./daemon-session-state.js";
-import { maybeRunTopLevelVerifier } from "./top-level-verifier.js";
 import { filterSystemPromptForToolRouting } from "./system-prompt-routing.js";
 import {
+  buildRuntimeContractSessionTraceId,
   logExecutionTraceEvent,
   logProviderPayloadTraceEvent,
   logTraceErrorEvent,
@@ -53,7 +57,9 @@ import { resolveTurnMaxToolRounds } from "./tool-round-budget.js";
 import { buildAssistantDelegatedScopeMetadata } from "../utils/delegated-scope-trust.js";
 import type { AgentDefinition } from "./agent-loader.js";
 import type { DelegationVerifierService } from "./delegation-runtime.js";
+import type { PersistentWorkerManager } from "./persistent-worker-manager.js";
 import type { SubAgentManager } from "./sub-agent.js";
+import type { TaskStore } from "../tools/system/task-tracker.js";
 
 interface WebChatTurnSignals {
   signalThinking: (sessionId: string) => void;
@@ -90,8 +96,13 @@ interface ExecuteWebChatConversationTurnParams {
   readonly onModelInfo?: (result: ChatExecutorResult) => void;
   readonly onSubagentSynthesis?: (result: ChatExecutorResult) => void;
   readonly subAgentManager?: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
-  readonly verifierService?: Pick<DelegationVerifierService, "shouldVerifySubAgentResult"> | null;
+  readonly verifierService?: Pick<
+    DelegationVerifierService,
+    "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
+  > | null;
+  readonly workerManager?: PersistentWorkerManager | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
+  readonly taskStore?: TaskStore | null;
 }
 
 async function resolveWebChatTurnWorkspaceRoot(params: {
@@ -143,9 +154,7 @@ export async function executeWebChatConversationTurn(
     getSessionTokenUsage,
     onModelInfo,
     onSubagentSynthesis,
-    subAgentManager = null,
-    verifierService = null,
-    agentDefinitions,
+    taskStore = null,
   } = params;
 
   try {
@@ -315,16 +324,51 @@ export async function executeWebChatConversationTurn(
         },
       },
     });
-    const result = await maybeRunTopLevelVerifier({
+    const result = await enrichRuntimeContractSnapshotForSession({
       sessionId: msg.sessionId,
-      userRequest: msg.content,
       result: rawResult,
-      subAgentManager,
-      verifierService,
-      agentDefinitions,
-      logger,
+      taskStore,
+      workerManager: params.workerManager,
     });
+    persistSessionRuntimeContractSnapshot(session, result);
+    const runtimeContractStatusSnapshot =
+      await buildRuntimeContractStatusSnapshotForSession({
+        sessionId: msg.sessionId,
+        turnTraceId,
+        result,
+        taskStore,
+        workerManager: params.workerManager,
+      });
+    persistSessionRuntimeContractStatusSnapshot(
+      session,
+      runtimeContractStatusSnapshot,
+    );
     recordToolRoutingOutcome(msg.sessionId, result.toolRoutingSummary);
+
+    if (traceConfig.enabled && runtimeContractStatusSnapshot) {
+      logTraceEvent(
+        logger,
+        "runtime_contract.session.snapshot_updated",
+        {
+          traceId: buildRuntimeContractSessionTraceId(msg.sessionId),
+          sessionId: msg.sessionId,
+          lastTurnTraceId: runtimeContractStatusSnapshot.lastTurnTraceId,
+          updatedAt: runtimeContractStatusSnapshot.updatedAt,
+          completionState: runtimeContractStatusSnapshot.completionState,
+          stopReason: runtimeContractStatusSnapshot.stopReason,
+          openTaskCount: runtimeContractStatusSnapshot.openTasks.length,
+          openWorkerCount: runtimeContractStatusSnapshot.openWorkers.length,
+          remainingMilestoneCount:
+            runtimeContractStatusSnapshot.remainingMilestones.length,
+          omittedTaskCount: runtimeContractStatusSnapshot.omittedTaskCount,
+          omittedWorkerCount: runtimeContractStatusSnapshot.omittedWorkerCount,
+          omittedMilestoneCount:
+            runtimeContractStatusSnapshot.omittedMilestoneCount,
+          snapshot: runtimeContractStatusSnapshot,
+        },
+        traceConfig.maxChars,
+      );
+    }
 
     webChat.clearAbortController(msg.sessionId);
     onModelInfo?.(result);
@@ -351,6 +395,9 @@ export async function executeWebChatConversationTurn(
         ),
         stopReason: result.stopReason,
         completionState: result.completionState,
+        verifierSnapshot: result.verifierSnapshot,
+        runtimeContractSnapshot: result.runtimeContractSnapshot,
+        runtimeContractStatusSnapshot,
         stopReasonDetail: result.stopReasonDetail,
         response: truncateToolLogText(result.content, traceConfig.maxChars),
         toolCalls: result.toolCalls.map((toolCall) => ({
@@ -398,6 +445,9 @@ export async function executeWebChatConversationTurn(
             toolRoutingSummary: result.toolRoutingSummary,
             stopReason: result.stopReason,
             completionState: result.completionState,
+            verifierSnapshot: result.verifierSnapshot,
+            runtimeContractSnapshot: result.runtimeContractSnapshot,
+            runtimeContractStatusSnapshot,
             stopReasonDetail: result.stopReasonDetail,
             response: result.content,
             toolCalls: result.toolCalls.map((toolCall) => ({

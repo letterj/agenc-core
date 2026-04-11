@@ -50,6 +50,7 @@ import type { ToolRoutingDecision } from "./tool-routing.js";
 import { loadConfiguredPluginChannel } from "../plugins/channel-loader.js";
 import type { AgentDefinition } from "./agent-loader.js";
 import type { DelegationVerifierService } from "./delegation-runtime.js";
+import type { PersistentWorkerManager } from "./persistent-worker-manager.js";
 import type { SubAgentManager } from "./sub-agent.js";
 
 // ---------------------------------------------------------------------------
@@ -118,7 +119,11 @@ export interface ChannelWiringDeps {
   ): void;
 
   readonly subAgentManager?: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
-  readonly verifierService?: Pick<DelegationVerifierService, "shouldVerifySubAgentResult"> | null;
+  readonly workerManager?: PersistentWorkerManager | null;
+  readonly verifierService?: Pick<
+    DelegationVerifierService,
+    "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
+  > | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
 }
 
@@ -338,6 +343,7 @@ async function wireTelegram(
           deps.recordToolRoutingOutcome(sessionId, summary);
         },
         subAgentManager: deps.subAgentManager ?? null,
+        workerManager: deps.workerManager ?? null,
         verifierService: deps.verifierService ?? null,
         agentDefinitions: deps.agentDefinitions,
       });
@@ -532,6 +538,7 @@ export async function wireExternalChannel(
           deps.recordToolRoutingOutcome(sessionId, summary);
         },
         subAgentManager: deps.subAgentManager ?? null,
+        workerManager: deps.workerManager ?? null,
         verifierService: deps.verifierService ?? null,
         agentDefinitions: deps.agentDefinitions,
       });

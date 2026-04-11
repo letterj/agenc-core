@@ -274,6 +274,7 @@ export interface BackgroundRunBudgetState {
   readonly runtimeStartedAt: number;
   readonly lastActivityAt: number;
   readonly lastProgressAt: number;
+  readonly idleHookBlockStreak?: number;
   readonly totalTokens: number;
   readonly lastCycleTokens: number;
   readonly managedProcessCount: number;
@@ -1395,6 +1396,7 @@ function buildDefaultBudgetState(params: {
     runtimeStartedAt: params.createdAt,
     lastActivityAt: params.updatedAt,
     lastProgressAt: params.updatedAt,
+    idleHookBlockStreak: 0,
     totalTokens: 0,
     lastCycleTokens: 0,
     managedProcessCount: 0,
@@ -1531,6 +1533,9 @@ function coerceBudgetState(
       typeof raw.lastProgressAt === "number"
         ? raw.lastProgressAt
         : defaults.lastProgressAt,
+    idleHookBlockStreak:
+      coerceNonNegativeInteger(raw.idleHookBlockStreak) ??
+      defaults.idleHookBlockStreak,
     totalTokens:
       coerceNonNegativeInteger(raw.totalTokens) ?? defaults.totalTokens,
     lastCycleTokens:

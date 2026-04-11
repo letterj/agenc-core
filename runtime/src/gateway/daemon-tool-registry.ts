@@ -10,6 +10,7 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { MemoryBackend } from "../memory/types.js";
 import type { Logger } from "../utils/logger.js";
 import { toErrorMessage } from "../utils/async.js";
 import type { GatewayConfig, GatewayMCPServerConfig } from "./types.js";
@@ -40,6 +41,13 @@ import {
   createTaskTrackerTools,
   TaskStore,
 } from "../tools/system/task-tracker.js";
+import { createVerificationTools } from "../tools/system/verification.js";
+import { runStopHookPhase, type StopHookRuntime } from "../llm/hooks/stop-hooks.js";
+import {
+  buildRuntimeContractTaskTraceId,
+  logTraceEvent,
+  resolveTraceLoggingConfig,
+} from "./daemon-trace.js";
 import { resolveBrowserToolMode } from "./browser-tool-mode.js";
 import { createExecuteWithAgentTool } from "./delegation-tool.js";
 import { createCoordinatorModeTool } from "./coordinator-tool.js";
@@ -48,6 +56,7 @@ import {
   buildAllowedFilesystemPaths,
   resolveHostWorkspacePath,
 } from "./host-workspace.js";
+import { resolveRuntimePersistencePaths } from "./runtime-persistence.js";
 import {
   validateMCPServerBinaryIntegrity,
   validateMCPServerStaticPolicy,
@@ -117,6 +126,7 @@ interface ToolRegistryDeps {
   getAgentMessaging(): unknown;
   getAgentFeed(): unknown;
   getCollaborationProtocol(): unknown;
+  resolveStopHookRuntime?(): StopHookRuntime | undefined;
 }
 
 // ============================================================================
@@ -126,10 +136,12 @@ interface ToolRegistryDeps {
 export async function createDaemonToolRegistry(
   config: GatewayConfig,
   deps: ToolRegistryDeps,
+  memoryBackend: MemoryBackend,
   metrics?: UnifiedTelemetryCollector,
 ): Promise<ToolRegistrySideEffects> {
   const { logger, configPath, yolo } = deps;
   const registry = new ToolRegistry({ logger });
+  const traceConfig = resolveTraceLoggingConfig(config.logging);
 
   // Security: Only expose a minimal host env to system.bash.
   // Token-like secrets are intentionally excluded by default.
@@ -313,8 +325,121 @@ export async function createDaemonToolRegistry(
       logger,
     ),
   );
-  const taskTrackerStore = new TaskStore();
-  registry.registerAll(createTaskTrackerTools(taskTrackerStore));
+  const taskTrackerStore = new TaskStore({
+    memoryBackend,
+    persistenceRootDir: resolveRuntimePersistencePaths().rootDir,
+    logger,
+    ...(traceConfig.enabled
+      ? {
+          onTaskEvent: async (event) => {
+            const eventType =
+              event.type === "task_created"
+                ? "created"
+                : event.type === "task_started"
+                  ? "started"
+                  : event.type === "task_updated"
+                    ? "updated"
+                    : event.type === "task_output_ready"
+                      ? "output_ready"
+                      : event.type === "task_completed"
+                        ? "completed"
+                        : event.type === "task_failed"
+                          ? "failed"
+                          : "cancelled";
+            logTraceEvent(
+              logger,
+              `runtime_contract.task.${eventType}`,
+              {
+                traceId: buildRuntimeContractTaskTraceId(
+                  event.listId,
+                  event.taskId,
+                ),
+                sessionId: event.listId,
+                taskId: event.taskId,
+                kind: event.task.kind,
+                status: event.task.status,
+                timestamp: event.timestamp,
+                ...(event.task.summary ? { summary: event.task.summary } : {}),
+                ...(event.task.executionLocation
+                  ? { executionLocation: event.task.executionLocation }
+                  : {}),
+              },
+              traceConfig.maxChars,
+            );
+          },
+        }
+      : {}),
+  });
+  registry.registerAll(
+    createTaskTrackerTools(taskTrackerStore, {
+      onBeforeTaskComplete: async ({ listId, taskId, task, patch }) => {
+        const hookResult = await runStopHookPhase({
+          runtime: deps.resolveStopHookRuntime?.(),
+          phase: "TaskCompleted",
+          matchKey: taskId,
+          context: {
+            phase: "TaskCompleted",
+            sessionId: listId,
+            taskCompleted: {
+              listId,
+              taskId,
+              task,
+              patch: patch as Record<string, unknown>,
+            },
+          },
+        });
+        if (hookResult.outcome === "pass") {
+          return { outcome: "allow" as const };
+        }
+        return {
+          outcome: "block" as const,
+          message:
+            hookResult.outcome === "prevent_continuation"
+              ? hookResult.stopReason ??
+                "Task completion was blocked by the runtime stop-hook chain."
+              : hookResult.blockingMessage,
+        };
+      },
+      ...(traceConfig.enabled
+        ? {
+            onTaskAccessEvent: async (event) => {
+              logTraceEvent(
+                logger,
+                `runtime_contract.task.${event.type}`,
+                {
+                  traceId: buildRuntimeContractTaskTraceId(
+                    event.listId,
+                    event.taskId,
+                  ),
+                  sessionId: event.listId,
+                  taskId: event.taskId,
+                  timestamp: event.timestamp,
+                  ...(event.until ? { until: event.until } : {}),
+                  ...(event.timeoutMs !== undefined
+                    ? { timeoutMs: event.timeoutMs }
+                    : {}),
+                  ...(event.includeEvents !== undefined
+                    ? { includeEvents: event.includeEvents }
+                    : {}),
+                  ...(event.maxBytes !== undefined
+                    ? { maxBytes: event.maxBytes }
+                    : {}),
+                  ...(event.ready !== undefined ? { ready: event.ready } : {}),
+                  ...(event.task
+                    ? {
+                        taskStatus: event.task.status,
+                        taskOutputReady: event.task.outputReady === true,
+                      }
+                    : {}),
+                },
+                traceConfig.maxChars,
+              );
+            },
+          }
+        : {}),
+    }),
+  );
+  registry.registerAll(createVerificationTools());
   registry.register(createExecuteWithAgentTool());
   registry.register(createCoordinatorModeTool());
   const walletResult = await loadWallet(config);

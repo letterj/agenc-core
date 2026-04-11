@@ -40,7 +40,6 @@ import {
   MAX_TOOL_IMAGE_CHARS_BUDGET,
 } from "./chat-executor-constants.js";
 import {
-  hasRuntimeLimit,
   isRuntimeLimitExceeded,
   isRuntimeLimitReached,
 } from "./runtime-limit-policy.js";
@@ -71,12 +70,7 @@ import {
   ANTI_FABRICATION_HARNESS_OVERWRITE_REASON,
   evaluateWriteOverFailedVerification,
 } from "./verification-target-guard.js";
-import {
-  evaluateArtifactEvidenceGate,
-  evaluateTurnEndStopGate,
-  checkFilesystemArtifacts,
-} from "./chat-executor-stop-gate.js";
-import { runDeterministicAcceptanceProbes } from "./deterministic-acceptance-probes.js";
+import { buildCompletionValidators } from "./completion-validators.js";
 import { evaluateShellWorkspaceWritePolicy } from "./shell-write-policy.js";
 import {
   sanitizeToolCallsForReplay,
@@ -107,14 +101,41 @@ import { LLMContextWindowExceededError } from "./errors.js";
 import {
   appendToolRecord,
   checkRequestTimeout,
+  clearRuntimeInstructionKey,
   emitExecutionTrace,
   maybePushRuntimeInstruction,
+  maybePushKeyedRuntimeInstruction,
   pushMessage,
   replaceRuntimeRecoveryHintMessages,
   serializeRemainingRequestMs,
   setStopReason,
 } from "./chat-executor-ctx-helpers.js";
 import type { DelegationOutputValidationCode } from "../utils/delegation-validation.js";
+import {
+  type CompletionValidatorId,
+  updateRuntimeContractValidatorSnapshot,
+  updateRuntimeContractVerifierStage,
+  updateRuntimeContractToolProtocolSnapshot,
+  updateRuntimeContractVerifierVerdict,
+} from "../runtime-contract/types.js";
+import {
+  getPendingToolProtocolCalls,
+  hasPendingToolProtocol,
+  noteToolProtocolRepair,
+  noteToolProtocolViolation,
+  openToolProtocolTurn,
+  recordToolProtocolResult,
+  responseHasMalformedToolFinish,
+  responseHasToolCalls,
+  type ToolProtocolRepairReason,
+} from "./tool-protocol-state.js";
+import {
+  getRemainingRequestTaskMilestones,
+  noteRequestTaskVerifierAttempt,
+  REQUEST_TASK_PROGRESS_NO_IN_PROGRESS_KEY,
+  REQUEST_TASK_PROGRESS_NO_TASK_YET_KEY,
+  type RequestTaskObservationResult,
+} from "./request-task-progress.js";
 
 // ============================================================================
 // Callback interfaces
@@ -133,7 +154,10 @@ export interface ToolLoopCallbacks {
     detail?: string,
   ): void;
   checkRequestTimeout(ctx: ExecutionContext, stage: string): boolean;
-  appendToolRecord(ctx: ExecutionContext, record: ToolCallRecord): void;
+  appendToolRecord(
+    ctx: ExecutionContext,
+    record: ToolCallRecord,
+  ): RequestTaskObservationResult | undefined;
   emitExecutionTrace(
     ctx: ExecutionContext,
     event: ChatExecutionTraceEvent,
@@ -143,6 +167,14 @@ export interface ToolLoopCallbacks {
     recoveryHints: readonly RecoveryHint[],
   ): void;
   maybePushRuntimeInstruction(ctx: ExecutionContext, content: string): void;
+  maybePushKeyedRuntimeInstruction(
+    ctx: ExecutionContext,
+    params: {
+      readonly key: string;
+      readonly content: string;
+    },
+  ): void;
+  clearRuntimeInstructionKey(ctx: ExecutionContext, key: string): void;
   callModelForPhase(
     ctx: ExecutionContext,
     input: {
@@ -163,6 +195,271 @@ export interface ToolLoopCallbacks {
     },
   ): Promise<LLMResponse | undefined>;
   serializeRemainingRequestMs(remainingRequestMs: number): number | null;
+}
+
+const TOOL_PROTOCOL_REPAIR_ERROR = "tool_protocol_repair";
+
+function syncToolProtocolSnapshot(ctx: ExecutionContext): void {
+  ctx.runtimeContractSnapshot = updateRuntimeContractToolProtocolSnapshot({
+    snapshot: ctx.runtimeContractSnapshot,
+    open: hasPendingToolProtocol(ctx.toolProtocolState),
+    pendingToolCallIds: getPendingToolProtocolCalls(ctx.toolProtocolState).map(
+      (toolCall) => toolCall.id,
+    ),
+    repairCount: ctx.toolProtocolState.repairCount,
+    lastRepairReason: ctx.toolProtocolState.lastRepairReason,
+    violationCount: ctx.toolProtocolState.violationCount,
+    lastViolation: ctx.toolProtocolState.lastViolation,
+  });
+}
+
+function emitToolProtocolViolation(
+  ctx: ExecutionContext,
+  callbacks: ToolLoopCallbacks,
+  reason: string,
+  payload: Record<string, unknown> = {},
+): void {
+  noteToolProtocolViolation(ctx.toolProtocolState, reason);
+  syncToolProtocolSnapshot(ctx);
+  callbacks.emitExecutionTrace(ctx, {
+    type: "tool_protocol_violation",
+    phase: "tool_followup",
+    callIndex: ctx.callIndex,
+    payload: {
+      reason,
+      ...payload,
+    },
+  });
+}
+
+function pushToolResultMessage(params: {
+  readonly ctx: ExecutionContext;
+  readonly callbacks: ToolLoopCallbacks;
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly content: string;
+  readonly args: Record<string, unknown>;
+  readonly isError: boolean;
+  readonly durationMs: number;
+  readonly synthetic?: boolean;
+  readonly protocolRepairReason?: ToolProtocolRepairReason;
+}): void {
+  const {
+    ctx,
+    callbacks,
+    toolCallId,
+    toolName,
+    content,
+    args,
+    isError,
+    durationMs,
+    synthetic,
+    protocolRepairReason,
+  } = params;
+  callbacks.pushMessage(
+    ctx,
+    {
+      role: "tool",
+      content,
+      toolCallId,
+      toolName,
+    },
+    "tools",
+  );
+  const observation = callbacks.appendToolRecord(ctx, {
+    name: toolName,
+    args,
+    result: content,
+    isError,
+    durationMs,
+    toolCallId,
+    ...(synthetic ? { synthetic: true } : {}),
+    ...(protocolRepairReason ? { protocolRepairReason } : {}),
+  });
+  reconcileRequestTaskReminderState(ctx, callbacks, observation);
+  recordToolProtocolResult(ctx.toolProtocolState, toolCallId);
+  syncToolProtocolSnapshot(ctx);
+  callbacks.emitExecutionTrace(ctx, {
+    type: "tool_protocol_result_recorded",
+    phase: "tool_followup",
+    callIndex: ctx.callIndex,
+    payload: {
+      toolCallId,
+      tool: toolName,
+      synthetic: synthetic === true,
+      pendingToolCallIds: getPendingToolProtocolCalls(ctx.toolProtocolState).map(
+        (toolCall) => toolCall.id,
+      ),
+      ...(protocolRepairReason ? { protocolRepairReason } : {}),
+    },
+  });
+}
+
+function reconcileRequestTaskReminderState(
+  ctx: ExecutionContext,
+  callbacks: ToolLoopCallbacks,
+  observation: RequestTaskObservationResult | undefined,
+): void {
+  if (!observation) {
+    return;
+  }
+  if (
+    (observation.source === "task.create" ||
+      observation.source === "task.update") &&
+    observation.nonDeletedTaskCount > 0
+  ) {
+    callbacks.clearRuntimeInstructionKey(
+      ctx,
+      REQUEST_TASK_PROGRESS_NO_TASK_YET_KEY,
+    );
+  }
+  if (observation.inProgressTaskCount > 0) {
+    callbacks.clearRuntimeInstructionKey(
+      ctx,
+      REQUEST_TASK_PROGRESS_NO_IN_PROGRESS_KEY,
+    );
+  }
+}
+
+function maybeInjectRequestTaskReminders(
+  ctx: ExecutionContext,
+  callbacks: ToolLoopCallbacks,
+  rounds: number,
+): void {
+  if (rounds < 1 || ctx.requestTaskState.allowedMilestones.length === 0) {
+    return;
+  }
+  const remainingMilestones = getRemainingRequestTaskMilestones(
+    ctx.requestTaskState,
+  );
+  if (ctx.requestTaskState.nonDeletedTaskCount === 0) {
+    callbacks.maybePushKeyedRuntimeInstruction(ctx, {
+      key: REQUEST_TASK_PROGRESS_NO_TASK_YET_KEY,
+      content:
+        "This request has an active milestone contract. Create or update a task and attach the matching milestone ids in `metadata._runtime.milestoneIds` before you continue finalizing work.",
+    });
+    return;
+  }
+  if (
+    remainingMilestones.length > 0 &&
+    ctx.requestTaskState.inProgressTaskIds.length === 0
+  ) {
+    callbacks.maybePushKeyedRuntimeInstruction(ctx, {
+      key: REQUEST_TASK_PROGRESS_NO_IN_PROGRESS_KEY,
+      content:
+        "Request milestones are still open, but no task is currently marked in_progress. Update one task to in_progress before continuing.",
+    });
+  }
+}
+
+function materializeResponseToolCalls(
+  ctx: ExecutionContext,
+  callbacks: ToolLoopCallbacks,
+): readonly LLMToolCall[] {
+  if (!ctx.response || !responseHasToolCalls(ctx.response)) {
+    return [];
+  }
+  if (hasPendingToolProtocol(ctx.toolProtocolState)) {
+    return ctx.response.toolCalls;
+  }
+
+  callbacks.pushMessage(
+    ctx,
+    {
+      role: "assistant",
+      content: ctx.response.content,
+      phase: "commentary",
+      toolCalls: sanitizeToolCallsForReplay(ctx.response.toolCalls),
+    },
+    "assistant_runtime",
+  );
+  openToolProtocolTurn(ctx.toolProtocolState, ctx.response.toolCalls);
+  syncToolProtocolSnapshot(ctx);
+  callbacks.emitExecutionTrace(ctx, {
+    type: "tool_protocol_opened",
+    phase: "tool_followup",
+    callIndex: ctx.callIndex,
+    payload: {
+      toolCallIds: ctx.response.toolCalls.map((toolCall) => toolCall.id),
+      toolNames: ctx.response.toolCalls.map((toolCall) => toolCall.name),
+      finishReason: ctx.response.finishReason,
+    },
+  });
+  return ctx.response.toolCalls;
+}
+
+function sealPendingToolProtocol(
+  ctx: ExecutionContext,
+  callbacks: ToolLoopCallbacks,
+  reason: ToolProtocolRepairReason,
+): boolean {
+  const pendingToolCalls = getPendingToolProtocolCalls(ctx.toolProtocolState);
+  if (pendingToolCalls.length === 0) {
+    return false;
+  }
+
+  for (const toolCall of pendingToolCalls) {
+    pushToolResultMessage({
+      ctx,
+      callbacks,
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      content: JSON.stringify({
+        error: "Runtime closed unresolved tool call before continuation",
+        code: TOOL_PROTOCOL_REPAIR_ERROR,
+        reason,
+      }),
+      args: {},
+      isError: true,
+      durationMs: 0,
+      synthetic: true,
+      protocolRepairReason: reason,
+    });
+  }
+
+  noteToolProtocolRepair(ctx.toolProtocolState, reason);
+  if (ctx.response && responseHasToolCalls(ctx.response)) {
+    ctx.response = {
+      ...ctx.response,
+      content: "",
+    };
+  }
+  syncToolProtocolSnapshot(ctx);
+  callbacks.emitExecutionTrace(ctx, {
+    type: "tool_protocol_repaired",
+    phase: "tool_followup",
+    callIndex: ctx.callIndex,
+    payload: {
+      reason,
+      repairedToolCallIds: pendingToolCalls.map((toolCall) => toolCall.id),
+      repairedToolNames: pendingToolCalls.map((toolCall) => toolCall.name),
+    },
+  });
+  return true;
+}
+
+function failClosedOnMalformedToolContinuation(
+  ctx: ExecutionContext,
+  callbacks: ToolLoopCallbacks,
+): boolean {
+  if (!responseHasMalformedToolFinish(ctx.response)) {
+    return false;
+  }
+
+  const detail =
+    "Provider returned finishReason \"tool_calls\" without any tool calls; refusing to continue with an invalid tool-turn state.";
+  emitToolProtocolViolation(ctx, callbacks, "missing_tool_calls_for_finish_reason", {
+    finishReason: ctx.response?.finishReason,
+    contentPreview: (ctx.response?.content ?? "").slice(0, 240),
+  });
+  callbacks.setStopReason(ctx, "validation_error", detail);
+  if (ctx.response) {
+    ctx.response = {
+      ...ctx.response,
+      content: "",
+    };
+  }
+  return true;
 }
 
 export interface ToolLoopConfig {
@@ -224,6 +521,9 @@ export interface ToolLoopConfig {
     readonly action: "noop" | "consolidated";
     readonly summaryMessage?: import("./types.js").LLMMessage;
   };
+  readonly runtimeContractFlags: import("../runtime-contract/types.js").RuntimeContractFlags;
+  readonly stopHookRuntime?: import("./hooks/stop-hooks.js").StopHookRuntime;
+  readonly completionValidation?: import("./chat-executor-types.js").ChatExecutorConfig["completionValidation"];
 }
 
 // ============================================================================
@@ -420,20 +720,13 @@ export async function executeSingleToolCall(
       },
     });
     if (permission.routingMiss) ctx.routedToolMisses++;
-    callbacks.pushMessage(
+    pushToolResultMessage({
       ctx,
-      {
-        role: "tool",
-        content: permission.errorResult,
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-      },
-      "tools",
-    );
-    callbacks.appendToolRecord(ctx, {
-      name: toolCall.name,
+      callbacks,
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      content: permission.errorResult,
       args: {},
-      result: permission.errorResult,
       isError: true,
       durationMs: 0,
     });
@@ -453,20 +746,13 @@ export async function executeSingleToolCall(
         rawArguments: toolCall.arguments,
       },
     });
-    callbacks.pushMessage(
+    pushToolResultMessage({
       ctx,
-      {
-        role: "tool",
-        content: parseResult.error,
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-      },
-      "tools",
-    );
-    callbacks.appendToolRecord(ctx, {
-      name: toolCall.name,
+      callbacks,
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      content: parseResult.error,
       args: {},
-      result: parseResult.error,
       isError: true,
       durationMs: 0,
     });
@@ -543,20 +829,13 @@ export async function executeSingleToolCall(
         error: contractPolicyError,
       },
     });
-    callbacks.pushMessage(
+    pushToolResultMessage({
       ctx,
-      {
-        role: "tool",
-        content: contractPolicyError,
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-      },
-      "tools",
-    );
-    callbacks.appendToolRecord(ctx, {
-      name: toolCall.name,
+      callbacks,
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      content: contractPolicyError,
       args,
-      result: contractPolicyError,
       isError: true,
       durationMs: 0,
     });
@@ -581,20 +860,13 @@ export async function executeSingleToolCall(
         error: executionEnvelopeError,
       },
     });
-    callbacks.pushMessage(
+    pushToolResultMessage({
       ctx,
-      {
-        role: "tool",
-        content: executionEnvelopeError,
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-      },
-      "tools",
-    );
-    callbacks.appendToolRecord(ctx, {
-      name: toolCall.name,
+      callbacks,
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      content: executionEnvelopeError,
       args,
-      result: executionEnvelopeError,
       isError: true,
       durationMs: 0,
     });
@@ -613,20 +885,13 @@ export async function executeSingleToolCall(
         error: staleHarnessPreflight.rejectionError,
       },
     });
-    callbacks.pushMessage(
+    pushToolResultMessage({
       ctx,
-      {
-        role: "tool",
-        content: staleHarnessPreflight.rejectionError,
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-      },
-      "tools",
-    );
-    callbacks.appendToolRecord(ctx, {
-      name: toolCall.name,
+      callbacks,
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      content: staleHarnessPreflight.rejectionError,
       args,
-      result: staleHarnessPreflight.rejectionError,
       isError: true,
       durationMs: 0,
     });
@@ -656,20 +921,13 @@ export async function executeSingleToolCall(
         error: rejectionMessage,
       },
     });
-    callbacks.pushMessage(
+    pushToolResultMessage({
       ctx,
-      {
-        role: "tool",
-        content: rejectionMessage,
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-      },
-      "tools",
-    );
-    callbacks.appendToolRecord(ctx, {
-      name: toolCall.name,
+      callbacks,
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      content: rejectionMessage,
       args,
-      result: rejectionMessage,
       isError: true,
       durationMs: 0,
     });
@@ -678,9 +936,9 @@ export async function executeSingleToolCall(
   // Anti-fabrication gate: structurally refuse writeFile/appendFile/
   // text_editor over a verification harness when a prior `system.bash` /
   // `desktop.bash` call in the same turn failed while referencing that
-  // harness by basename. Modeled on Claude Code's layered verification
-  // contract, this removes the affordance for the model to silently
-  // rewrite a failing test into a fake-pass stub.
+  // harness by basename. This follows the runtime's layered verification
+  // contract and removes the affordance for the model to silently rewrite
+  // a failing test into a fake-pass stub.
   const antiFabricationDecision = evaluateWriteOverFailedVerification({
     toolName: toolCall.name,
     args,
@@ -707,20 +965,13 @@ export async function executeSingleToolCall(
           : {}),
       },
     });
-    callbacks.pushMessage(
+    pushToolResultMessage({
       ctx,
-      {
-        role: "tool",
-        content: refusalMessage,
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-      },
-      "tools",
-    );
-    callbacks.appendToolRecord(ctx, {
-      name: toolCall.name,
+      callbacks,
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      content: refusalMessage,
       args,
-      result: refusalMessage,
       isError: true,
       durationMs: 0,
     });
@@ -752,20 +1003,13 @@ export async function executeSingleToolCall(
         decision.behavior === "deny"
           ? decision.message
           : `Tool "${toolCall.name}" requires interactive approval: ${decision.message}`;
-      callbacks.pushMessage(
+      pushToolResultMessage({
         ctx,
-        {
-          role: "tool",
-          content: denyMessage,
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-        },
-        "tools",
-      );
-      callbacks.appendToolRecord(ctx, {
-        name: toolCall.name,
+        callbacks,
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: denyMessage,
         args,
-        result: denyMessage,
         isError: true,
         durationMs: 0,
       });
@@ -796,20 +1040,13 @@ export async function executeSingleToolCall(
       const denyMessage =
         preDispatch.message ??
         `Tool "${toolCall.name}" blocked by PreToolUse hook`;
-      callbacks.pushMessage(
+      pushToolResultMessage({
         ctx,
-        {
-          role: "tool",
-          content: denyMessage,
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-        },
-        "tools",
-      );
-      callbacks.appendToolRecord(ctx, {
-        name: toolCall.name,
+        callbacks,
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: denyMessage,
         args,
-        result: denyMessage,
         isError: true,
         durationMs: 0,
       });
@@ -904,13 +1141,15 @@ export async function executeSingleToolCall(
     }
   }
 
-  callbacks.appendToolRecord(ctx, {
+  const observation = callbacks.appendToolRecord(ctx, {
     name: toolCall.name,
     args,
     result,
     isError: exec.toolFailed,
     durationMs: exec.durationMs,
+    toolCallId: toolCall.id,
   });
+  reconcileRequestTaskReminderState(ctx, callbacks, observation);
   callbacks.emitExecutionTrace(ctx, {
     type: "tool_dispatch_finished",
     phase: "tool_followup",
@@ -988,6 +1227,21 @@ export async function executeSingleToolCall(
     },
     "tools",
   );
+  recordToolProtocolResult(ctx.toolProtocolState, toolCall.id);
+  syncToolProtocolSnapshot(ctx);
+  callbacks.emitExecutionTrace(ctx, {
+    type: "tool_protocol_result_recorded",
+    phase: "tool_followup",
+    callIndex: ctx.callIndex,
+    payload: {
+      toolCallId: toolCall.id,
+      tool: toolCall.name,
+      synthetic: false,
+      pendingToolCallIds: getPendingToolProtocolCalls(ctx.toolProtocolState).map(
+        (pendingToolCall) => pendingToolCall.id,
+      ),
+    },
+  });
 
   if (abortRound) return "abort_round";
   return "processed";
@@ -1034,8 +1288,7 @@ async function runPerIterationCompactionBeforeModelCall(
   if (result.action === "noop") return;
 
   // Phase H: dispatch PreCompact for each layer that fired, with the
-  // registry-supplied matcher allowed to veto. Mirrors
-  // `claude_code/services/compact/compact.ts:executePreCompactHooks`.
+  // registry-supplied matcher allowed to veto.
   if (config.hookRegistry) {
     for (const boundary of result.boundaries) {
       const content =
@@ -1134,7 +1387,7 @@ function extractCompactionLayerTag(content: string): string {
  * reactive-compact layer's internal limit (3 attempts by default;
  * `applyReactiveCompact` returns `"exhausted"` after that).
  *
- * Mirrors `claude_code/query.ts` reactive compaction recovery.
+ * Mirrors the runtime's reactive compaction recovery path.
  */
 async function callModelWithReactiveCompact(
   ctx: ExecutionContext,
@@ -1150,6 +1403,7 @@ async function callModelWithReactiveCompact(
       if (!(err instanceof LLMContextWindowExceededError)) {
         throw err;
       }
+      sealPendingToolProtocol(ctx, callbacks, "reactive_compact_retry");
       const reactiveState =
         ctx.perIterationCompaction.reactiveCompact ?? {
           attemptIndex: 0,
@@ -1195,7 +1449,7 @@ export async function executeToolCallLoop(
 ): Promise<void> {
   // Phase A wire-up: run the layered compaction chain before the
   // initial provider call. This is the top-of-iteration insertion
-  // point mirrored from claude_code/query.ts:395-426. Phase H added
+  // point for the layered compaction runtime. Phase H added
   // PreCompact / PostCompact hook dispatch inside the helper.
   await runPerIterationCompactionBeforeModelCall(
     ctx,
@@ -1227,6 +1481,7 @@ export async function executeToolCallLoop(
         "Initial completion blocked by max model recalls per request budget",
     }),
   );
+  failClosedOnMalformedToolContinuation(ctx, callbacks);
 
   let rounds = 0;
   let effectiveMaxToolRounds = ctx.effectiveMaxToolRounds;
@@ -1261,11 +1516,31 @@ export async function executeToolCallLoop(
     readonly budgetReason: string;
     readonly exhaustedDetail: string;
     readonly validationCode?: DelegationOutputValidationCode;
+    readonly validatorId?: CompletionValidatorId;
+    readonly stopHookResult?: import("./hooks/stop-hooks.js").StopHookPhaseResult;
   }): Promise<boolean> => {
     const maxAttempts = Math.max(0, params.maxAttempts ?? 1);
     const attemptKey = params.attemptKey ?? params.reason;
     const attempts = completionValidationAttempts.get(attemptKey) ?? 0;
     if (!params.blockingMessage || attempts >= maxAttempts) {
+      if (params.stopHookResult) {
+        callbacks.emitExecutionTrace(ctx, {
+          type: "stop_hook_exhausted",
+          phase: "tool_followup",
+          callIndex: ctx.callIndex,
+          payload: {
+            validatorId: params.validatorId ?? attemptKey,
+            stopHookPhase: params.stopHookResult.phase,
+            outcome: params.stopHookResult.outcome,
+            reason: params.stopHookResult.reason,
+            stopReason: params.stopHookResult.stopReason,
+            exhaustedDetail: params.exhaustedDetail,
+            validationCode: params.validationCode,
+            attempts,
+            maxAttempts,
+          },
+        });
+      }
       callbacks.setStopReason(ctx, "validation_error", params.exhaustedDetail);
       if (params.validationCode) {
         ctx.validationCode = params.validationCode;
@@ -1280,6 +1555,24 @@ export async function executeToolCallLoop(
     }
 
     completionValidationAttempts.set(attemptKey, attempts + 1);
+    sealPendingToolProtocol(ctx, callbacks, "validation_recovery");
+    if (params.stopHookResult) {
+      callbacks.emitExecutionTrace(ctx, {
+        type: "stop_hook_retry_requested",
+        phase: "tool_followup",
+        callIndex: ctx.callIndex,
+        payload: {
+          validatorId: params.validatorId ?? attemptKey,
+          stopHookPhase: params.stopHookResult.phase,
+          outcome: params.stopHookResult.outcome,
+          reason: params.stopHookResult.reason,
+          stopReason: params.stopHookResult.stopReason,
+          attempt: attempts + 1,
+          maxAttempts,
+          validationCode: params.validationCode,
+        },
+      });
+    }
     callbacks.emitExecutionTrace(ctx, {
       type: "stop_gate_intervention",
       phase: "tool_followup",
@@ -1324,6 +1617,24 @@ export async function executeToolCallLoop(
       }),
     );
     if (!recoveryResponse) {
+      if (params.stopHookResult) {
+        callbacks.emitExecutionTrace(ctx, {
+          type: "stop_hook_exhausted",
+          phase: "tool_followup",
+          callIndex: ctx.callIndex,
+          payload: {
+            validatorId: params.validatorId ?? attemptKey,
+            stopHookPhase: params.stopHookResult.phase,
+            outcome: params.stopHookResult.outcome,
+            reason: params.stopHookResult.reason,
+            stopReason: params.stopHookResult.stopReason,
+            exhaustedDetail: params.exhaustedDetail,
+            validationCode: params.validationCode,
+            attempt: attempts + 1,
+            maxAttempts,
+          },
+        });
+      }
       if (ctx.stopReason === "completed") {
         callbacks.setStopReason(ctx, "validation_error", params.exhaustedDetail);
         if (params.validationCode) {
@@ -1333,6 +1644,7 @@ export async function executeToolCallLoop(
       return false;
     }
     ctx.response = recoveryResponse;
+    failClosedOnMalformedToolContinuation(ctx, callbacks);
     shouldContinueAfterStopGate = true;
     return true;
   };
@@ -1340,22 +1652,34 @@ export async function executeToolCallLoop(
     shouldContinueAfterStopGate = false;
   while (
     ctx.response &&
-    ctx.response.finishReason === "tool_calls" &&
-    ctx.response.toolCalls.length > 0 &&
-    ctx.activeToolHandler &&
-    (
-      !hasRuntimeLimit(effectiveMaxToolRounds) ||
-      rounds < effectiveMaxToolRounds
-    )
+    responseHasToolCalls(ctx.response)
   ) {
     if (ctx.signal?.aborted) {
+      materializeResponseToolCalls(ctx, callbacks);
+      sealPendingToolProtocol(ctx, callbacks, "request_cancelled");
       callbacks.setStopReason(ctx, "cancelled", "Execution cancelled by caller");
       break;
     }
-    if (callbacks.checkRequestTimeout(ctx, "tool loop")) break;
+    if (callbacks.checkRequestTimeout(ctx, "tool loop")) {
+      materializeResponseToolCalls(ctx, callbacks);
+      sealPendingToolProtocol(ctx, callbacks, "request_timeout");
+      break;
+    }
     const activeCircuit = config.toolFailureBreaker.getActiveCircuit(ctx.sessionId);
     if (activeCircuit) {
+      materializeResponseToolCalls(ctx, callbacks);
+      sealPendingToolProtocol(ctx, callbacks, "circuit_breaker");
       callbacks.setStopReason(ctx, "no_progress", activeCircuit.reason);
+      break;
+    }
+    if (isRuntimeLimitReached(rounds, effectiveMaxToolRounds)) {
+      materializeResponseToolCalls(ctx, callbacks);
+      sealPendingToolProtocol(ctx, callbacks, "max_tool_rounds");
+      callbacks.setStopReason(
+        ctx,
+        "tool_calls",
+        `Reached max tool rounds (${effectiveMaxToolRounds})`,
+      );
       break;
     }
 
@@ -1368,17 +1692,16 @@ export async function executeToolCallLoop(
     );
     ctx.transientRoutedToolNames = undefined;
     loopState.expandAfterRound = false;
-
-    callbacks.pushMessage(
-      ctx,
-      {
-        role: "assistant",
-        content: ctx.response.content,
-        phase: "commentary",
-        toolCalls: sanitizeToolCallsForReplay(ctx.response.toolCalls),
-      },
-      "assistant_runtime",
-    );
+    const roundToolCalls = materializeResponseToolCalls(ctx, callbacks);
+    if (!ctx.activeToolHandler) {
+      sealPendingToolProtocol(ctx, callbacks, "missing_tool_handler");
+      callbacks.setStopReason(
+        ctx,
+        "tool_error",
+        "Model requested tools but no tool handler is available for this turn.",
+      );
+      break;
+    }
 
     // Phase B (U2): partition this round's tool calls into
     // concurrency-safe batches. A run of consecutive read-only tool
@@ -1388,7 +1711,7 @@ export async function executeToolCallLoop(
     // call falls into its own serial batch (identical to the old
     // for-loop).
     const dispatchBatches = partitionToolCalls(
-      ctx.response.toolCalls,
+      roundToolCalls,
       config.isConcurrencySafe ?? (() => false),
     );
     const parallelBatchCount = dispatchBatches.filter(
@@ -1470,13 +1793,20 @@ export async function executeToolCallLoop(
     }
 
     if (ctx.signal?.aborted) {
+      sealPendingToolProtocol(ctx, callbacks, "request_cancelled");
       callbacks.setStopReason(ctx, "cancelled", "Execution cancelled by caller");
       break;
     }
-    if (callbacks.checkRequestTimeout(ctx, "tool follow-up")) break;
+    if (callbacks.checkRequestTimeout(ctx, "tool follow-up")) {
+      sealPendingToolProtocol(ctx, callbacks, "request_timeout");
+      break;
+    }
 
     const roundCalls = ctx.allToolCalls.slice(roundToolCallStart);
-    if (abortRound) break;
+    if (abortRound) {
+      sealPendingToolProtocol(ctx, callbacks, "round_aborted");
+      break;
+    }
 
     // Stuck-loop detection (consecutive failures, semantic duplicates).
     const stuckResult = checkToolLoopStuckDetection(roundCalls, loopState, stuckState);
@@ -1498,6 +1828,12 @@ export async function executeToolCallLoop(
             stuckState.consecutiveSemanticDuplicateRounds,
         },
       });
+      if (ctx.response) {
+        ctx.response = {
+          ...ctx.response,
+          content: "",
+        };
+      }
       callbacks.setStopReason(ctx, "no_progress", stuckResult.reason);
       break;
     }
@@ -1536,6 +1872,7 @@ export async function executeToolCallLoop(
     )) {
       callbacks.pushMessage(ctx, msg, "system_runtime");
     }
+    maybeInjectRequestTaskReminders(ctx, callbacks, rounds);
 
     // Routing expansion on miss.
     if (loopState.expandAfterRound && ctx.expandedRoutedToolNames.length > 0) {
@@ -1595,6 +1932,7 @@ export async function executeToolCallLoop(
     );
     if (!nextResponse) break;
     ctx.response = nextResponse;
+    failClosedOnMalformedToolContinuation(ctx, callbacks);
   }
 
   // Turn-end stop gate evaluation. Runs only when the inner tool loop
@@ -1603,149 +1941,304 @@ export async function executeToolCallLoop(
   if (
     !ctx.signal?.aborted &&
     ctx.response &&
-    ctx.response.finishReason !== "tool_calls" &&
+    !responseHasToolCalls(ctx.response) &&
+    !hasPendingToolProtocol(ctx.toolProtocolState) &&
     ctx.stopReason === "completed"
   ) {
-    const artifactGateDecision = evaluateArtifactEvidenceGate({
-      requiredToolEvidence: ctx.requiredToolEvidence,
-      runtimeContext: {
-        workspaceRoot: ctx.runtimeWorkspaceRoot,
+    const validators = buildCompletionValidators({
+      ctx,
+      runtimeContractFlags: config.runtimeContractFlags,
+      stopHookRuntime: config.stopHookRuntime,
+      completionValidation: config.completionValidation,
+    });
+    callbacks.emitExecutionTrace(ctx, {
+      type: "completion_validation_started",
+      phase: "tool_followup",
+      callIndex: ctx.callIndex,
+      payload: {
+        validatorOrder: validators.map((validator) => validator.id),
+        runtimeContract: ctx.runtimeContractSnapshot,
       },
-      allToolCalls: ctx.allToolCalls,
     });
-    if (artifactGateDecision.shouldIntervene) {
-      await attemptCompletionRecovery({
-        reason: artifactGateDecision.validationCode ?? "artifact_evidence_gate",
-        blockingMessage: artifactGateDecision.blockingMessage,
-        evidence: artifactGateDecision.evidence,
-        maxAttempts: ctx.requiredToolEvidence?.maxCorrectionAttempts ?? 0,
-        budgetReason:
-          "Max model recalls exceeded during artifact-evidence recovery turn",
-        exhaustedDetail:
-          artifactGateDecision.stopReasonDetail ??
-          "Artifact-evidence recovery exhausted.",
-        validationCode: artifactGateDecision.validationCode,
-      });
-      if (shouldContinueAfterStopGate) {
-        continue;
-      }
-    }
 
-    const gateDecision = evaluateTurnEndStopGate({
-      finalContent: ctx.response.content ?? "",
-      allToolCalls: ctx.allToolCalls,
-    });
-    if (gateDecision.shouldIntervene) {
-      await attemptCompletionRecovery({
-        attemptKey: "turn_end_stop_gate",
-        reason: gateDecision.reason ?? "turn_end_stop_gate",
-        blockingMessage: gateDecision.blockingMessage,
-        evidence: gateDecision.evidence,
-        maxAttempts: 1,
-        budgetReason:
-          "Max model recalls exceeded during stop-gate recovery turn",
-        exhaustedDetail:
-          gateDecision.reason === "narrated_future_tool_work"
-            ? "Stop-gate recovery exhausted: the model kept narrating future work instead of calling tools."
-            : "Stop-gate recovery exhausted after the model continued to emit an invalid completion summary.",
+    let completionValidationStatus = "passed";
+    for (const validator of validators) {
+      callbacks.emitExecutionTrace(ctx, {
+        type: "completion_validator_started",
+        phase: "tool_followup",
+        callIndex: ctx.callIndex,
+        payload: {
+          validatorId: validator.id,
+          enabled: validator.enabled,
+          runtimeContract: ctx.runtimeContractSnapshot,
+        },
       });
-      if (shouldContinueAfterStopGate) {
-        continue;
-      }
-    }
-
-    // Filesystem artifact verification: after all text-based gates have
-    // run and NOT intervened, check whether files the model wrote during
-    // this turn actually exist and are non-empty on disk. Only runs when
-    // the model claims terminal completion (TERMINAL_COMPLETION_RE match
-    // in the final content). This catches the fabrication case where the
-    // model says "all files implemented" but 8 of 14 are 0 bytes.
-    //
-    // Runs as a SEPARATE check from the stop gate so it fires even when
-    // the stop gate already fired once (stopGateFired=true). The stop
-    // gate's one-shot limit prevents infinite loops on text-based
-    // recovery, but the filesystem check is a different dimension — it
-    // verifies artifacts, not text patterns.
-    if (
-      ctx.response &&
-      ctx.stopReason === "completed" &&
-      ctx.allToolCalls.length > 0 &&
-      !ctx.signal?.aborted
-    ) {
-      const fsCheck = await checkFilesystemArtifacts({
-        finalContent: ctx.response.content ?? "",
-        allToolCalls: ctx.allToolCalls,
-      });
-      if (fsCheck.shouldIntervene) {
-        await attemptCompletionRecovery({
-          reason: "filesystem_artifact_verification",
-          blockingMessage: fsCheck.blockingMessage,
-          evidence: {
-            emptyFiles: fsCheck.emptyFiles,
-            missingFiles: fsCheck.missingFiles,
-            checkedFiles: fsCheck.checkedFiles,
+      if (!validator.enabled) {
+        if (validator.id === "top_level_verifier") {
+          ctx.runtimeContractSnapshot = updateRuntimeContractVerifierStage({
+            snapshot: ctx.runtimeContractSnapshot,
+            verifierStages: {
+              ...ctx.runtimeContractSnapshot.verifierStages,
+              stageStatus: ctx.runtimeContractSnapshot.flags.verifierRuntimeRequired
+                ? "skipped"
+                : "inactive",
+              ...(ctx.runtimeContractSnapshot.flags.verifierRuntimeRequired
+                ? { skipReason: "validator_disabled" }
+                : { skipReason: "runtime_not_required" }),
+            },
+          });
+        }
+        ctx.runtimeContractSnapshot = updateRuntimeContractValidatorSnapshot({
+          snapshot: ctx.runtimeContractSnapshot,
+          id: validator.id,
+          enabled: false,
+          executed: false,
+          outcome: "skipped",
+        });
+        callbacks.emitExecutionTrace(ctx, {
+          type: "completion_validator_finished",
+          phase: "tool_followup",
+          callIndex: ctx.callIndex,
+          payload: {
+            validatorId: validator.id,
+            enabled: false,
+            outcome: "skipped",
+            runtimeContract: ctx.runtimeContractSnapshot,
           },
-          maxAttempts: 1,
-          budgetReason:
-            "Max model recalls exceeded during filesystem artifact recovery turn",
-          exhaustedDetail:
-            "Filesystem artifact verification failed after recovery; missing or empty artifacts remain on disk.",
         });
-        if (shouldContinueAfterStopGate) {
-          continue;
+        continue;
+      }
+
+      if (validator.id === "top_level_verifier") {
+        ctx.runtimeContractSnapshot = updateRuntimeContractVerifierStage({
+          snapshot: ctx.runtimeContractSnapshot,
+          verifierStages: {
+            ...ctx.runtimeContractSnapshot.verifierStages,
+            stageStatus: "running",
+            skipReason: undefined,
+          },
+        });
+      }
+
+      const validation = await validator.execute();
+      if (validation.stopHookResult) {
+        callbacks.emitExecutionTrace(ctx, {
+          type: "stop_hook_execution_finished",
+          phase: "tool_followup",
+          callIndex: ctx.callIndex,
+          payload: {
+            validatorId: validator.id,
+            stopHookPhase: validation.stopHookResult.phase,
+            outcome: validation.stopHookResult.outcome,
+            reason: validation.stopHookResult.reason,
+            stopReason: validation.stopHookResult.stopReason,
+            hookIds: validation.stopHookResult.hookOutcomes.map(
+              (outcome) => outcome.hookId,
+            ),
+            progressMessages: validation.stopHookResult.progressMessages,
+            evidence: validation.stopHookResult.evidence,
+          },
+        });
+        if (validation.stopHookResult.outcome !== "pass") {
+          callbacks.emitExecutionTrace(ctx, {
+            type: "stop_hook_blocked",
+            phase: "tool_followup",
+            callIndex: ctx.callIndex,
+            payload: {
+              validatorId: validator.id,
+              stopHookPhase: validation.stopHookResult.phase,
+              outcome: validation.stopHookResult.outcome,
+              reason: validation.stopHookResult.reason,
+              stopReason: validation.stopHookResult.stopReason,
+              validationCode: validation.validationCode,
+            },
+          });
         }
       }
+      if (validation.probeRuns) {
+        for (const run of validation.probeRuns) {
+          const observation = callbacks.appendToolRecord(ctx, run);
+          reconcileRequestTaskReminderState(ctx, callbacks, observation);
+        }
+      }
+      if (validation.verifier) {
+        ctx.verifierSnapshot = {
+          performed: validation.verifier.attempted,
+          overall: validation.verifier.overall,
+        };
+        if (validation.verifier.attempted) {
+          noteRequestTaskVerifierAttempt(ctx.requestTaskState);
+        }
+        ctx.runtimeContractSnapshot = updateRuntimeContractVerifierVerdict({
+          snapshot: ctx.runtimeContractSnapshot,
+          verifier: validation.verifier,
+        });
+      }
+      if (validator.id === "top_level_verifier") {
+        const verifierStageStatus =
+          validation.outcome === "pass"
+            ? "passed"
+            : validation.outcome === "fail_closed"
+              ? "failed"
+              : validation.outcome === "retry_with_blocking_message"
+                ? validation.verifier?.overall === "fail"
+                  ? "failed"
+                  : "retry"
+                : "skipped";
+        ctx.runtimeContractSnapshot = updateRuntimeContractVerifierStage({
+          snapshot: ctx.runtimeContractSnapshot,
+          verifierStages: {
+            ...ctx.runtimeContractSnapshot.verifierStages,
+            ...(validation.verifierTaskId
+              ? { taskId: validation.verifierTaskId }
+              : {}),
+            ...(validation.verifierRequirement
+              ? {
+                  bootstrapSource: validation.verifierRequirement.bootstrapSource,
+                  profiles: validation.verifierRequirement.profiles,
+                  probeCategories: validation.verifierRequirement.probeCategories,
+                }
+              : {}),
+            ...(validation.verifierLauncherKind
+              ? { launcherKind: validation.verifierLauncherKind }
+              : {}),
+            stageStatus: verifierStageStatus,
+            ...(validation.outcome === "skipped" && validation.reason
+              ? { skipReason: validation.reason }
+              : verifierStageStatus === "skipped"
+                ? { skipReason: "validator_skipped" }
+                : { skipReason: undefined }),
+          },
+        });
+      }
+      ctx.runtimeContractSnapshot = updateRuntimeContractValidatorSnapshot({
+        snapshot: ctx.runtimeContractSnapshot,
+        id: validator.id,
+        enabled: true,
+        executed: validation.outcome !== "skipped",
+        outcome: validation.outcome,
+        reason: validation.reason,
+        validationCode: validation.validationCode,
+      });
+      callbacks.emitExecutionTrace(ctx, {
+        type: "completion_validator_finished",
+        phase: "tool_followup",
+        callIndex: ctx.callIndex,
+        payload: {
+          validatorId: validator.id,
+          outcome: validation.outcome,
+          reason: validation.reason,
+          validationCode: validation.validationCode,
+          verifierTaskId: validation.verifierTaskId,
+          verifierLauncherKind: validation.verifierLauncherKind,
+          exhaustedDetail: validation.exhaustedDetail,
+          runtimeContract: ctx.runtimeContractSnapshot,
+        },
+      });
+
+      if (
+        validation.outcome === "pass" ||
+        validation.outcome === "skipped"
+      ) {
+        continue;
+      }
+
+      if (validation.outcome === "fail_closed") {
+        completionValidationStatus = "fail_closed";
+        callbacks.setStopReason(
+          ctx,
+          "validation_error",
+          validation.exhaustedDetail ?? "Completion validation failed closed.",
+        );
+        if (validation.validationCode) {
+          ctx.validationCode = validation.validationCode;
+        }
+        if (ctx.response) {
+          ctx.response = {
+            ...ctx.response,
+            content: "",
+          };
+        }
+        break;
+      }
+
+      const budgetReason =
+        validator.id === "artifact_evidence"
+          ? "Max model recalls exceeded during artifact-evidence recovery turn"
+          : validator.id === "turn_end_stop_gate"
+            ? "Max model recalls exceeded during stop-gate recovery turn"
+            : validator.id === "request_task_progress"
+              ? "Max model recalls exceeded during request-task progress recovery turn"
+              : validator.id === "filesystem_artifact_verification"
+              ? "Max model recalls exceeded during filesystem artifact recovery turn"
+              : validator.id === "deterministic_acceptance_probes"
+                ? "Max model recalls exceeded during deterministic acceptance-probe recovery turn"
+                : "Max model recalls exceeded during top-level verifier recovery turn";
+
+      await attemptCompletionRecovery({
+        attemptKey: validator.id,
+        reason: validation.reason ?? validator.id,
+        blockingMessage: validation.blockingMessage,
+        evidence: validation.evidence,
+        maxAttempts: validation.maxAttempts ?? 1,
+        budgetReason,
+        exhaustedDetail:
+          validation.exhaustedDetail ??
+          `${validator.id} recovery exhausted.`,
+        validationCode: validation.validationCode,
+        validatorId: validator.id,
+        stopHookResult: validation.stopHookResult,
+      });
+      completionValidationStatus = shouldContinueAfterStopGate
+        ? "recovery_requested"
+        : "recovery_exhausted";
+      break;
     }
 
-    if (
-      ctx.response &&
-      ctx.stopReason === "completed" &&
-      !ctx.signal?.aborted
-    ) {
-      const probeDecision = await runDeterministicAcceptanceProbes({
-        workspaceRoot: ctx.runtimeWorkspaceRoot,
-        targetArtifacts: ctx.turnExecutionContract.targetArtifacts,
-        allToolCalls: ctx.allToolCalls,
-        activeToolHandler: ctx.activeToolHandler,
-      });
-      for (const run of probeDecision.probeRuns) {
-        callbacks.appendToolRecord(ctx, run);
-      }
-      if (probeDecision.shouldIntervene) {
-        await attemptCompletionRecovery({
-          reason:
-            probeDecision.validationCode ??
-            "deterministic_acceptance_probe_failed",
-          blockingMessage: probeDecision.blockingMessage,
-          evidence: probeDecision.evidence,
-          maxAttempts: 1,
-          budgetReason:
-            "Max model recalls exceeded during deterministic acceptance-probe recovery turn",
-          exhaustedDetail:
-            probeDecision.stopReasonDetail ??
-            "Deterministic acceptance-probe recovery exhausted.",
-          validationCode: probeDecision.validationCode,
-        });
-        if (shouldContinueAfterStopGate) {
-          continue;
-        }
-      }
+    callbacks.emitExecutionTrace(ctx, {
+      type: "completion_validation_finished",
+      phase: "tool_followup",
+      callIndex: ctx.callIndex,
+      payload: {
+        status: completionValidationStatus,
+        stopReason: ctx.stopReason,
+        validationCode: ctx.validationCode,
+        runtimeContract: ctx.runtimeContractSnapshot,
+      },
+    });
+    if (shouldContinueAfterStopGate) {
+      continue;
     }
   }
   } while (shouldContinueAfterStopGate);
 
-  if (ctx.signal?.aborted) {
-    callbacks.setStopReason(ctx, "cancelled", "Execution cancelled by caller");
-  } else if (
-    ctx.response &&
-    ctx.response.finishReason === "tool_calls" &&
-    isRuntimeLimitReached(rounds, effectiveMaxToolRounds)
-  ) {
+  if (hasPendingToolProtocol(ctx.toolProtocolState)) {
+    emitToolProtocolViolation(
+      ctx,
+      callbacks,
+      "finalization_with_unresolved_tool_calls",
+      {
+        pendingToolCallIds: getPendingToolProtocolCalls(ctx.toolProtocolState).map(
+          (toolCall) => toolCall.id,
+        ),
+      },
+    );
+    sealPendingToolProtocol(ctx, callbacks, "finalization_guard");
     callbacks.setStopReason(
       ctx,
-      "tool_calls",
-      `Reached max tool rounds (${effectiveMaxToolRounds})`,
+      "validation_error",
+      "Runtime detected unresolved tool calls at finalization and closed the turn instead of surfacing a clean completion.",
     );
+    if (ctx.response) {
+      ctx.response = {
+        ...ctx.response,
+        content: "",
+      };
+    }
+  }
+
+  if (ctx.signal?.aborted) {
+    callbacks.setStopReason(ctx, "cancelled", "Execution cancelled by caller");
   }
 
   ctx.finalContent = ctx.response?.content ?? "";
@@ -1772,7 +2265,8 @@ export async function executeToolCallLoop(
     !missingFinalToolFollowupAnswer &&
     !ctx.finalContent &&
     ctx.allToolCalls.length > 0 &&
-    ctx.stopReason === "tool_calls";
+    ctx.stopReason === "tool_calls" &&
+    ctx.toolProtocolState.repairCount === 0;
   if (shouldSummarizeToolFallback) {
     ctx.finalContent =
       generateFallbackContent(ctx.allToolCalls) ?? ctx.finalContent;
@@ -1821,6 +2315,9 @@ export function buildToolLoopCallbacks(
     replaceRuntimeRecoveryHintMessages,
     maybePushRuntimeInstruction: (ctx, content) =>
       maybePushRuntimeInstruction(ctx, content, maxRuntimeSystemHints),
+    maybePushKeyedRuntimeInstruction: (ctx, params) =>
+      maybePushKeyedRuntimeInstruction(ctx, params, maxRuntimeSystemHints),
+    clearRuntimeInstructionKey,
     callModelForPhase,
     serializeRemainingRequestMs,
   };

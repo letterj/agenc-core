@@ -65,6 +65,25 @@ describe("normalizeMessagesForAPI", () => {
     expect(out.some((m) => m.role === "tool")).toBe(false);
   });
 
+  it("can preserve orphan tool messages for downstream repair", () => {
+    const input: LLMMessage[] = [
+      { role: "system", content: "sys" },
+      { role: "user", content: "q" },
+      {
+        role: "tool",
+        content: "orphan result",
+        toolCallId: "no-match",
+        toolName: "system.readFile",
+      },
+    ];
+    const out = normalizeMessagesForAPI(input, {
+      dropOrphanToolMessages: false,
+    });
+    expect(out.some((m) => m.role === "tool" && m.content === "orphan result")).toBe(
+      true,
+    );
+  });
+
   it("keeps tool messages whose toolCallId matches a prior assistant tool_call", () => {
     const input: LLMMessage[] = [
       { role: "system", content: "sys" },

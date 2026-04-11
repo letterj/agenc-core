@@ -1,6 +1,3 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
-
 import type { DelegationOutputValidationCode } from "../utils/delegation-validation.js";
 import { areDocumentationOnlyArtifacts } from "../workflow/artifact-paths.js";
 import type { ToolCallRecord } from "./chat-executor-types.js";
@@ -8,7 +5,10 @@ import {
   didToolCallFail,
   extractToolFailureTextFromResult,
 } from "./chat-executor-tool-utils.js";
-import type { ToolHandler } from "./types.js";
+import {
+  buildVerificationProbeDescriptors,
+  runVerificationProbe,
+} from "../gateway/verifier-probes.js";
 
 const FILE_MUTATION_TOOL_NAMES = new Set([
   "system.appendFile",
@@ -23,13 +23,6 @@ type AcceptanceProbeValidationCode = Extract<
   DelegationOutputValidationCode,
   "deterministic_acceptance_probe_failed"
 >;
-
-interface AcceptanceProbePlan {
-  readonly toolName: "system.bash";
-  readonly args: Record<string, unknown>;
-  readonly commandDisplay: string;
-  readonly label: string;
-}
 
 export interface DeterministicAcceptanceProbeEvidence {
   readonly workspaceRoot: string;
@@ -46,18 +39,6 @@ export interface DeterministicAcceptanceProbeDecision {
   readonly blockingMessage?: string;
   readonly evidence?: DeterministicAcceptanceProbeEvidence;
   readonly probeRuns: readonly ToolCallRecord[];
-}
-
-function readJsonObject(path: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // Best-effort probe discovery must stay non-fatal.
-  }
-  return undefined;
 }
 
 function hasSuccessfulStructuredMutation(
@@ -81,94 +62,10 @@ function hasSuccessfulStructuredMutation(
   });
 }
 
-function detectNodeBuildPlan(workspaceRoot: string): AcceptanceProbePlan[] {
-  const manifestPath = resolvePath(workspaceRoot, "package.json");
-  if (!existsSync(manifestPath)) {
-    return [];
-  }
-  const manifest = readJsonObject(manifestPath);
-  const scripts =
-    manifest?.scripts &&
-    typeof manifest.scripts === "object" &&
-    !Array.isArray(manifest.scripts)
-      ? manifest.scripts as Record<string, unknown>
-      : undefined;
-  if (typeof scripts?.build !== "string" || scripts.build.trim().length === 0) {
-    return [];
-  }
-  const command = existsSync(resolvePath(workspaceRoot, "pnpm-lock.yaml"))
-    ? "pnpm"
-    : existsSync(resolvePath(workspaceRoot, "yarn.lock"))
-      ? "yarn"
-      : existsSync(resolvePath(workspaceRoot, "bun.lockb")) ||
-          existsSync(resolvePath(workspaceRoot, "bun.lock"))
-        ? "bun"
-        : "npm";
-  const args =
-    command === "yarn"
-      ? ["build"]
-      : command === "bun"
-        ? ["run", "build"]
-        : ["run", "build"];
-  return [
-    {
-      toolName: "system.bash",
-      args: {
-        command,
-        args,
-        cwd: workspaceRoot,
-      },
-      commandDisplay: [command, ...args].join(" "),
-      label: "package build",
-    },
-  ];
-}
-
 function buildAcceptanceProbePlans(
   workspaceRoot: string,
-): AcceptanceProbePlan[] {
-  if (existsSync(resolvePath(workspaceRoot, "CMakeLists.txt"))) {
-    return [
-      {
-        toolName: "system.bash",
-        args: {
-          command: "cmake",
-          args: ["-S", ".", "-B", "build"],
-          cwd: workspaceRoot,
-        },
-        commandDisplay: "cmake -S . -B build",
-        label: "cmake configure",
-      },
-      {
-        toolName: "system.bash",
-        args: {
-          command: "cmake",
-          args: ["--build", "build"],
-          cwd: workspaceRoot,
-        },
-        commandDisplay: "cmake --build build",
-        label: "cmake build",
-      },
-    ];
-  }
-  if (
-    existsSync(resolvePath(workspaceRoot, "Makefile")) ||
-    existsSync(resolvePath(workspaceRoot, "makefile"))
-  ) {
-    return [
-      {
-        toolName: "system.bash",
-        args: {
-          command: "make",
-          args: [],
-          cwd: workspaceRoot,
-        },
-        commandDisplay: "make",
-        label: "make build",
-      },
-    ];
-  }
-  return detectNodeBuildPlan(workspaceRoot);
+): readonly ReturnType<typeof buildVerificationProbeDescriptors>[number][] {
+  return buildVerificationProbeDescriptors({ workspaceRoot });
 }
 
 function truncate(text: string, maxChars: number): string {
@@ -224,46 +121,33 @@ export async function runDeterministicAcceptanceProbes(params: {
   readonly workspaceRoot?: string;
   readonly targetArtifacts?: readonly string[];
   readonly allToolCalls: readonly ToolCallRecord[];
-  readonly activeToolHandler?: ToolHandler;
+  readonly activeToolHandler?: unknown;
 }): Promise<DeterministicAcceptanceProbeDecision> {
-  const workspaceRoot = params.workspaceRoot?.trim();
-  if (!workspaceRoot || !params.activeToolHandler) {
+  if (!shouldRunDeterministicAcceptanceProbes(params)) {
     return {
       shouldIntervene: false,
       probeRuns: [],
     };
   }
-  if (
-    params.targetArtifacts &&
-    params.targetArtifacts.length > 0 &&
-    areDocumentationOnlyArtifacts(params.targetArtifacts)
-  ) {
-    return {
-      shouldIntervene: false,
-      probeRuns: [],
-    };
-  }
-  if (!hasSuccessfulStructuredMutation(params.allToolCalls)) {
-    return {
-      shouldIntervene: false,
-      probeRuns: [],
-    };
-  }
-
+  const workspaceRoot = params.workspaceRoot!.trim();
   const plans = buildAcceptanceProbePlans(workspaceRoot);
-  if (plans.length === 0) {
-    return {
-      shouldIntervene: false,
-      probeRuns: [],
-    };
-  }
-
   const probeRuns: ToolCallRecord[] = [];
   for (const plan of plans) {
     const startedAt = Date.now();
     let result: string;
     try {
-      result = await params.activeToolHandler(plan.toolName, plan.args);
+      result = JSON.stringify({
+        ...(await runVerificationProbe(plan)),
+        __agencVerification: {
+          probeId: plan.id,
+          category: plan.category,
+          profile: plan.profile,
+          repoLocal: true,
+          cwd: plan.cwd,
+          command: [plan.command, ...plan.args].join(" ").trim(),
+          writesTempOnly: plan.writesTempOnly,
+        },
+      });
     } catch (error) {
       result = JSON.stringify({
         error: error instanceof Error ? error.message : String(error),
@@ -271,9 +155,10 @@ export async function runDeterministicAcceptanceProbes(params: {
     }
     const isError = didToolCallFail(false, result);
     probeRuns.push({
-      name: plan.toolName,
+      name: "verification.runProbe",
       args: {
-        ...plan.args,
+        probeId: plan.id,
+        cwd: plan.cwd,
         __runtimeAcceptanceProbe: true,
       },
       result,
@@ -293,12 +178,15 @@ export async function runDeterministicAcceptanceProbes(params: {
     executedProbeCount: probeRuns.length,
     failedProbeCount: failedRuns.length,
     executedCommands: probeRuns.map((run) => {
-      const command =
-        typeof run.args.command === "string" ? run.args.command : run.name;
-      const commandArgs = Array.isArray(run.args.args)
-        ? run.args.args.filter((value): value is string => typeof value === "string")
-        : [];
-      return [command, ...commandArgs].join(" ");
+      try {
+        const parsed = JSON.parse(run.result) as Record<string, unknown>;
+        if (typeof parsed.command === "string" && parsed.command.trim().length > 0) {
+          return parsed.command.trim();
+        }
+      } catch {
+        // Ignore malformed results and fall back to the probe id.
+      }
+      return typeof run.args.probeId === "string" ? run.args.probeId : run.name;
     }),
     failureExcerpts: failedRuns
       .map((run) => truncate(extractToolFailureTextFromResult(run.result), 240)),
@@ -323,4 +211,28 @@ export async function runDeterministicAcceptanceProbes(params: {
     evidence,
     probeRuns,
   };
+}
+
+export function shouldRunDeterministicAcceptanceProbes(params: {
+  readonly workspaceRoot?: string;
+  readonly targetArtifacts?: readonly string[];
+  readonly allToolCalls: readonly ToolCallRecord[];
+  readonly activeToolHandler?: unknown;
+}): boolean {
+  const workspaceRoot = params.workspaceRoot?.trim();
+  if (!workspaceRoot) {
+    return false;
+  }
+  if (
+    params.targetArtifacts &&
+    params.targetArtifacts.length > 0 &&
+    areDocumentationOnlyArtifacts(params.targetArtifacts)
+  ) {
+    return false;
+  }
+  if (!hasSuccessfulStructuredMutation(params.allToolCalls)) {
+    return false;
+  }
+  const plans = buildAcceptanceProbePlans(workspaceRoot);
+  return plans.length > 0;
 }

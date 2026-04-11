@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -19,8 +19,10 @@ import { parseTrajectoryTrace } from "./types.js";
 export type PipelineImplementationGateScenarioCategory =
   | "shell_stub_replay"
   | "deterministic_false_completion"
+  | "live_runtime_false_completion"
   | "scaffold_placeholder"
   | "implementation_repair"
+  | "wrong_artifact_verifier"
   | "resume_partial_completion"
   | "degraded_provider_retry"
   | "safety_incomplete_output";
@@ -66,6 +68,302 @@ function ratio(numerator: number, denominator: number): number {
     return 0;
   }
   return numerator / denominator;
+}
+
+function createSequentialProvider(
+  name: string,
+  responses: readonly LLMResponse[],
+): LLMProvider {
+  const queue = [...responses];
+  const nextResponse = async (): Promise<LLMResponse> => {
+    const response = queue.shift();
+    if (!response) {
+      throw new Error(`No queued LLM response remained for ${name}`);
+    }
+    return response;
+  };
+  return {
+    name,
+    chat: async () => nextResponse(),
+    chatStream: async () => nextResponse(),
+    healthCheck: async () => true,
+  };
+}
+
+function buildRuntimeRequiredToolEvidence(workspaceRoot: string, targetArtifacts: readonly string[]) {
+  return {
+    maxCorrectionAttempts: 0,
+    verificationContract: {
+      workspaceRoot,
+      targetArtifacts,
+      acceptanceCriteria: ["Grounded implementation and verification must both pass."],
+      completionContract: {
+        taskClass: "behavior_required" as const,
+        placeholdersAllowed: false,
+        partialCompletionAllowed: false,
+        placeholderTaxonomy: "implementation" as const,
+      },
+    },
+  };
+}
+
+async function runLiveRuntimeFalseCompletionScenario(): Promise<PipelineImplementationGateScenarioArtifact> {
+  const workspaceRoot = await mkdtemp(
+    path.join(tmpdir(), "agenc-phase12-false-completion-"),
+  );
+  try {
+    const provider = createSequentialProvider("phase12-false-completion", [
+      {
+        content: "",
+        finishReason: "tool_calls",
+        toolCalls: [
+          {
+            id: "tc-1",
+            name: "system.writeFile",
+            arguments: JSON.stringify({
+              path: "src/lexer.c",
+              content: "int lex(void) { return 1; }\n",
+            }),
+          },
+        ],
+        usage: { promptTokens: 40, completionTokens: 20, totalTokens: 60 },
+        model: "phase12-model",
+      },
+      {
+        content:
+          "All requested phases are fully implemented, integrated, and production-ready.",
+        toolCalls: [],
+        usage: { promptTokens: 35, completionTokens: 18, totalTokens: 53 },
+        model: "phase12-model",
+        finishReason: "stop",
+      },
+    ]);
+    const toolHandler = async (name: string, args: Record<string, unknown>) => {
+      if (name === "system.writeFile") {
+        const relativePath =
+          typeof args.path === "string" ? args.path : "missing-path";
+        const content = typeof args.content === "string" ? args.content : "";
+        const absolutePath = path.join(workspaceRoot, relativePath);
+        await mkdir(path.dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, content, "utf8");
+      }
+      return JSON.stringify({
+        ok: true,
+        path: args.path,
+      });
+    };
+    const executor = new ChatExecutor({
+      providers: [provider],
+      toolHandler,
+      runtimeContractFlags: {
+        runtimeContractV2: true,
+        stopHooksEnabled: true,
+        asyncTasksEnabled: false,
+        persistentWorkersEnabled: false,
+        mailboxEnabled: false,
+        verifierRuntimeRequired: false,
+        verifierProjectBootstrap: false,
+        workerIsolationWorktree: false,
+        workerIsolationRemote: false,
+      },
+    });
+    const targetArtifacts = [
+      path.join(workspaceRoot, "src/lexer.c"),
+      path.join(workspaceRoot, "src/parser.c"),
+    ];
+    const result = await executeChatToLegacyResult(executor, {
+      message: {
+        id: "phase12-false-completion",
+        channel: "eval",
+        senderId: "phase12",
+        senderName: "Phase 12",
+        sessionId: "phase12-false-completion",
+        content: "Implement every remaining file without stopping early.",
+        timestamp: Date.now(),
+        scope: "dm",
+      },
+      history: [],
+      systemPrompt: "You are an evaluation harness.",
+      sessionId: "phase12-false-completion",
+      runtimeContext: { workspaceRoot },
+      requiredToolEvidence: buildRuntimeRequiredToolEvidence(
+        workspaceRoot,
+        targetArtifacts,
+      ),
+    });
+
+    const observedOutcome = `${result.stopReason}:${result.completionState}`;
+    return {
+      scenarioId: "live_runtime_false_completion_gate",
+      title:
+        "Live runtime rejects partial writes followed by a polished completion summary",
+      category: "live_runtime_false_completion",
+      mandatory: true,
+      executionMode: "runtime",
+      passed:
+        result.stopReason === "validation_error" &&
+        result.completionState === "partial" &&
+        observedOutcome !== "completed:completed",
+      falseCompleted: result.completionState === "completed",
+      observedOutcome,
+      expectedOutcome: "validation_error:partial",
+      notes: `writes=${result.toolCalls.filter((call) => call.name === "system.writeFile").length}`,
+    };
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+}
+
+async function runWrongArtifactVerifierScenario(): Promise<PipelineImplementationGateScenarioArtifact> {
+  const workspaceRoot = await mkdtemp(
+    path.join(tmpdir(), "agenc-phase12-wrong-artifact-"),
+  );
+  try {
+    const provider = createSequentialProvider("phase12-wrong-artifact", [
+      {
+        content: "",
+        finishReason: "tool_calls",
+        toolCalls: [
+          {
+            id: "tc-1",
+            name: "system.writeFile",
+            arguments: JSON.stringify({
+              path: "src/main.c",
+              content:
+                "int duplicate_symbol(void) { return 1; }\nint duplicate_symbol(void) { return 2; }\n",
+            }),
+          },
+        ],
+        usage: { promptTokens: 40, completionTokens: 24, totalTokens: 64 },
+        model: "phase12-model",
+      },
+      {
+        content:
+          "Implemented the requested runtime modules and verified the workspace state.",
+        toolCalls: [],
+        usage: { promptTokens: 36, completionTokens: 16, totalTokens: 52 },
+        model: "phase12-model",
+        finishReason: "stop",
+      },
+    ]);
+    const toolHandler = async (name: string, args: Record<string, unknown>) => {
+      if (name === "system.writeFile") {
+        const relativePath =
+          typeof args.path === "string" ? args.path : "missing-path";
+        const content = typeof args.content === "string" ? args.content : "";
+        const absolutePath = path.join(workspaceRoot, relativePath);
+        await mkdir(path.dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, content, "utf8");
+      }
+      return JSON.stringify({
+        ok: true,
+        path: args.path,
+      });
+    };
+    const executor = new ChatExecutor({
+      providers: [provider],
+      toolHandler,
+      runtimeContractFlags: {
+        runtimeContractV2: true,
+        stopHooksEnabled: true,
+        asyncTasksEnabled: false,
+        persistentWorkersEnabled: false,
+        mailboxEnabled: false,
+        verifierRuntimeRequired: true,
+        verifierProjectBootstrap: false,
+        workerIsolationWorktree: false,
+        workerIsolationRemote: false,
+      },
+      completionValidation: {
+        topLevelVerifier: {
+          subAgentManager: {
+            spawn: async () => "subagent:verify-wrong-artifact",
+            waitForResult: async () => ({
+              sessionId: "subagent:verify-wrong-artifact",
+              output: "Build fails.\nVERDICT: FAIL",
+              success: false,
+              durationMs: 12,
+              toolCalls: [
+                {
+                  name: "verification.runProbe",
+                  args: { probeId: "build" },
+                  result:
+                    "{\"ok\":false,\"__agencVerification\":{\"probeId\":\"build\",\"category\":\"build\",\"profile\":\"generic\"}}",
+                  isError: false,
+                  durationMs: 2,
+                },
+              ],
+              structuredOutput: {
+                type: "json_schema" as const,
+                name: "agenc_top_level_verifier_decision",
+                parsed: {
+                  verdict: "fail",
+                  summary:
+                    "The artifact is non-empty, but the verifier caught duplicate symbol definitions.",
+                },
+              },
+              completionState: "completed" as const,
+              stopReason: "completed" as const,
+            }),
+          },
+          verifierService: {
+            resolveVerifierRequirement: () => ({
+              required: true,
+              profiles: ["generic"],
+              probeCategories: ["build"],
+              mutationPolicy: "read_only_workspace",
+              allowTempArtifacts: false,
+              bootstrapSource: "disabled",
+              rationale: ["Phase 12 wrong-artifact gate"],
+            }),
+            shouldVerifySubAgentResult: () => true,
+          },
+        },
+      },
+    });
+    const artifactPath = path.join(workspaceRoot, "src/main.c");
+    const result = await executeChatToLegacyResult(executor, {
+      message: {
+        id: "phase12-wrong-artifact",
+        channel: "eval",
+        senderId: "phase12",
+        senderName: "Phase 12",
+        sessionId: "phase12-wrong-artifact",
+        content: "Implement the requested runtime artifact and verify it.",
+        timestamp: Date.now(),
+        scope: "dm",
+      },
+      history: [],
+      systemPrompt: "You are an evaluation harness.",
+      sessionId: "phase12-wrong-artifact",
+      runtimeContext: { workspaceRoot },
+      requiredToolEvidence: buildRuntimeRequiredToolEvidence(
+        workspaceRoot,
+        [artifactPath],
+      ),
+    });
+    const artifactStats = await stat(artifactPath);
+    const observedOutcome = `${result.stopReason}:${result.completionState}:${result.verifierSnapshot?.overall ?? "missing"}`;
+    return {
+      scenarioId: "non_empty_wrong_artifact_verifier_gate",
+      title:
+        "Non-empty but incorrect artifacts are rejected by the runtime verifier contract",
+      category: "wrong_artifact_verifier",
+      mandatory: true,
+      executionMode: "runtime",
+      passed:
+        artifactStats.size > 0 &&
+        result.stopReason === "validation_error" &&
+        result.completionState === "partial" &&
+        result.verifierSnapshot?.overall === "fail",
+      falseCompleted: result.completionState === "completed",
+      observedOutcome,
+      expectedOutcome: "validation_error:partial:fail",
+      notes: `bytes=${artifactStats.size}`,
+    };
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
 }
 
 async function runShellStubReplayScenario(
@@ -348,6 +646,8 @@ export async function runImplementationGateSuite(
 ): Promise<PipelineImplementationGateArtifact> {
   const scenarios = await Promise.all([
     runShellStubReplayScenario(config.incidentFixtureDir),
+    runLiveRuntimeFalseCompletionScenario(),
+    runWrongArtifactVerifierScenario(),
     runResumeAfterPartialScenario(),
     runDegradedProviderRetryScenario(),
     runSafetyIncompleteOutputScenario(),

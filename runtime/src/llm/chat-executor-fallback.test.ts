@@ -204,4 +204,52 @@ describe("callWithFallback", () => {
     expect(provider.chat).toHaveBeenCalledOnce();
     expect(provider.chatStream).not.toHaveBeenCalled();
   });
+
+  it("tracks streamed content only from the successful provider attempt", async () => {
+    const failingProvider = {
+      ...createMockProvider({
+        name: "primary",
+        chatStream: vi.fn().mockImplementation(async (_messages, onChunk) => {
+          onChunk({ content: "partial-", done: false });
+          throw new LLMServerError("primary", 503, "temporary outage");
+        }),
+      }),
+      config: { model: "primary-model" },
+    } as LLMProvider & { config: { model: string } };
+    const succeedingProvider = {
+      ...createMockProvider({
+        name: "secondary",
+        chatStream: vi.fn().mockImplementation(async (_messages, onChunk) => {
+          onChunk({ content: "final", done: false });
+          onChunk({ content: "", done: true });
+          return mockResponse({ content: "done", model: "secondary-model" });
+        }),
+      }),
+      config: { model: "secondary-model" },
+    } as LLMProvider & { config: { model: string } };
+    const onStreamChunk = vi.fn();
+
+    const result = await callWithFallback(
+      {
+        providers: [failingProvider, succeedingProvider],
+        cooldowns: new Map(),
+        promptBudget: {},
+        retryPolicyMatrix: DEFAULT_LLM_RETRY_POLICY_MATRIX,
+        cooldownMs: 1_000,
+        maxCooldownMs: 60_000,
+      },
+      [{ role: "user", content: "continue" }],
+      onStreamChunk,
+      undefined,
+      {
+        callPhase: "initial",
+        toolChoice: "none",
+      },
+    );
+
+    expect(result.providerName).toBe("secondary");
+    expect(result.streamedContent).toBe("final");
+    expect(onStreamChunk).toHaveBeenCalledWith({ content: "partial-", done: false });
+    expect(onStreamChunk).toHaveBeenCalledWith({ content: "final", done: false });
+  });
 });

@@ -102,7 +102,9 @@ describe("ChatExecutor model orchestration", () => {
 
       // 1 initial + 3 rounds = 4 LLM calls
       expect(provider.chat).toHaveBeenCalledTimes(4);
-      expect(result.toolCalls).toHaveLength(3);
+      expect(result.toolCalls).toHaveLength(4);
+      expect(result.toolCalls.filter((call) => call.synthetic)).toHaveLength(1);
+      expect(result.runtimeContractSnapshot?.toolProtocol.repairCount).toBe(1);
     });
 
     it("per-call maxToolRounds overrides constructor default", async () => {
@@ -129,7 +131,8 @@ describe("ChatExecutor model orchestration", () => {
 
       // 1 initial + 2 rounds = 3 LLM calls
       expect(provider.chat).toHaveBeenCalledTimes(3);
-      expect(result.toolCalls).toHaveLength(2);
+      expect(result.toolCalls).toHaveLength(3);
+      expect(result.toolCalls.filter((call) => call.synthetic)).toHaveLength(1);
     });
 
     it("per-call maxModelRecalls=0 removes the recall cap", async () => {
@@ -194,7 +197,8 @@ describe("ChatExecutor model orchestration", () => {
       );
 
       expect(toolHandler).toHaveBeenCalledTimes(1);
-      expect(result.toolCalls).toHaveLength(1);
+      expect(result.toolCalls).toHaveLength(2);
+      expect(result.toolCalls.filter((call) => call.synthetic)).toHaveLength(1);
       expect(result.stopReason).toBe("budget_exceeded");
     });
   });

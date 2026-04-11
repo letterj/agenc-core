@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -276,7 +276,11 @@ describe("top-level artifact evidence gate", () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), "agenc-acceptance-probe-"));
     const sourcePath = join(workspaceRoot, "src/main.txt");
     mkdirSync(join(workspaceRoot, "src"), { recursive: true });
-    writeFileSync(join(workspaceRoot, "Makefile"), "all:\n\t@echo ok\n", "utf8");
+    writeFileSync(
+      join(workspaceRoot, "Makefile"),
+      "all:\n\t@if grep -q good src/main.txt; then echo ok; else echo build failed >&2; exit 2; fi\n",
+      "utf8",
+    );
 
     const provider = createMockProvider("primary", {
       chat: vi
@@ -335,12 +339,6 @@ describe("top-level artifact evidence gate", () => {
         );
         return safeJson({ ok: true, path: targetPath });
       }
-      if (name === "system.bash" && args.command === "make") {
-        const current = readFileSync(sourcePath, "utf8");
-        return current.includes("good")
-          ? safeJson({ exitCode: 0, stdout: "ok" })
-          : safeJson({ exitCode: 2, stderr: "build failed" });
-      }
       return safeJson({ exitCode: 0, stdout: "ok" });
     });
     const executor = new ChatExecutor({ providers: [provider], toolHandler });
@@ -354,7 +352,7 @@ describe("top-level artifact evidence gate", () => {
 
       expect(result.stopReason).toBe("completed");
       expect(result.toolCalls.filter((call) => call.name === "system.writeFile")).toHaveLength(2);
-      expect(result.toolCalls.filter((call) => call.name === "system.bash")).toHaveLength(2);
+      expect(result.toolCalls.filter((call) => call.name === "verification.runProbe")).toHaveLength(2);
       expect((provider.chat as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(4);
       expect((provider.chat as ReturnType<typeof vi.fn>).mock.calls[2]?.[1]).toMatchObject({
         toolChoice: "required",
@@ -415,5 +413,105 @@ describe("top-level artifact evidence gate", () => {
     });
 
     expect(decision.shouldIntervene).toBe(false);
+  });
+
+  it("fails closed inside the executor when runtime-owned top-level verification cannot start", async () => {
+    rmSync(WORKSPACE_ROOT, { recursive: true, force: true });
+    mkdirSync(join(WORKSPACE_ROOT, "src"), { recursive: true });
+    const provider = createMockProvider("primary", {
+      chat: vi
+        .fn<[LLMMessage[], LLMChatOptions?], Promise<LLMResponse>>()
+        .mockResolvedValueOnce(
+          mockResponse({
+            content: "",
+            finishReason: "tool_calls",
+            toolCalls: [
+              {
+                id: "tc-1",
+                name: "system.writeFile",
+                arguments: safeJson({
+                  path: "src/main.c",
+                  content: "int main(void) { return 0; }\n",
+                }),
+              },
+            ],
+          }),
+        )
+        .mockResolvedValueOnce(
+          mockResponse({
+            content: "Applied changes summary.",
+          }),
+        ),
+    });
+    const toolHandler = vi.fn(async (name: string, args: Record<string, unknown>) => {
+      if (name === "system.writeFile") {
+        const relativePath = typeof args.path === "string" ? args.path : "";
+        const content = typeof args.content === "string" ? args.content : "";
+        const absolutePath = join(WORKSPACE_ROOT, relativePath);
+        mkdirSync(dirname(absolutePath), { recursive: true });
+        writeFileSync(absolutePath, content, "utf8");
+      }
+      return safeJson({ ok: true, path: args.path });
+    });
+    const executor = new ChatExecutor({
+      providers: [provider],
+      toolHandler,
+      runtimeContractFlags: {
+        runtimeContractV2: true,
+        stopHooksEnabled: false,
+        asyncTasksEnabled: false,
+        persistentWorkersEnabled: false,
+        mailboxEnabled: false,
+        verifierRuntimeRequired: true,
+        verifierProjectBootstrap: false,
+        workerIsolationWorktree: false,
+        workerIsolationRemote: false,
+      },
+      completionValidation: {
+        topLevelVerifier: {
+          subAgentManager: {
+            spawn: vi.fn(async () => {
+              throw new Error("verifier unavailable");
+            }),
+            waitForResult: vi.fn(async () => null),
+          },
+          verifierService: {
+            resolveVerifierRequirement: vi.fn(() => ({
+              required: true,
+              profiles: ["generic"],
+              probeCategories: ["build"],
+              mutationPolicy: "read_only_workspace",
+              allowTempArtifacts: false,
+              bootstrapSource: "disabled",
+              rationale: ["test"],
+            })),
+            shouldVerifySubAgentResult: vi.fn(() => true),
+          },
+        },
+      },
+    });
+
+    const result = await executor.execute(
+      createParams({
+        requiredToolEvidence: {
+          maxCorrectionAttempts: 1,
+          verificationContract: {
+            workspaceRoot: WORKSPACE_ROOT,
+            targetArtifacts: [`${WORKSPACE_ROOT}/src/main.c`],
+            completionContract: {
+              taskClass: "build_required",
+              placeholdersAllowed: false,
+              partialCompletionAllowed: false,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.stopReason).toBe("validation_error");
+    expect(result.completionState).toBe("partial");
+    expect(result.verifierSnapshot?.overall).toBe("retry");
+    expect(result.runtimeContractSnapshot?.verifier.overall).toBe("retry");
+    expect(result.content).toContain("Top-level verifier worker could not be started.");
   });
 });

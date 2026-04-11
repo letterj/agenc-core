@@ -19,6 +19,8 @@
 
 import {
   checkRequestTimeout,
+  emitExecutionTrace,
+  pushMessage,
 } from "./chat-executor-ctx-helpers.js";
 import {
   initializeExecutionContext,
@@ -33,6 +35,12 @@ import { deriveWorkflowProgressSnapshot } from "../workflow/completion-progress.
 import { buildRuntimeEconomicsSummary } from "./run-budget.js";
 import { deriveActiveTaskContext } from "./turn-execution-contract.js";
 import { resolveWorkflowEvidenceFromRequiredToolEvidence } from "./turn-execution-contract.js";
+import {
+  setAllowedRequestTaskMilestones,
+} from "./request-task-progress.js";
+import {
+  buildRequestMilestoneRuntimeInstruction,
+} from "../workflow/request-task-runtime.js";
 import type {
   ChatExecuteParams,
   ChatExecutorResult,
@@ -84,12 +92,47 @@ export async function executeRequest(
     resetSessionTokens: helpers.resetSessionTokens,
   };
   const ctx = await initializeExecutionContext(params, deps, initHelpers);
+  emitExecutionTrace(ctx, {
+    type: "runtime_contract_snapshot",
+    phase: "initial",
+    callIndex: ctx.callIndex,
+    payload: {
+      stage: "initialized",
+      runtimeContract: ctx.runtimeContractSnapshot,
+    },
+  });
+  const workflowEvidence = resolveWorkflowEvidenceFromRequiredToolEvidence({
+    requiredToolEvidence: ctx.requiredToolEvidence,
+    runtimeContext: {
+      workspaceRoot: ctx.runtimeWorkspaceRoot,
+      activeTaskContext: deriveActiveTaskContext(ctx.turnExecutionContract),
+    },
+  });
+  setAllowedRequestTaskMilestones(
+    ctx.requestTaskState,
+    workflowEvidence.verificationContract?.requestCompletion?.requiredMilestones,
+  );
+  ctx.completedRequestMilestoneIds = [
+    ...ctx.requestTaskState.completedMilestoneIds,
+  ];
+  const milestoneInstruction = buildRequestMilestoneRuntimeInstruction(
+    workflowEvidence.verificationContract?.requestCompletion,
+  );
+  if (milestoneInstruction) {
+    pushMessage(
+      ctx,
+      {
+        role: "system",
+        content: milestoneInstruction,
+      },
+      "system_runtime",
+    );
+  }
 
   // Phase H: dispatch SessionStart the first time a session is
   // observed. `sessionTokens` is a per-session Map the executor
   // initializes lazily — absence of an entry means this is the
-  // first execute() call for this session id. Mirrors
-  // `claude_code/utils/sessionStart.ts:executeSessionStartHooks`.
+  // first execute() call for this session id.
   if (deps.hookRegistry && !helpers.sessionTokens.has(ctx.sessionId)) {
     await dispatchHooks({
       registry: deps.hookRegistry,
@@ -109,13 +152,6 @@ export async function executeRequest(
   checkRequestTimeout(ctx, "finalization");
 
   // Derive the final completion state from stop reason + tool calls.
-  const workflowEvidence = resolveWorkflowEvidenceFromRequiredToolEvidence({
-    requiredToolEvidence: ctx.requiredToolEvidence,
-    runtimeContext: {
-      workspaceRoot: ctx.runtimeWorkspaceRoot,
-      activeTaskContext: deriveActiveTaskContext(ctx.turnExecutionContract),
-    },
-  });
   ctx.completionState = resolveWorkflowCompletionState({
     stopReason: ctx.stopReason,
     toolCalls: ctx.allToolCalls,
@@ -123,6 +159,7 @@ export async function executeRequest(
     completionContract: workflowEvidence.completionContract,
     completedRequestMilestoneIds: ctx.completedRequestMilestoneIds,
     validationCode: ctx.validationCode,
+    verifier: ctx.verifierSnapshot,
   });
 
   const durationMs = Date.now() - ctx.startTime;
@@ -140,13 +177,13 @@ export async function executeRequest(
     completedRequestMilestoneIds: ctx.completedRequestMilestoneIds,
     updatedAt: Date.now(),
     contractFingerprint: ctx.turnExecutionContract.contractFingerprint,
+    verifier: ctx.verifierSnapshot,
   });
 
   // Phase H: dispatch Stop / StopFailure at the terminal path.
   // Stop fires on completed state; StopFailure on any non-
   // completed state (budget_exceeded, no_progress, cancelled,
-  // provider_error, timeout, etc.). Mirrors
-  // `claude_code/query/stopHooks.ts:executeStopHooks`.
+  // provider_error, timeout, etc.).
   if (deps.hookRegistry) {
     const stopEvent: "Stop" | "StopFailure" =
       ctx.stopReason === "completed" || ctx.stopReason === "tool_calls"
@@ -164,6 +201,16 @@ export async function executeRequest(
       },
     });
   }
+
+  emitExecutionTrace(ctx, {
+    type: "runtime_contract_snapshot",
+    phase: "tool_followup",
+    callIndex: ctx.callIndex,
+    payload: {
+      stage: "finalized",
+      runtimeContract: ctx.runtimeContractSnapshot,
+    },
+  });
 
   return {
     content: ctx.finalContent,
@@ -194,6 +241,8 @@ export async function executeRequest(
     ),
     stopReason: ctx.stopReason,
     completionState: ctx.completionState,
+    verifierSnapshot: ctx.verifierSnapshot,
+    runtimeContractSnapshot: ctx.runtimeContractSnapshot,
     completionProgress,
     turnExecutionContract: ctx.turnExecutionContract,
     activeTaskContext: deriveActiveTaskContext(ctx.turnExecutionContract),

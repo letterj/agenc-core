@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ChatExecutorResult } from "../llm/chat-executor.js";
+import { buildStopHookRuntime } from "../llm/hooks/stop-hooks.js";
 import type { LLMProvider, ToolHandler } from "../llm/types.js";
 import { InMemoryBackend } from "../memory/in-memory/backend.js";
 import { SqliteBackend } from "../memory/sqlite/backend.js";
@@ -6074,6 +6075,80 @@ describe("background-run-supervisor", () => {
     expect(publishUpdate).toHaveBeenLastCalledWith(
       "session-token-budget",
       "Background run exhausted its token budget before the objective completed.",
+    );
+  });
+
+  it("parks a run after repeated worker-idle hook blocks", async () => {
+    const publishUpdate = vi.fn(async () => undefined);
+    const execute = vi.fn().mockResolvedValue(
+      makeResult({
+        content: "Still monitoring.",
+      }),
+    );
+    const supervisorLlm: LLMProvider = {
+      name: "supervisor",
+      chat: vi
+        .fn()
+        .mockResolvedValueOnce({
+          content:
+            '{"domain":"generic","kind":"finite","successCriteria":["Keep checking."],"completionCriteria":["Observe deterministic completion."],"blockedCriteria":["Runtime unavailable."],"nextCheckMs":2000,"heartbeatMs":12000,"requiresUserStop":false}',
+          toolCalls: [],
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+          model: "supervisor-model",
+          finishReason: "stop",
+        })
+        .mockResolvedValue({
+          content:
+            '{"state":"working","userUpdate":"Still monitoring.","internalSummary":"waiting","nextCheckMs":2000,"shouldNotifyUser":true}',
+          toolCalls: [],
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+          model: "supervisor-model",
+          finishReason: "stop",
+        }),
+      chatStream: vi.fn(),
+      healthCheck: vi.fn(async () => true),
+    };
+    const supervisor = new BackgroundRunSupervisor({
+      chatExecutor: { execute } as any,
+      supervisorLlm,
+      getSystemPrompt: () => "base system prompt",
+      runStore: createRunStore(),
+      createToolHandler: (): ToolHandler => vi.fn(async () => "ok"),
+      publishUpdate,
+      resolveStopHookRuntime: () =>
+        buildStopHookRuntime({
+          enabled: true,
+          handlers: [
+            {
+              id: "worker-idle-block",
+              phase: "WorkerIdle",
+              kind: "command",
+              target: "printf '{\"blockingError\":\"idle blocked\"}'",
+            },
+          ],
+        }),
+    });
+
+    await supervisor.startRun({
+      sessionId: "session-worker-idle",
+      objective: "Keep monitoring in the background.",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await eventually(() => {
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    await eventuallyAsync(async () => {
+      const snapshot = await supervisor.getRecentSnapshot("session-worker-idle");
+      expect(snapshot?.state).toBe("blocked");
+    });
+
+    const snapshot = await supervisor.getRecentSnapshot("session-worker-idle");
+    expect(snapshot?.state).toBe("blocked");
+    expect(snapshot?.lastUserUpdate).toBe("idle blocked");
+    expect(supervisor.getStatusSnapshot("session-worker-idle")?.state).toBe(
+      "blocked",
     );
   });
 

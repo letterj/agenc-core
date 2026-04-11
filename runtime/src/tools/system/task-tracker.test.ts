@@ -2,11 +2,13 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   createTaskTrackerTools,
   TaskStore,
+  type TaskTrackerToolOptions,
   TASK_LIST_ARG,
   DEFAULT_TASK_LIST_ID,
   TASK_TRACKER_TOOL_NAMES,
 } from "./task-tracker.js";
 import type { Tool, ToolResult } from "../types.js";
+import type { MemoryBackend } from "../../memory/types.js";
 
 interface ParsedResult {
   readonly raw: ToolResult;
@@ -17,6 +19,44 @@ function findTool(tools: readonly Tool[], name: string): Tool {
   const tool = tools.find((t) => t.name === name);
   if (!tool) throw new Error(`tool not found: ${name}`);
   return tool;
+}
+
+function createMemoryBackendStub(): MemoryBackend {
+  const kv = new Map<string, unknown>();
+  return {
+    name: "stub",
+    addEntry: async () => {
+      throw new Error("not implemented");
+    },
+    getThread: async () => [],
+    query: async () => [],
+    deleteThread: async () => 0,
+    listSessions: async () => [],
+    set: async (key: string, value: unknown) => {
+      kv.set(key, JSON.parse(JSON.stringify(value)));
+    },
+    get: async <T = unknown>(key: string) => {
+      const value = kv.get(key);
+      return value === undefined
+        ? undefined
+        : (JSON.parse(JSON.stringify(value)) as T);
+    },
+    delete: async (key: string) => kv.delete(key),
+    has: async (key: string) => kv.has(key),
+    listKeys: async (prefix?: string) =>
+      [...kv.keys()].filter((key) => !prefix || key.startsWith(prefix)),
+    getDurability: () => ({
+      level: "sync",
+      supportsFlush: true,
+      description: "test",
+    }),
+    flush: async () => {},
+    clear: async () => {
+      kv.clear();
+    },
+    close: async () => {},
+    healthCheck: async () => true,
+  };
 }
 
 async function callTool(
@@ -37,21 +77,34 @@ describe("task-tracker", () => {
   let list: Tool;
   let get: Tool;
   let update: Tool;
+  let wait: Tool;
+  let output: Tool;
+  let toolOptions: TaskTrackerToolOptions;
 
   beforeEach(() => {
     let now = 1_000;
     store = new TaskStore({ now: () => now++ });
-    tools = createTaskTrackerTools(store);
+    toolOptions = {};
+    tools = createTaskTrackerTools(store, toolOptions);
     create = findTool(tools, "task.create");
     list = findTool(tools, "task.list");
     get = findTool(tools, "task.get");
     update = findTool(tools, "task.update");
+    wait = findTool(tools, "task.wait");
+    output = findTool(tools, "task.output");
   });
 
   describe("registration metadata", () => {
-    it("exposes the four task tracker tools", () => {
+    it("exposes the six task tracker tools", () => {
       const names = tools.map((t) => t.name).sort();
-      expect(names).toEqual(["task.create", "task.get", "task.list", "task.update"]);
+      expect(names).toEqual([
+        "task.create",
+        "task.get",
+        "task.list",
+        "task.output",
+        "task.update",
+        "task.wait",
+      ]);
     });
 
     it("each tool has a non-trivial description and an inputSchema", () => {
@@ -104,7 +157,7 @@ describe("task-tracker", () => {
     });
 
     it("preserves activeForm and metadata when provided", async () => {
-      await callTool(create, {
+      const result = await callTool(create, {
         subject: "Run the build",
         description: "npm run build",
         activeForm: "Running the build",
@@ -113,6 +166,55 @@ describe("task-tracker", () => {
       const stored = store.list(DEFAULT_TASK_LIST_ID)[0];
       expect(stored.activeForm).toBe("Running the build");
       expect(stored.metadata).toEqual({ priority: "high", tags: ["ci"] });
+      expect(result.body.taskRuntime).toMatchObject({
+        fullTask: expect.objectContaining({
+          subject: "Run the build",
+        }),
+        runtimeMetadata: {
+          hasRuntimeMetadata: false,
+          milestoneIds: [],
+          verification: false,
+          malformed: false,
+          errors: [],
+        },
+      });
+    });
+
+    it("returns normalized runtime metadata alongside the compact task summary", async () => {
+      const result = await callTool(create, {
+        subject: "Implement phase 1",
+        description: "Ship the first milestone",
+        metadata: {
+          _runtime: {
+            milestoneIds: ["phase_1"],
+            verification: true,
+          },
+        },
+      });
+
+      expect(result.body.task).toMatchObject({
+        id: "1",
+        subject: "Implement phase 1",
+        status: "pending",
+      });
+      expect(result.body.taskRuntime).toMatchObject({
+        fullTask: expect.objectContaining({
+          id: "1",
+          metadata: {
+            _runtime: {
+              milestoneIds: ["phase_1"],
+              verification: true,
+            },
+          },
+        }),
+        runtimeMetadata: {
+          hasRuntimeMetadata: true,
+          milestoneIds: ["phase_1"],
+          verification: true,
+          malformed: false,
+          errors: [],
+        },
+      });
     });
   });
 
@@ -161,6 +263,89 @@ describe("task-tracker", () => {
     });
   });
 
+  describe("runtime claim semantics", () => {
+    it("claims pending worker assignments for a specific owner", async () => {
+      const task = await store.createRuntimeTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        kind: "worker_assignment",
+        subject: "Implement parser step",
+        description: "Handle the next bounded worker assignment",
+        status: "pending",
+        summary: "Queued for a worker.",
+      });
+
+      const claimed = await store.claimTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        taskId: task.id,
+        owner: "worker-1",
+        summary: "Claimed by worker-1.",
+      });
+
+      expect(claimed).toMatchObject({
+        id: task.id,
+        kind: "worker_assignment",
+        status: "in_progress",
+        owner: "worker-1",
+        summary: "Claimed by worker-1.",
+      });
+    });
+
+    it("releases claimed worker assignments back to pending", async () => {
+      const task = await store.createRuntimeTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        kind: "worker_assignment",
+        subject: "Implement lexer step",
+        description: "Handle the next bounded worker assignment",
+        status: "pending",
+      });
+      await store.claimTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        taskId: task.id,
+        owner: "worker-2",
+      });
+
+      const released = await store.releaseTaskClaim({
+        listId: DEFAULT_TASK_LIST_ID,
+        taskId: task.id,
+        owner: "worker-2",
+        summary: "Returned to the queue.",
+      });
+
+      expect(released).toMatchObject({
+        id: task.id,
+        status: "pending",
+        summary: "Returned to the queue.",
+      });
+      expect(released?.owner).toBeUndefined();
+    });
+
+    it("requeues in-flight worker assignments during runtime repair", async () => {
+      const repairStore = new TaskStore({
+        memoryBackend: createMemoryBackendStub(),
+      });
+
+      const task = await repairStore.createRuntimeTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        kind: "worker_assignment",
+        subject: "Implement expansion step",
+        description: "Handle the next bounded worker assignment",
+        status: "in_progress",
+        owner: "worker-3",
+        summary: "Running worker assignment.",
+      });
+
+      await repairStore.repairRuntimeState();
+
+      const repaired = await repairStore.getTask(DEFAULT_TASK_LIST_ID, task.id);
+      expect(repaired).toMatchObject({
+        id: task.id,
+        status: "pending",
+      });
+      expect(repaired?.owner).toBeUndefined();
+      expect(repaired?.summary).toMatch(/returned to the queue|worker assignment/i);
+    });
+  });
+
   describe("task.get", () => {
     beforeEach(async () => {
       await callTool(create, {
@@ -182,6 +367,19 @@ describe("task-tracker", () => {
       expect(task.blockedBy).toEqual([]);
       expect(typeof task.createdAt).toBe("number");
       expect(typeof task.updatedAt).toBe("number");
+      expect(result.body.taskRuntime).toMatchObject({
+        fullTask: expect.objectContaining({
+          id: "1",
+          description: "Tail daemon log for the last hour",
+        }),
+        runtimeMetadata: {
+          hasRuntimeMetadata: false,
+          milestoneIds: [],
+          verification: false,
+          malformed: false,
+          errors: [],
+        },
+      });
     });
 
     it("returns an error when the task does not exist", async () => {
@@ -230,6 +428,46 @@ describe("task-tracker", () => {
       expect(merged?.metadata).toEqual({ retries: 3 });
     });
 
+    it("surfaces malformed runtime metadata in the additive taskRuntime payload", async () => {
+      const result = await callTool(update, {
+        taskId: "1",
+        metadata: {
+          _runtime: {
+            milestoneIds: ["phase_1", "phase_1", ""],
+            verification: "yes",
+          },
+        },
+      });
+
+      expect(result.body.task).toMatchObject({
+        id: "1",
+        status: "pending",
+      });
+      expect(result.body.taskRuntime).toMatchObject({
+        fullTask: expect.objectContaining({
+          id: "1",
+        }),
+      });
+      expect(result.body.taskRuntime).toMatchObject({
+        runtimeMetadata: expect.objectContaining({
+          hasRuntimeMetadata: true,
+          malformed: true,
+          milestoneIds: ["phase_1"],
+          verification: false,
+        }),
+      });
+      expect(
+        ((result.body.taskRuntime as Record<string, unknown>).runtimeMetadata as Record<string, unknown>)
+          .errors,
+      ).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("verification must be a boolean"),
+          expect.stringContaining("cannot contain duplicates"),
+          expect.stringContaining("cannot contain empty strings"),
+        ]),
+      );
+    });
+
     it("appends unique blockedBy ids", async () => {
       await callTool(update, { taskId: "1", addBlockedBy: ["2", "3"] });
       await callTool(update, { taskId: "1", addBlockedBy: ["3", "4"] });
@@ -265,6 +503,118 @@ describe("task-tracker", () => {
     it("rejects metadata that is not a plain object", async () => {
       const result = await callTool(update, { taskId: "1", metadata: "wat" });
       expect(result.raw.isError).toBe(true);
+    });
+
+    it("blocks completion when the runtime completion guard rejects it", async () => {
+      tools = createTaskTrackerTools(store, {
+        onBeforeTaskComplete: async () => ({
+          outcome: "block",
+          message: "completion blocked",
+        }),
+      });
+      update = findTool(tools, "task.update");
+
+      const result = await callTool(update, { taskId: "1", status: "completed" });
+
+      expect(result.raw.isError).toBe(true);
+      expect(result.body.error).toContain("completion blocked");
+      expect(store.get(DEFAULT_TASK_LIST_ID, "1")?.status).toBe("pending");
+    });
+
+    it("rejects stale completion when the task changes during the guard", async () => {
+      tools = createTaskTrackerTools(store, {
+        onBeforeTaskComplete: async () => {
+          store.update(DEFAULT_TASK_LIST_ID, "1", {
+            metadata: { changedBy: "guard" },
+          });
+          return { outcome: "allow" };
+        },
+      });
+      update = findTool(tools, "task.update");
+
+      const result = await callTool(update, {
+        taskId: "1",
+        status: "completed",
+        metadata: { ready: true },
+      });
+
+      expect(result.raw.isError).toBe(true);
+      expect(result.body.error).toContain("changed while completion hook was running");
+      const stored = store.get(DEFAULT_TASK_LIST_ID, "1");
+      expect(stored?.status).toBe("pending");
+      expect(stored?.metadata).toEqual({ changedBy: "guard" });
+      expect((result.body.task as Record<string, unknown> | undefined)?.revision).toBeUndefined();
+    });
+  });
+
+  describe("task.wait and task.output", () => {
+    it("returns terminal state and persisted output for runtime-managed tasks", async () => {
+      const runtimeTask = await store.createRuntimeTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        kind: "subagent",
+        subject: "Implement phase",
+        description: "Finish the delegated phase",
+        summary: "Delegated worker started.",
+      });
+
+      await store.finalizeRuntimeTask({
+        listId: DEFAULT_TASK_LIST_ID,
+        taskId: runtimeTask.id,
+        status: "completed",
+        summary: "Delegated worker completed successfully.",
+        output: "{\"ok\":true}",
+        structuredOutput: { ok: true },
+        usage: { outputTokens: 12 },
+        externalRef: {
+          kind: "subagent",
+          id: "subagent:1",
+          sessionId: "subagent:1",
+        },
+        executionLocation: {
+          mode: "worktree",
+          workspaceRoot: "/workspace",
+          workingDirectory: "/tmp/worktree-1",
+          gitRoot: "/workspace",
+          worktreePath: "/tmp/worktree-1",
+          lifecycle: "active",
+        },
+      });
+
+      const waited = await callTool(wait, {
+        taskId: runtimeTask.id,
+        until: "terminal",
+      });
+      expect(waited.body.ready).toBe(true);
+      expect(waited.body.task).toMatchObject({
+        id: runtimeTask.id,
+        status: "completed",
+        outputReady: true,
+        executionLocation: {
+          mode: "worktree",
+          worktreePath: "/tmp/worktree-1",
+        },
+      });
+
+      const persistedOutput = await callTool(output, {
+        taskId: runtimeTask.id,
+        includeEvents: true,
+      });
+      expect(persistedOutput.body.ready).toBe(true);
+      expect(persistedOutput.body.summary).toBe(
+        "Delegated worker completed successfully.",
+      );
+      expect(persistedOutput.body.output).toBe("{\"ok\":true}");
+      expect(persistedOutput.body.structuredOutput).toEqual({ ok: true });
+      expect(persistedOutput.body.usage).toEqual({ outputTokens: 12 });
+      expect(persistedOutput.body.externalRef).toMatchObject({
+        kind: "subagent",
+        id: "subagent:1",
+      });
+      expect(persistedOutput.body.executionLocation).toMatchObject({
+        mode: "worktree",
+        worktreePath: "/tmp/worktree-1",
+      });
+      expect(persistedOutput.body.events).toBeInstanceOf(Array);
     });
   });
 
@@ -311,6 +661,84 @@ describe("task-tracker", () => {
       expect(store.list("ephemeral")).toHaveLength(1);
       expect(store.dropList("ephemeral")).toBe(true);
       expect(store.list("ephemeral")).toHaveLength(0);
+    });
+  });
+
+  describe("runtime tracing hooks", () => {
+    it("emits lifecycle notifications including task_created for runtime tasks", async () => {
+      const events: string[] = [];
+      const tracedStore = new TaskStore({
+        now: (() => {
+          let now = 10;
+          return () => now++;
+        })(),
+        onTaskEvent: async (event) => {
+          events.push(event.type);
+        },
+      });
+
+      await tracedStore.createRuntimeTask({
+        listId: "session-trace",
+        kind: "subagent",
+        subject: "Run verifier",
+        description: "Run verifier",
+        status: "in_progress",
+      });
+
+      expect(events).toEqual(["task_created", "task_started"]);
+    });
+
+    it("emits bounded task.wait and task.output access events once per tool call", async () => {
+      const accessEvents: Array<Record<string, unknown>> = [];
+      const tracedStore = new TaskStore({
+        now: (() => {
+          let now = 100;
+          return () => now++;
+        })(),
+      });
+      const tracedTools = createTaskTrackerTools(tracedStore, {
+        onTaskAccessEvent: async (event) => {
+          accessEvents.push({
+            type: event.type,
+            taskId: event.taskId,
+            ready: event.ready,
+            until: event.until,
+          });
+        },
+      });
+      const tracedCreate = findTool(tracedTools, "task.create");
+      const tracedWait = findTool(tracedTools, "task.wait");
+      const tracedOutput = findTool(tracedTools, "task.output");
+
+      const created = await callTool(tracedCreate, {
+        subject: "Build",
+        description: "Run build",
+      });
+      await callTool(tracedWait, {
+        taskId: (created.body.task as Record<string, unknown>).id,
+        timeoutMs: 1,
+      });
+      await callTool(tracedOutput, {
+        taskId: (created.body.task as Record<string, unknown>).id,
+      });
+
+      expect(accessEvents).toEqual([
+        expect.objectContaining({
+          type: "task_wait_started",
+          taskId: "1",
+        }),
+        expect.objectContaining({
+          type: "task_wait_finished",
+          taskId: "1",
+          ready: false,
+          until: "terminal",
+        }),
+        expect.objectContaining({
+          type: "task_output_read",
+          taskId: "1",
+          ready: false,
+        }),
+      ]);
     });
   });
 });
