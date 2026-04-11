@@ -510,6 +510,112 @@ async function buildPersistentStopResult(
   });
 }
 
+async function buildPersistentMailboxMessagesResult(
+  params: ExecuteCoordinatorModeToolParams,
+  workerManager: PersistentWorkerManager,
+  input: CoordinatorModeInput,
+): Promise<string> {
+  const messages = await workerManager.listMailboxMessages({
+    parentSessionId: params.sessionId,
+    ...(input.workerId ? { workerIdOrSessionId: input.workerId } : {}),
+    ...(input.direction ? { direction: input.direction } : {}),
+    ...(input.status ? { status: input.status } : {}),
+    ...(input.limit ? { limit: input.limit } : {}),
+  });
+  return JSON.stringify({
+    success: true,
+    action: "messages",
+    messages,
+  });
+}
+
+async function buildPersistentMailboxAckResult(
+  params: ExecuteCoordinatorModeToolParams,
+  workerManager: PersistentWorkerManager,
+  input: CoordinatorModeInput,
+): Promise<string> {
+  const messageId = input.messageId?.trim();
+  if (!messageId) {
+    return JSON.stringify({
+      error: 'coordinator_mode action "ack" requires a non-empty "messageId"',
+    });
+  }
+  const message = await workerManager.acknowledgeMailboxMessage({
+    parentSessionId: params.sessionId,
+    messageId,
+  });
+  if (!message) {
+    return JSON.stringify({
+      error: `Mailbox message "${messageId}" was not found`,
+    });
+  }
+  return JSON.stringify({
+    success: true,
+    action: "ack",
+    message,
+  });
+}
+
+async function buildPersistentPermissionResponseResult(
+  params: ExecuteCoordinatorModeToolParams,
+  workerManager: PersistentWorkerManager,
+  input: CoordinatorModeInput,
+): Promise<string> {
+  const messageId = input.messageId?.trim();
+  if (!messageId || !input.disposition) {
+    return JSON.stringify({
+      error:
+        'coordinator_mode action "respond_permission" requires "messageId" and "disposition"',
+    });
+  }
+  const response = await workerManager.respondToPermissionRequest({
+    parentSessionId: params.sessionId,
+    messageId,
+    disposition: input.disposition,
+  });
+  if (!response) {
+    return JSON.stringify({
+      error: `Permission request "${messageId}" was not found`,
+    });
+  }
+  return JSON.stringify({
+    success: true,
+    action: "respond_permission",
+    message: response,
+  });
+}
+
+async function buildPersistentCoordinatorMessageResult(
+  params: ExecuteCoordinatorModeToolParams,
+  workerManager: PersistentWorkerManager,
+  input: CoordinatorModeInput,
+): Promise<string> {
+  const workerId = input.workerId?.trim();
+  const body = input.body?.trim();
+  if (!workerId || !body) {
+    return JSON.stringify({
+      error:
+        'coordinator_mode action "message" requires non-empty "workerId" and "body"',
+    });
+  }
+  const message = await workerManager.sendCoordinatorMessage({
+    parentSessionId: params.sessionId,
+    workerIdOrSessionId: workerId,
+    body,
+    ...(input.subject ? { subject: input.subject } : {}),
+  });
+  if (!message) {
+    return JSON.stringify({
+      error: `Worker "${workerId}" was not found`,
+    });
+  }
+  return JSON.stringify({
+    success: true,
+    action: "message",
+    message,
+  });
+}
+
 async function executePersistentCoordinatorAction(
   params: ExecuteCoordinatorModeToolParams,
   workerManager: PersistentWorkerManager,
@@ -518,6 +624,22 @@ async function executePersistentCoordinatorAction(
   switch (input.action) {
     case "list":
       return buildPersistentListResult(params, workerManager);
+    case "messages":
+      return buildPersistentMailboxMessagesResult(params, workerManager, input);
+    case "ack":
+      return buildPersistentMailboxAckResult(params, workerManager, input);
+    case "respond_permission":
+      return buildPersistentPermissionResponseResult(
+        params,
+        workerManager,
+        input,
+      );
+    case "message":
+      return buildPersistentCoordinatorMessageResult(
+        params,
+        workerManager,
+        input,
+      );
     case "stop":
       return buildPersistentStopResult(params, workerManager, input);
     case "spawn": {

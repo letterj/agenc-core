@@ -1,5 +1,6 @@
 import type { DelegationOutputValidationCode } from "../utils/delegation-validation.js";
 import type { AcceptanceProbeCategory } from "../gateway/subagent-orchestrator-types.js";
+import type { ApprovalDisposition } from "../gateway/approvals.js";
 import type {
   VerifierBootstrapSource,
   VerifierProfileKind,
@@ -96,6 +97,9 @@ export interface RuntimeWorkerLayerSnapshot {
 export interface RuntimeMailboxLayerSnapshot {
   readonly configured: boolean;
   readonly effective: boolean;
+  readonly pendingParentToWorker: number;
+  readonly pendingWorkerToParent: number;
+  readonly unackedCount: number;
   readonly inactiveReason?: string;
 }
 
@@ -172,6 +176,9 @@ export interface RuntimeWorkerHandle {
   readonly currentTaskId?: string;
   readonly lastTaskId?: string;
   readonly pendingTaskCount: number;
+  readonly pendingInboxCount?: number;
+  readonly pendingOutboxCount?: number;
+  readonly lastMailboxActivityAt?: number;
   readonly continuationSessionId?: string;
   readonly workingDirectory?: string;
   readonly verifierRequirement?: VerifierRequirement;
@@ -196,13 +203,108 @@ export interface RuntimeTaskHandle {
   readonly outputTool?: "task.output";
 }
 
-export interface RuntimeMailboxMessage {
+export type RuntimeMailboxDirection = "parent_to_worker" | "worker_to_parent";
+export type RuntimeMailboxStatus = "pending" | "acknowledged" | "handled";
+export type RuntimeMailboxMessageType =
+  | "idle_notification"
+  | "permission_request"
+  | "permission_response"
+  | "shutdown_request"
+  | "task_assignment"
+  | "mode_change"
+  | "verifier_result"
+  | "worker_summary";
+
+interface RuntimeMailboxMessageBase {
+  readonly messageId: string;
   readonly type: string;
-  readonly workerId?: string;
+  readonly parentSessionId: string;
+  readonly workerId: string;
+  readonly direction: RuntimeMailboxDirection;
+  readonly status: RuntimeMailboxStatus;
+  readonly createdAt: number;
+  readonly updatedAt: number;
   readonly taskId?: string;
-  readonly subject?: string;
-  readonly body?: string;
+  readonly correlationId?: string;
 }
+
+export interface RuntimeIdleNotificationMessage
+  extends RuntimeMailboxMessageBase {
+  readonly type: "idle_notification";
+  readonly direction: "worker_to_parent";
+  readonly summary: string;
+}
+
+export interface RuntimePermissionRequestMessage
+  extends RuntimeMailboxMessageBase {
+  readonly type: "permission_request";
+  readonly direction: "worker_to_parent";
+  readonly approvalRequestId: string;
+  readonly message: string;
+  readonly toolName?: string;
+  readonly subagentSessionId?: string;
+  readonly approverGroup?: string;
+  readonly requiredApproverRoles?: readonly string[];
+}
+
+export interface RuntimePermissionResponseMessage
+  extends RuntimeMailboxMessageBase {
+  readonly type: "permission_response";
+  readonly direction: "parent_to_worker";
+  readonly approvalRequestId: string;
+  readonly disposition: ApprovalDisposition;
+  readonly approvedBy?: string;
+}
+
+export interface RuntimeShutdownRequestMessage
+  extends RuntimeMailboxMessageBase {
+  readonly type: "shutdown_request";
+  readonly direction: "parent_to_worker";
+  readonly reason?: string;
+}
+
+export interface RuntimeTaskAssignmentMessage
+  extends RuntimeMailboxMessageBase {
+  readonly type: "task_assignment";
+  readonly direction: "parent_to_worker";
+  readonly taskId: string;
+  readonly objective: string;
+  readonly summary?: string;
+}
+
+export interface RuntimeModeChangeMessage
+  extends RuntimeMailboxMessageBase {
+  readonly type: "mode_change";
+  readonly direction: "parent_to_worker";
+  readonly subject?: string;
+  readonly body: string;
+}
+
+export interface RuntimeVerifierResultMessage
+  extends RuntimeMailboxMessageBase {
+  readonly type: "verifier_result";
+  readonly direction: "worker_to_parent";
+  readonly overall: RuntimeVerifierVerdict["overall"];
+  readonly summary?: string;
+}
+
+export interface RuntimeWorkerSummaryMessage
+  extends RuntimeMailboxMessageBase {
+  readonly type: "worker_summary";
+  readonly direction: "worker_to_parent";
+  readonly state: RuntimeWorkerHandle["state"];
+  readonly summary: string;
+}
+
+export type RuntimeMailboxMessage =
+  | RuntimeIdleNotificationMessage
+  | RuntimePermissionRequestMessage
+  | RuntimePermissionResponseMessage
+  | RuntimeShutdownRequestMessage
+  | RuntimeTaskAssignmentMessage
+  | RuntimeModeChangeMessage
+  | RuntimeVerifierResultMessage
+  | RuntimeWorkerSummaryMessage;
 
 export interface DelegatedRuntimeResult {
   readonly surface: "direct_child" | "planner_child" | "verifier";
@@ -278,6 +380,9 @@ export function createRuntimeContractSnapshot(
     mailboxLayer: {
       configured: flags.mailboxEnabled,
       effective: false,
+      pendingParentToWorker: 0,
+      pendingWorkerToParent: 0,
+      unackedCount: 0,
       inactiveReason: flags.mailboxEnabled
         ? "mailbox_not_implemented"
         : "flag_disabled",

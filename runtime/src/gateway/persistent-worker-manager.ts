@@ -1,5 +1,8 @@
 import type { MemoryBackend } from "../memory/types.js";
 import type {
+  RuntimeMailboxLayerSnapshot,
+  RuntimeMailboxMessage,
+  RuntimePermissionRequestMessage,
   RuntimeWorkerHandle,
   RuntimeWorkerLayerSnapshot,
   RuntimeVerifierVerdict,
@@ -7,13 +10,18 @@ import type {
 import type { Task, TaskStore } from "../tools/system/task-tracker.js";
 import { KeyedAsyncQueue } from "../utils/keyed-async-queue.js";
 import { silentLogger, type Logger } from "../utils/logger.js";
-import type { ApprovalEngine } from "./approvals.js";
+import type {
+  ApprovalDisposition,
+  ApprovalEngine,
+  ApprovalRequest,
+} from "./approvals.js";
 import type { ExecuteWithAgentInput } from "./delegation-tool.js";
 import {
   mapPlannerVerifierSnapshotToRuntimeVerdict,
   resolveDelegatedTerminalOutcome,
 } from "./delegated-runtime-result.js";
 import type { SubAgentManager } from "./sub-agent.js";
+import { PersistentWorkerMailbox } from "./persistent-worker-mailbox.js";
 import { buildDelegatedChildPrompt } from "./tool-handler-factory-delegation.js";
 import type { VerifierRequirement } from "./verifier-probes.js";
 import { specRequiresSuccessfulToolEvidence } from "../utils/delegation-validation.js";
@@ -69,6 +77,7 @@ interface PersistentWorkerRecord {
   executionContextFingerprint?: string;
   executionEnvelopeFingerprint?: string;
   verifierRequirement?: VerifierRequirement;
+  queuedCoordinatorNotes?: readonly string[];
   summary?: string;
   createdAt: number;
   updatedAt: number;
@@ -86,6 +95,7 @@ interface PersistentWorkerManagerOptions {
   readonly taskStore: TaskStore;
   readonly subAgentManager: SubAgentManager;
   readonly approvalEngine?: ApprovalEngine | null;
+  readonly mailbox?: PersistentWorkerMailbox | null;
   readonly logger?: Logger;
   readonly now?: () => number;
 }
@@ -207,6 +217,9 @@ function cloneWorkerRecord(record: PersistentWorkerRecord): PersistentWorkerReco
       : {}),
     ...(record.verifierRequirement
       ? { verifierRequirement: cloneVerifierRequirement(record.verifierRequirement) }
+      : {}),
+    ...(record.queuedCoordinatorNotes
+      ? { queuedCoordinatorNotes: [...record.queuedCoordinatorNotes] }
       : {}),
     ...(record.summary ? { summary: record.summary } : {}),
     createdAt: record.createdAt,
@@ -409,6 +422,13 @@ function coerceWorkerRecord(value: unknown, parentSessionId: string): Persistent
     ...(coerceVerifierRequirement(raw.verifierRequirement)
       ? { verifierRequirement: coerceVerifierRequirement(raw.verifierRequirement) }
       : {}),
+    ...(Array.isArray(raw.queuedCoordinatorNotes)
+      ? {
+          queuedCoordinatorNotes: raw.queuedCoordinatorNotes.filter(
+            (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+          ),
+        }
+      : {}),
     ...(asNonEmptyString(raw.summary)
       ? { summary: asNonEmptyString(raw.summary) }
       : {}),
@@ -464,6 +484,9 @@ function normalizeVerifierRequirement(
 function buildRuntimeWorkerHandle(params: {
   readonly worker: PersistentWorkerRecord;
   readonly pendingTaskCount: number;
+  readonly pendingInboxCount?: number;
+  readonly pendingOutboxCount?: number;
+  readonly lastMailboxActivityAt?: number;
 }): RuntimeWorkerHandle {
   const continuationSessionId =
     params.worker.activeSubagentSessionId ?? params.worker.continuationSessionId;
@@ -486,6 +509,11 @@ function buildRuntimeWorkerHandle(params: {
       : {}),
     ...(params.worker.verifierRequirement
       ? { verifierRequirement: params.worker.verifierRequirement }
+      : {}),
+    pendingInboxCount: params.pendingInboxCount ?? 0,
+    pendingOutboxCount: params.pendingOutboxCount ?? 0,
+    ...(params.lastMailboxActivityAt !== undefined
+      ? { lastMailboxActivityAt: params.lastMailboxActivityAt }
       : {}),
     stopRequested: params.worker.stopRequested,
     ...(params.worker.summary ? { summary: params.worker.summary } : {}),
@@ -536,6 +564,7 @@ export class PersistentWorkerManager {
   private readonly taskStore: TaskStore;
   private subAgentManager: SubAgentManager;
   private readonly approvalEngine?: ApprovalEngine | null;
+  private readonly mailbox?: PersistentWorkerMailbox | null;
   private readonly logger: Logger;
   private readonly now: () => number;
   private readonly queue: KeyedAsyncQueue;
@@ -545,6 +574,7 @@ export class PersistentWorkerManager {
     this.taskStore = options.taskStore;
     this.subAgentManager = options.subAgentManager;
     this.approvalEngine = options.approvalEngine;
+    this.mailbox = options.mailbox;
     this.logger = options.logger ?? silentLogger;
     this.now = options.now ?? (() => Date.now());
     this.queue = new KeyedAsyncQueue({
@@ -624,14 +654,34 @@ export class PersistentWorkerManager {
     parentSessionId: string,
   ): Promise<readonly RuntimeWorkerHandle[]> {
     const workers = await this.listWorkerRecords(parentSessionId);
+    const mailboxCounts: Array<{
+      readonly pendingInboxCount: number;
+      readonly pendingOutboxCount: number;
+      readonly lastMailboxActivityAt?: number;
+    }> = await Promise.all(
+      workers.map((worker) =>
+        this.mailbox?.getWorkerMailboxCounts({
+          parentSessionId,
+          workerId: worker.workerId,
+        }) ?? Promise.resolve({
+          pendingInboxCount: 0,
+          pendingOutboxCount: 0,
+        }),
+      ),
+    );
     const pendingCounts = await Promise.all(
-      workers.map((worker) => this.countPendingAssignments(parentSessionId, worker.workerId)),
+      workers.map((worker) =>
+        this.countPendingAssignments(parentSessionId, worker.workerId),
+      ),
     );
     return workers
       .map((worker, index) =>
         buildRuntimeWorkerHandle({
           worker,
           pendingTaskCount: pendingCounts[index] ?? 0,
+          pendingInboxCount: mailboxCounts[index]?.pendingInboxCount ?? 0,
+          pendingOutboxCount: mailboxCounts[index]?.pendingOutboxCount ?? 0,
+          lastMailboxActivityAt: mailboxCounts[index]?.lastMailboxActivityAt,
         }))
       .sort((left, right) => {
         const statePriority =
@@ -742,6 +792,8 @@ export class PersistentWorkerManager {
     return buildRuntimeWorkerHandle({
       worker,
       pendingTaskCount: 0,
+      pendingInboxCount: 0,
+      pendingOutboxCount: 0,
     });
   }
 
@@ -815,6 +867,17 @@ export class PersistentWorkerManager {
         params.assignment.admittedInput.delegationAdmission?.isolationReason,
     });
 
+    if (this.mailbox) {
+      await this.mailbox.sendToWorker({
+        type: "task_assignment",
+        parentSessionId: params.parentSessionId,
+        workerId: worker.workerId,
+        taskId: task.id,
+        objective: params.assignment.objective,
+        summary: `Queued for ${worker.workerName}.`,
+      });
+    }
+
     void this.scheduleWorker(params.parentSessionId, worker.workerId);
 
     return {
@@ -824,6 +887,7 @@ export class PersistentWorkerManager {
           params.parentSessionId,
           worker.workerId,
         ) + 1,
+        pendingInboxCount: this.mailbox ? 1 : 0,
       }),
       task,
     };
@@ -846,6 +910,103 @@ export class PersistentWorkerManager {
     return this.findReusableWorker(registry.workers, params.assignment);
   }
 
+  async listMailboxMessages(params: {
+    readonly parentSessionId: string;
+    readonly workerIdOrSessionId?: string;
+    readonly direction?: RuntimeMailboxMessage["direction"];
+    readonly status?: RuntimeMailboxMessage["status"];
+    readonly limit?: number;
+  }): Promise<readonly RuntimeMailboxMessage[]> {
+    if (!this.mailbox) return [];
+    let workerId: string | undefined;
+    if (params.workerIdOrSessionId) {
+      workerId = (
+        await this.resolveWorkerByAlias({
+          parentSessionId: params.parentSessionId,
+          workerIdOrSessionId: params.workerIdOrSessionId,
+        })
+      )?.workerId;
+      if (!workerId) {
+        return [];
+      }
+    }
+    return this.mailbox.listMessages({
+      parentSessionId: params.parentSessionId,
+      ...(workerId ? { workerId } : {}),
+      ...(params.direction ? { direction: params.direction } : {}),
+      ...(params.status ? { status: params.status } : {}),
+      ...(params.limit ? { limit: params.limit } : {}),
+    });
+  }
+
+  async acknowledgeMailboxMessage(params: {
+    readonly parentSessionId: string;
+    readonly messageId: string;
+  }): Promise<RuntimeMailboxMessage | undefined> {
+    if (!this.mailbox) return undefined;
+    const message = await this.mailbox.getMessage(params);
+    if (!message) return undefined;
+    if (message.direction === "worker_to_parent" && message.type !== "permission_request") {
+      return this.mailbox.markHandled(params);
+    }
+    return this.mailbox.acknowledgeMessage(params);
+  }
+
+  async respondToPermissionRequest(params: {
+    readonly parentSessionId: string;
+    readonly messageId: string;
+    readonly disposition: ApprovalDisposition;
+    readonly approvedBy?: string;
+  }): Promise<RuntimeMailboxMessage | undefined> {
+    if (!this.mailbox) return undefined;
+    const requestMessage = await this.mailbox.getMessage({
+      parentSessionId: params.parentSessionId,
+      messageId: params.messageId,
+    });
+    if (!requestMessage || requestMessage.type !== "permission_request") {
+      return undefined;
+    }
+    await this.mailbox.acknowledgeMessage({
+      parentSessionId: params.parentSessionId,
+      messageId: requestMessage.messageId,
+    });
+    const response = await this.mailbox.sendToWorker({
+      type: "permission_response",
+      parentSessionId: params.parentSessionId,
+      workerId: requestMessage.workerId,
+      approvalRequestId: requestMessage.approvalRequestId,
+      disposition: params.disposition,
+      ...(params.approvedBy ? { approvedBy: params.approvedBy } : {}),
+      correlationId: requestMessage.messageId,
+      ...(requestMessage.taskId ? { taskId: requestMessage.taskId } : {}),
+    });
+    void this.scheduleWorker(params.parentSessionId, requestMessage.workerId);
+    return response;
+  }
+
+  async sendCoordinatorMessage(params: {
+    readonly parentSessionId: string;
+    readonly workerIdOrSessionId: string;
+    readonly subject?: string;
+    readonly body: string;
+  }): Promise<RuntimeMailboxMessage | undefined> {
+    if (!this.mailbox) return undefined;
+    const worker = await this.resolveWorkerByAlias({
+      parentSessionId: params.parentSessionId,
+      workerIdOrSessionId: params.workerIdOrSessionId,
+    });
+    if (!worker) return undefined;
+    const message = await this.mailbox.sendToWorker({
+      type: "mode_change",
+      parentSessionId: params.parentSessionId,
+      workerId: worker.workerId,
+      body: params.body,
+      ...(params.subject ? { subject: params.subject } : {}),
+    });
+    void this.scheduleWorker(params.parentSessionId, worker.workerId);
+    return message;
+  }
+
   async stopWorker(params: {
     readonly parentSessionId: string;
     readonly workerIdOrSessionId: string;
@@ -856,6 +1017,15 @@ export class PersistentWorkerManager {
     });
     if (!resolved) {
       return undefined;
+    }
+
+    if (this.mailbox) {
+      await this.mailbox.sendToWorker({
+        type: "shutdown_request",
+        parentSessionId: params.parentSessionId,
+        workerId: resolved.workerId,
+        reason: "Coordinator stop requested.",
+      });
     }
 
     const worker = await this.mutateRegistry(
@@ -912,6 +1082,12 @@ export class PersistentWorkerManager {
         params.parentSessionId,
         worker.workerId,
       ),
+      ...(this.mailbox
+        ? await this.mailbox.getWorkerMailboxCounts({
+            parentSessionId: params.parentSessionId,
+            workerId: worker.workerId,
+          })
+        : {}),
     });
   }
 
@@ -929,14 +1105,288 @@ export class PersistentWorkerManager {
     });
   }
 
-  private hasPendingApproval(
+  private getPendingApprovalRequest(
     parentSessionId: string,
     childSessionId: string,
-  ): boolean {
-    return this.approvalEngine?.getPending().some((request) =>
+  ): ApprovalRequest | undefined {
+    return this.approvalEngine?.getPending().find((request) =>
       request.parentSessionId === parentSessionId &&
       request.subagentSessionId === childSessionId
-    ) ?? false;
+    );
+  }
+
+  private formatCoordinatorNote(message: RuntimeMailboxMessage): string | undefined {
+    if (message.type !== "mode_change") return undefined;
+    const subject = message.subject?.trim();
+    const body = message.body.trim();
+    if (!body) return undefined;
+    return subject ? `${subject}: ${body}` : body;
+  }
+
+  private async emitMailboxMessage(
+    message:
+      | {
+          readonly type: "idle_notification";
+          readonly parentSessionId: string;
+          readonly workerId: string;
+          readonly summary: string;
+        }
+      | {
+          readonly type: "worker_summary";
+          readonly parentSessionId: string;
+          readonly workerId: string;
+          readonly state: PersistentWorkerState;
+          readonly summary: string;
+          readonly taskId?: string;
+        }
+      | {
+          readonly type: "verifier_result";
+          readonly parentSessionId: string;
+          readonly workerId: string;
+          readonly overall: RuntimeVerifierVerdict["overall"];
+          readonly summary?: string;
+          readonly taskId?: string;
+        }
+      | {
+          readonly type: "permission_request";
+          readonly parentSessionId: string;
+          readonly workerId: string;
+          readonly approvalRequest: ApprovalRequest;
+          readonly taskId?: string;
+        },
+  ): Promise<RuntimeMailboxMessage | undefined> {
+    if (!this.mailbox) return undefined;
+    switch (message.type) {
+      case "idle_notification":
+        return this.mailbox.sendToParent({
+          type: "idle_notification",
+          parentSessionId: message.parentSessionId,
+          workerId: message.workerId,
+          summary: message.summary,
+        });
+      case "worker_summary":
+        return this.mailbox.sendToParent({
+          type: "worker_summary",
+          parentSessionId: message.parentSessionId,
+          workerId: message.workerId,
+          state: message.state,
+          summary: message.summary,
+          ...(message.taskId ? { taskId: message.taskId } : {}),
+        });
+      case "verifier_result":
+        return this.mailbox.sendToParent({
+          type: "verifier_result",
+          parentSessionId: message.parentSessionId,
+          workerId: message.workerId,
+          overall: message.overall,
+          ...(message.summary ? { summary: message.summary } : {}),
+          ...(message.taskId ? { taskId: message.taskId } : {}),
+        });
+      case "permission_request":
+        return this.mailbox.sendToParent({
+          type: "permission_request",
+          parentSessionId: message.parentSessionId,
+          workerId: message.workerId,
+          approvalRequestId: message.approvalRequest.id,
+          message: message.approvalRequest.message,
+          ...(message.taskId ? { taskId: message.taskId } : {}),
+          ...(message.approvalRequest.toolName
+            ? { toolName: message.approvalRequest.toolName }
+            : {}),
+          ...(message.approvalRequest.subagentSessionId
+            ? { subagentSessionId: message.approvalRequest.subagentSessionId }
+            : {}),
+          ...(message.approvalRequest.approverGroup
+            ? { approverGroup: message.approvalRequest.approverGroup }
+            : {}),
+          ...(message.approvalRequest.requiredApproverRoles
+            ? {
+                requiredApproverRoles:
+                  message.approvalRequest.requiredApproverRoles,
+              }
+            : {}),
+        });
+    }
+  }
+
+  private async ensurePermissionRequestMessage(params: {
+    readonly parentSessionId: string;
+    readonly workerId: string;
+    readonly approvalRequest: ApprovalRequest;
+    readonly taskId?: string;
+  }): Promise<RuntimePermissionRequestMessage | undefined> {
+    if (!this.mailbox) return undefined;
+    const existing = (await this.mailbox.listMessages({
+      parentSessionId: params.parentSessionId,
+      workerId: params.workerId,
+      direction: "worker_to_parent",
+    })).find(
+      (message): message is RuntimePermissionRequestMessage =>
+        message.type === "permission_request" &&
+        message.approvalRequestId === params.approvalRequest.id &&
+        message.status !== "handled",
+    );
+    if (existing) {
+      return existing;
+    }
+    const created = await this.emitMailboxMessage({
+      type: "permission_request",
+      parentSessionId: params.parentSessionId,
+      workerId: params.workerId,
+      approvalRequest: params.approvalRequest,
+      ...(params.taskId ? { taskId: params.taskId } : {}),
+    });
+    return created?.type === "permission_request" ? created : undefined;
+  }
+
+  private async markPermissionRequestHandled(params: {
+    readonly parentSessionId: string;
+    readonly workerId: string;
+    readonly approvalRequestId: string;
+  }): Promise<void> {
+    if (!this.mailbox) return;
+    const openMessages = await this.mailbox.listMessages({
+      parentSessionId: params.parentSessionId,
+      workerId: params.workerId,
+      direction: "worker_to_parent",
+    });
+    for (const message of openMessages) {
+      if (
+        message.type === "permission_request" &&
+        message.approvalRequestId === params.approvalRequestId &&
+        message.status !== "handled"
+      ) {
+        await this.mailbox.markHandled({
+          parentSessionId: params.parentSessionId,
+          messageId: message.messageId,
+        });
+      }
+    }
+  }
+
+  private async markPermissionMessagesHandledForSubagent(params: {
+    readonly parentSessionId: string;
+    readonly workerId: string;
+    readonly childSessionId: string;
+  }): Promise<void> {
+    if (!this.mailbox) return;
+    const messages = await this.mailbox.listMessages({
+      parentSessionId: params.parentSessionId,
+      workerId: params.workerId,
+      direction: "worker_to_parent",
+    });
+    for (const message of messages) {
+      if (
+        message.type === "permission_request" &&
+        message.subagentSessionId === params.childSessionId &&
+        message.status !== "handled"
+      ) {
+        await this.mailbox.markHandled({
+          parentSessionId: params.parentSessionId,
+          messageId: message.messageId,
+        });
+      }
+    }
+  }
+
+  private async markAssignmentMessageHandled(params: {
+    readonly parentSessionId: string;
+    readonly messageId?: string;
+  }): Promise<void> {
+    if (!this.mailbox || !params.messageId) return;
+    await this.mailbox.markHandled({
+      parentSessionId: params.parentSessionId,
+      messageId: params.messageId,
+    });
+  }
+
+  private async processControlMailboxMessage(params: {
+    readonly parentSessionId: string;
+    readonly workerId: string;
+    readonly message: RuntimeMailboxMessage;
+  }): Promise<void> {
+    if (!this.mailbox) return;
+    switch (params.message.type) {
+      case "permission_response": {
+        if (this.approvalEngine) {
+          await this.approvalEngine.resolve(params.message.approvalRequestId, {
+            requestId: params.message.approvalRequestId,
+            disposition: params.message.disposition,
+            ...(params.message.approvedBy
+              ? { approvedBy: params.message.approvedBy }
+              : {}),
+          });
+        }
+        await this.mailbox.markHandled({
+          parentSessionId: params.parentSessionId,
+          messageId: params.message.messageId,
+        });
+        if (params.message.correlationId) {
+          await this.mailbox.markHandled({
+            parentSessionId: params.parentSessionId,
+            messageId: params.message.correlationId,
+          });
+        } else {
+          await this.markPermissionRequestHandled({
+            parentSessionId: params.parentSessionId,
+            workerId: params.workerId,
+            approvalRequestId: params.message.approvalRequestId,
+          });
+        }
+        return;
+      }
+      case "mode_change": {
+        const note = this.formatCoordinatorNote(params.message);
+        await this.updateWorker(params.parentSessionId, params.workerId, (worker) => {
+          if (note) {
+            worker.queuedCoordinatorNotes = [
+              ...(worker.queuedCoordinatorNotes ?? []),
+              note,
+            ];
+          }
+        });
+        await this.mailbox.markHandled({
+          parentSessionId: params.parentSessionId,
+          messageId: params.message.messageId,
+        });
+        return;
+      }
+      case "shutdown_request": {
+        const shutdownMessage = params.message;
+        const worker = await this.updateWorker(
+          params.parentSessionId,
+          params.workerId,
+          (record) => {
+            record.stopRequested = true;
+            record.summary = shutdownMessage.reason?.trim().length
+              ? shutdownMessage.reason
+              : "Worker shutdown requested.";
+            if (!record.currentTaskId) {
+              record.state = "cancelled";
+            }
+          },
+        );
+        if (worker?.activeSubagentSessionId) {
+          this.subAgentManager.cancel(worker.activeSubagentSessionId);
+        }
+        await this.mailbox.markHandled({
+          parentSessionId: params.parentSessionId,
+          messageId: params.message.messageId,
+        });
+        if (worker && !worker.currentTaskId) {
+          await this.emitMailboxMessage({
+            type: "worker_summary",
+            parentSessionId: params.parentSessionId,
+            workerId: params.workerId,
+            state: "cancelled",
+            summary: "Worker stopped.",
+          });
+        }
+        return;
+      }
+      default:
+        return;
+    }
   }
 
   private async claimNextAssignment(params: {
@@ -975,6 +1425,48 @@ export class PersistentWorkerManager {
       }
     }
     return undefined;
+  }
+
+  private async claimAssignmentTask(params: {
+    readonly parentSessionId: string;
+    readonly workerId: string;
+    readonly taskId: string;
+  }): Promise<
+    | {
+        readonly task: Task;
+        readonly metadata: WorkerAssignmentMetadata;
+      }
+    | undefined
+  > {
+    const task = await this.taskStore.getTask(params.parentSessionId, params.taskId);
+    if (
+      !task ||
+      task.kind !== "worker_assignment" ||
+      task.blockedBy.length > 0
+    ) {
+      return undefined;
+    }
+    const metadata = extractWorkerAssignmentMetadata(task);
+    if (!metadata) return undefined;
+    if (
+      metadata.targetWorkerId !== undefined &&
+      metadata.targetWorkerId !== params.workerId
+    ) {
+      return undefined;
+    }
+    const claimed = await this.taskStore.claimTask({
+      listId: params.parentSessionId,
+      taskId: params.taskId,
+      owner: params.workerId,
+      summary: `Claimed by ${params.workerId}.`,
+    });
+    if (!claimed) {
+      return undefined;
+    }
+    return {
+      task: claimed,
+      metadata,
+    };
   }
 
   private async finalizeAssignmentTask(params: {
@@ -1084,6 +1576,7 @@ export class PersistentWorkerManager {
     readonly workerId: string;
     readonly task: Task;
     readonly metadata: WorkerAssignmentMetadata;
+    readonly assignmentMessageId?: string;
   }): Promise<void> {
     const assignment = params.metadata.assignment;
     await this.updateWorker(params.parentSessionId, params.workerId, (worker) => {
@@ -1100,10 +1593,16 @@ export class PersistentWorkerManager {
       params.workerId,
     );
     try {
-      const childPrompt = buildDelegatedChildPrompt(assignment.admittedInput, {
+      const basePrompt = buildDelegatedChildPrompt(assignment.admittedInput, {
         continuationAuthorized: Boolean(currentWorker?.continuationSessionId),
         workingDirectory: assignment.workingDirectory,
       });
+      const coordinatorNotes = (currentWorker?.queuedCoordinatorNotes ?? [])
+        .map((note) => note.trim())
+        .filter((note) => note.length > 0);
+      const childPrompt = coordinatorNotes.length > 0
+        ? `${basePrompt}\n\nCoordinator messages:\n${coordinatorNotes.map((note) => `- ${note}`).join("\n")}`
+        : basePrompt;
       childSessionId = await this.subAgentManager.spawn({
         parentSessionId: params.parentSessionId,
         task: assignment.objective,
@@ -1132,6 +1631,10 @@ export class PersistentWorkerManager {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      await this.markAssignmentMessageHandled({
+        parentSessionId: params.parentSessionId,
+        messageId: params.assignmentMessageId,
+      });
       await this.taskStore.finalizeRuntimeTask({
         listId: params.parentSessionId,
         taskId: params.task.id,
@@ -1147,6 +1650,20 @@ export class PersistentWorkerManager {
         worker.lastTaskId = params.task.id;
         worker.state = "idle";
         worker.summary = `Assignment failed to start: ${message}`;
+      });
+      await this.emitMailboxMessage({
+        type: "worker_summary",
+        parentSessionId: params.parentSessionId,
+        workerId: params.workerId,
+        state: "failed",
+        summary: `Assignment failed to start: ${message}`,
+        taskId: params.task.id,
+      });
+      await this.emitMailboxMessage({
+        type: "idle_notification",
+        parentSessionId: params.parentSessionId,
+        workerId: params.workerId,
+        summary: "Worker ready for assignments.",
       });
       return;
     }
@@ -1167,6 +1684,7 @@ export class PersistentWorkerManager {
       worker.state = assignment.verifierRequirement?.required === true
         ? "verifying"
         : "running";
+      worker.queuedCoordinatorNotes = [];
       worker.summary = `Running ${assignment.objective}.`;
     });
 
@@ -1179,6 +1697,15 @@ export class PersistentWorkerManager {
           childSessionId,
           assignment,
           childResult,
+        });
+        await this.markAssignmentMessageHandled({
+          parentSessionId: params.parentSessionId,
+          messageId: params.assignmentMessageId,
+        });
+        await this.markPermissionMessagesHandledForSubagent({
+          parentSessionId: params.parentSessionId,
+          workerId: params.workerId,
+          childSessionId,
         });
         await this.updateWorker(params.parentSessionId, params.workerId, (worker) => {
           worker.currentTaskId = undefined;
@@ -1196,13 +1723,71 @@ export class PersistentWorkerManager {
                 : finalized.failureReason ?? `Assignment ${finalized.terminalStatus}.`;
           }
         });
+        if (finalized.verifierVerdict) {
+          await this.emitMailboxMessage({
+            type: "verifier_result",
+            parentSessionId: params.parentSessionId,
+            workerId: params.workerId,
+            overall: finalized.verifierVerdict.overall,
+            summary: finalized.verifierVerdict.summary,
+            taskId: params.task.id,
+          });
+        }
+        const finalState = (await this.getWorkerRecord(
+          params.parentSessionId,
+          params.workerId,
+        ))?.state ?? "idle";
+        const finalSummary = (await this.getWorkerRecord(
+          params.parentSessionId,
+          params.workerId,
+        ))?.summary ?? `Completed ${assignment.objective}.`;
+        await this.emitMailboxMessage({
+          type: "worker_summary",
+          parentSessionId: params.parentSessionId,
+          workerId: params.workerId,
+          state: finalState,
+          summary: finalSummary,
+          taskId: params.task.id,
+        });
+        if (finalState === "idle") {
+          await this.emitMailboxMessage({
+            type: "idle_notification",
+            parentSessionId: params.parentSessionId,
+            workerId: params.workerId,
+            summary: "Worker ready for assignments.",
+          });
+        }
         return;
       }
 
-      const approvalPending = this.hasPendingApproval(
+      if (this.mailbox) {
+        const controlMessage = await this.mailbox.claimNextWorkerMessage({
+          parentSessionId: params.parentSessionId,
+          workerId: params.workerId,
+          types: ["permission_response", "shutdown_request", "mode_change"],
+        });
+        if (controlMessage) {
+          await this.processControlMailboxMessage({
+            parentSessionId: params.parentSessionId,
+            workerId: params.workerId,
+            message: controlMessage,
+          });
+        }
+      }
+
+      const approvalRequest = this.getPendingApprovalRequest(
         params.parentSessionId,
         childSessionId,
       );
+      if (approvalRequest) {
+        await this.ensurePermissionRequestMessage({
+          parentSessionId: params.parentSessionId,
+          workerId: params.workerId,
+          approvalRequest,
+          taskId: params.task.id,
+        });
+      }
+      const approvalPending = Boolean(approvalRequest);
       const nextState: PersistentWorkerState = approvalPending
         ? "waiting_for_permission"
         : assignment.verifierRequirement?.required === true
@@ -1232,6 +1817,70 @@ export class PersistentWorkerManager {
         await this.updateWorker(parentSessionId, workerId, (record) => {
           record.state = "cancelled";
           record.summary = "Worker stopped.";
+        });
+        await this.emitMailboxMessage({
+          type: "worker_summary",
+          parentSessionId,
+          workerId,
+          state: "cancelled",
+          summary: "Worker stopped.",
+        });
+        return;
+      }
+
+      if (this.mailbox) {
+        const mailboxMessage = await this.mailbox.claimNextWorkerMessage({
+          parentSessionId,
+          workerId,
+          types: [
+            "task_assignment",
+            "permission_response",
+            "shutdown_request",
+            "mode_change",
+          ],
+        });
+        if (mailboxMessage) {
+          if (mailboxMessage.type === "task_assignment") {
+            const claim = await this.claimAssignmentTask({
+              parentSessionId,
+              workerId,
+              taskId: mailboxMessage.taskId,
+            });
+            if (!claim) {
+              await this.mailbox.markHandled({
+                parentSessionId,
+                messageId: mailboxMessage.messageId,
+              });
+              continue;
+            }
+            await this.executeClaimedAssignment({
+              parentSessionId,
+              workerId,
+              task: claim.task,
+              metadata: claim.metadata,
+              assignmentMessageId: mailboxMessage.messageId,
+            });
+            continue;
+          }
+          await this.processControlMailboxMessage({
+            parentSessionId,
+            workerId,
+            message: mailboxMessage,
+          });
+          continue;
+        }
+
+        await this.updateWorker(parentSessionId, workerId, (record) => {
+          if (!record.stopRequested) {
+            record.state = "idle";
+            record.summary = "Worker ready for assignments.";
+          }
+        });
+        await this.emitMailboxMessage({
+          type: "idle_notification",
+          parentSessionId,
+          workerId,
+          summary: "Worker ready for assignments.",
         });
         return;
       }
@@ -1266,6 +1915,9 @@ export class PersistentWorkerManager {
   }
 
   async repairRuntimeState(): Promise<void> {
+    if (this.mailbox) {
+      await this.mailbox.repairRuntimeState();
+    }
     const keys = await this.memoryBackend.listKeys(PERSISTENT_WORKER_KEY_PREFIX);
     for (const key of keys) {
       const parentSessionId = key.slice(PERSISTENT_WORKER_KEY_PREFIX.length);
@@ -1311,6 +1963,36 @@ export class PersistentWorkerManager {
         }
       }
     }
+  }
+
+  async describeRuntimeMailboxLayer(
+    parentSessionId: string,
+    configured: boolean,
+  ): Promise<RuntimeMailboxLayerSnapshot> {
+    if (!configured) {
+      return {
+        configured: false,
+        effective: false,
+        pendingParentToWorker: 0,
+        pendingWorkerToParent: 0,
+        unackedCount: 0,
+        inactiveReason: "flag_disabled",
+      };
+    }
+    if (!this.mailbox) {
+      return {
+        configured: true,
+        effective: false,
+        pendingParentToWorker: 0,
+        pendingWorkerToParent: 0,
+        unackedCount: 0,
+        inactiveReason: "mailbox_manager_uninitialized",
+      };
+    }
+    return this.mailbox.describeRuntimeMailboxLayer({
+      configured,
+      parentSessionId,
+    });
   }
 
   async describeRuntimeWorkerLayer(

@@ -465,13 +465,21 @@ export async function enrichRuntimeContractSnapshotForSession(params: {
 
   snapshot = updateRuntimeContractMailboxLayer({
     snapshot,
-    mailboxLayer: {
-      configured: snapshot.flags.mailboxEnabled,
-      effective: false,
-      inactiveReason: snapshot.flags.mailboxEnabled
-        ? "mailbox_not_implemented"
-        : "flag_disabled",
-    },
+    mailboxLayer: await (
+      params.workerManager?.describeRuntimeMailboxLayer(
+        params.sessionId,
+        snapshot.flags.mailboxEnabled,
+      ) ?? Promise.resolve({
+        configured: snapshot.flags.mailboxEnabled,
+        effective: false,
+        pendingParentToWorker: 0,
+        pendingWorkerToParent: 0,
+        unackedCount: 0,
+        inactiveReason: snapshot.flags.mailboxEnabled
+          ? "mailbox_manager_uninitialized"
+          : "flag_disabled",
+      })
+    ),
   });
 
   if (snapshot === params.result.runtimeContractSnapshot) {

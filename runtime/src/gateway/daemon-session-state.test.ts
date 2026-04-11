@@ -4,6 +4,7 @@ import type { MemoryBackend } from "../memory/types.js";
 import {
   buildSessionStatefulOptions,
   clearWebSessionRuntimeState,
+  enrichRuntimeContractSnapshotForSession,
   hydrateWebSessionRuntimeState,
   persistWebSessionRuntimeState,
 } from "./daemon-session-state.js";
@@ -19,6 +20,7 @@ import type {
   ArtifactCompactionState,
   ContextArtifactRecord,
 } from "../memory/artifact-store.js";
+import { createRuntimeContractSnapshot } from "../runtime-contract/types.js";
 
 function createSession(metadata: Record<string, unknown> = {}): Session {
   return {
@@ -285,4 +287,42 @@ describe("web session runtime state helpers", () => {
     ).toEqual(activeTaskContext);
   });
 
+});
+
+describe("enrichRuntimeContractSnapshotForSession", () => {
+  it("hydrates mailbox layer state from the worker manager", async () => {
+    const result = await enrichRuntimeContractSnapshotForSession({
+      sessionId: "session:test",
+      result: {
+        runtimeContractSnapshot: createRuntimeContractSnapshot({
+          runtimeContractV2: true,
+          stopHooksEnabled: true,
+          asyncTasksEnabled: true,
+          persistentWorkersEnabled: true,
+          mailboxEnabled: true,
+          verifierRuntimeRequired: true,
+          verifierProjectBootstrap: true,
+          workerIsolationWorktree: false,
+          workerIsolationRemote: false,
+        }),
+      } as any,
+      workerManager: {
+        describeRuntimeMailboxLayer: async () => ({
+          configured: true,
+          effective: true,
+          pendingParentToWorker: 2,
+          pendingWorkerToParent: 1,
+          unackedCount: 1,
+        }),
+      } as any,
+    });
+
+    expect(result.runtimeContractSnapshot?.mailboxLayer).toEqual({
+      configured: true,
+      effective: true,
+      pendingParentToWorker: 2,
+      pendingWorkerToParent: 1,
+      unackedCount: 1,
+    });
+  });
 });

@@ -32,5 +32,13 @@ describe("runtime-contract types", () => {
     expect(snapshot.validators.map((validator) => validator.id)).toEqual(
       COMPLETION_VALIDATOR_ORDER,
     );
+    expect(snapshot.mailboxLayer).toEqual({
+      configured: false,
+      effective: false,
+      pendingParentToWorker: 0,
+      pendingWorkerToParent: 0,
+      unackedCount: 0,
+      inactiveReason: "flag_disabled",
+    });
   });
 });

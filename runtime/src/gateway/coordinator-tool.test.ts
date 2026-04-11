@@ -21,6 +21,7 @@ import {
   parseCoordinatorModeInput,
 } from "./coordinator-tool.js";
 import { executeCoordinatorModeTool } from "./tool-handler-factory-coordinator.js";
+import { PersistentWorkerMailbox } from "./persistent-worker-mailbox.js";
 import { PersistentWorkerManager } from "./persistent-worker-manager.js";
 
 function makeMockLLMProvider(
@@ -218,13 +219,77 @@ describe("coordinator_mode", () => {
         workerName: "builder",
       },
     });
+
+    expect(
+      parseCoordinatorModeInput({
+        action: "messages",
+        workerId: "worker-1",
+        direction: "worker_to_parent",
+        status: "pending",
+        limit: 5,
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        action: "messages",
+        workerId: "worker-1",
+        direction: "worker_to_parent",
+        status: "pending",
+        limit: 5,
+      },
+    });
+
+    expect(
+      parseCoordinatorModeInput({
+        action: "ack",
+        messageId: "mail-1",
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        action: "ack",
+        messageId: "mail-1",
+      },
+    });
+
+    expect(
+      parseCoordinatorModeInput({
+        action: "respond_permission",
+        messageId: "mail-2",
+        disposition: "yes",
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        action: "respond_permission",
+        messageId: "mail-2",
+        disposition: "yes",
+      },
+    });
+
+    expect(
+      parseCoordinatorModeInput({
+        action: "message",
+        workerId: "worker-1",
+        subject: "Mode",
+        body: "Switch to parser follow-up",
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        action: "message",
+        workerId: "worker-1",
+        subject: "Mode",
+        body: "Switch to parser follow-up",
+      },
+    });
   });
 
   it("rejects invalid coordinator inputs", () => {
     expect(parseCoordinatorModeInput({})).toEqual({
       ok: false,
       error:
-        'coordinator_mode requires an "action" of "list", "spawn", "reuse", "follow_up", or "stop"',
+        'coordinator_mode requires an "action" of "list", "spawn", "reuse", "follow_up", "stop", "messages", "ack", "respond_permission", or "message"',
     });
 
     expect(
@@ -247,6 +312,17 @@ describe("coordinator_mode", () => {
       ok: false,
       error:
         'coordinator_mode action "spawn" does not accept "workerId"; use "reuse" or "follow_up" instead',
+    });
+
+    expect(
+      parseCoordinatorModeInput({
+        action: "respond_permission",
+        messageId: "mail-2",
+      }),
+    ).toEqual({
+      ok: false,
+      error:
+        'coordinator_mode action "respond_permission" requires a "disposition" of "yes", "no", or "always"',
     });
   });
 
@@ -567,5 +643,159 @@ describe("coordinator_mode", () => {
       status: "completed",
       kind: "worker_assignment",
     });
+  });
+
+  it("supports mailbox listing, ack, permission response, and coordinator messages", async () => {
+    const memoryBackend = createMemoryBackendStub();
+    const taskStore = new TaskStore({ memoryBackend });
+    const manager = new SubAgentManager(makeManagerConfig());
+    const mailbox = new PersistentWorkerMailbox({ memoryBackend });
+    const workerManager = new PersistentWorkerManager({
+      memoryBackend,
+      taskStore,
+      subAgentManager: manager,
+      mailbox,
+    });
+
+    const worker = await workerManager.createWorker({
+      parentSessionId: "session-a",
+      workerName: "builder",
+    });
+    const summary = await mailbox.sendToParent({
+      type: "worker_summary",
+      parentSessionId: "session-a",
+      workerId: worker.workerId,
+      state: "idle",
+      summary: "Worker ready for assignments.",
+    });
+    const permission = await mailbox.sendToParent({
+      type: "permission_request",
+      parentSessionId: "session-a",
+      workerId: worker.workerId,
+      approvalRequestId: "approval-1",
+      message: "Approve system.writeFile",
+      subagentSessionId: "subagent:1",
+    });
+
+    const listed = JSON.parse(
+      await executeCoordinatorModeTool({
+        toolArgs: {
+          action: "messages",
+          workerId: worker.workerId,
+        },
+        name: COORDINATOR_MODE_TOOL_NAME,
+        sessionId: "session-a",
+        toolCallId: "tool-call-mailbox-list",
+        subAgentManager: manager,
+        workerManager,
+        taskStore,
+        lifecycleEmitter: null,
+        verifier: null as any,
+        runtimeContractFlags: {
+          persistentWorkersEnabled: true,
+        } as any,
+        availableToolNames: ["system.readFile"],
+      }),
+    ) as {
+      success?: boolean;
+      messages?: Array<{ messageId?: string; type?: string }>;
+    };
+
+    expect(listed.success).toBe(true);
+    expect(listed.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ messageId: summary.messageId, type: "worker_summary" }),
+        expect.objectContaining({ messageId: permission.messageId, type: "permission_request" }),
+      ]),
+    );
+
+    const acked = JSON.parse(
+      await executeCoordinatorModeTool({
+        toolArgs: {
+          action: "ack",
+          messageId: summary.messageId,
+        },
+        name: COORDINATOR_MODE_TOOL_NAME,
+        sessionId: "session-a",
+        toolCallId: "tool-call-mailbox-ack",
+        subAgentManager: manager,
+        workerManager,
+        taskStore,
+        lifecycleEmitter: null,
+        verifier: null as any,
+        runtimeContractFlags: {
+          persistentWorkersEnabled: true,
+        } as any,
+        availableToolNames: ["system.readFile"],
+      }),
+    ) as {
+      message?: { status?: string };
+    };
+    expect(acked.message?.status).toBe("handled");
+
+    const responded = JSON.parse(
+      await executeCoordinatorModeTool({
+        toolArgs: {
+          action: "respond_permission",
+          messageId: permission.messageId,
+          disposition: "yes",
+        },
+        name: COORDINATOR_MODE_TOOL_NAME,
+        sessionId: "session-a",
+        toolCallId: "tool-call-mailbox-response",
+        subAgentManager: manager,
+        workerManager,
+        taskStore,
+        lifecycleEmitter: null,
+        verifier: null as any,
+        runtimeContractFlags: {
+          persistentWorkersEnabled: true,
+        } as any,
+        availableToolNames: ["system.readFile"],
+      }),
+    ) as {
+      success?: boolean;
+      message?: { type?: string; correlationId?: string };
+    };
+    expect(responded.success).toBe(true);
+    expect(responded.message).toEqual(
+      expect.objectContaining({
+        type: "permission_response",
+        correlationId: permission.messageId,
+      }),
+    );
+
+    const note = JSON.parse(
+      await executeCoordinatorModeTool({
+        toolArgs: {
+          action: "message",
+          workerId: worker.workerId,
+          subject: "Follow-up",
+          body: "Resume on parser cleanup.",
+        },
+        name: COORDINATOR_MODE_TOOL_NAME,
+        sessionId: "session-a",
+        toolCallId: "tool-call-mailbox-message",
+        subAgentManager: manager,
+        workerManager,
+        taskStore,
+        lifecycleEmitter: null,
+        verifier: null as any,
+        runtimeContractFlags: {
+          persistentWorkersEnabled: true,
+        } as any,
+        availableToolNames: ["system.readFile"],
+      }),
+    ) as {
+      success?: boolean;
+      message?: { type?: string; body?: string };
+    };
+    expect(note.success).toBe(true);
+    expect(note.message).toEqual(
+      expect.objectContaining({
+        type: "mode_change",
+        body: "Resume on parser cleanup.",
+      }),
+    );
   });
 });

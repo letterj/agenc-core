@@ -282,6 +282,7 @@ import {
   type DurableSubrunAdmissionDecision,
 } from "./durable-subrun-orchestrator.js";
 import { PersistentWorkerManager } from "./persistent-worker-manager.js";
+import { PersistentWorkerMailbox } from "./persistent-worker-mailbox.js";
 import { evaluateAutonomyCanaryAdmission } from "./autonomy-rollout.js";
 import {
   formatBackgroundRunAdmissionDenied,
@@ -1278,11 +1279,19 @@ export class DaemonManager {
       return;
     }
 
+    const mailbox = flags.mailboxEnabled
+      ? new PersistentWorkerMailbox({
+          memoryBackend: this._memoryBackend,
+          logger: this.logger,
+        })
+      : null;
+
     const manager = new PersistentWorkerManager({
       memoryBackend: this._memoryBackend,
       taskStore: this._taskTrackerStore,
       subAgentManager: this._subAgentManager,
       approvalEngine: this._approvalEngine,
+      mailbox,
       logger: this.logger,
     });
     await manager.repairRuntimeState();

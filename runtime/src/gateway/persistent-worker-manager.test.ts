@@ -14,6 +14,7 @@ import type {
   StreamProgressCallback,
 } from "../llm/types.js";
 import { SubAgentManager, type SubAgentManagerConfig } from "./sub-agent.js";
+import { PersistentWorkerMailbox } from "./persistent-worker-mailbox.js";
 import {
   PersistentWorkerManager,
   WORKER_ASSIGNMENT_METADATA_KEY,
@@ -310,5 +311,62 @@ describe("PersistentWorkerManager", () => {
         state: "failed",
       }),
     ]);
+  });
+
+  it("routes worker assignment lifecycle through mailbox messages when enabled", async () => {
+    const memoryBackend = createMemoryBackendStub();
+    const taskStore = new TaskStore({ memoryBackend });
+    const subAgentManager = new SubAgentManager(makeManagerConfig());
+    const mailbox = new PersistentWorkerMailbox({ memoryBackend });
+    const workerManager = new PersistentWorkerManager({
+      memoryBackend,
+      taskStore,
+      subAgentManager,
+      mailbox,
+    });
+
+    const worker = await workerManager.createWorker({
+      parentSessionId: "session-a",
+      workerName: "builder",
+    });
+    const queued = await workerManager.assignToWorker({
+      parentSessionId: "session-a",
+      workerId: worker.workerId,
+      assignment: buildPreparedAssignment("Inspect parser.c"),
+    });
+
+    await waitForTaskTerminal(taskStore, "session-a", queued.task.id);
+
+    const messages = await workerManager.listMailboxMessages({
+      parentSessionId: "session-a",
+      workerIdOrSessionId: worker.workerId,
+    });
+
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "task_assignment",
+          taskId: queued.task.id,
+          status: "handled",
+        }),
+        expect.objectContaining({
+          type: "worker_summary",
+          taskId: queued.task.id,
+          state: "idle",
+        }),
+        expect.objectContaining({
+          type: "idle_notification",
+        }),
+      ]),
+    );
+    expect(
+      await workerManager.describeRuntimeMailboxLayer("session-a", true),
+    ).toEqual(
+      expect.objectContaining({
+        configured: true,
+        effective: true,
+        pendingParentToWorker: 0,
+      }),
+    );
   });
 });
