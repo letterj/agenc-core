@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { silentLogger } from "../utils/logger.js";
 import { createDaemonCommandRegistry } from "./daemon-command-registry.js";
 import {
+  SESSION_SHELL_PROFILE_METADATA_KEY,
   SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY,
   SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY,
 } from "./session.js";
@@ -216,6 +217,44 @@ describe("createDaemonCommandRegistry /context", () => {
     expect(replies[0]).toContain(
       "Compaction: local enabled @ 600,000 tokens; provider disabled",
     );
+  });
+});
+
+describe("createDaemonCommandRegistry /profile", () => {
+  it("shows the current shell profile in /status", async () => {
+    const { registry } = makeCommandRegistry({
+      sessionOverrides: {
+        [SESSION_SHELL_PROFILE_METADATA_KEY]: "coding",
+      },
+    });
+
+    const replies = await dispatchAndCollect(registry, "/status");
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toContain("Shell Profile: coding");
+  });
+
+  it("lists the available shell profiles", async () => {
+    const { registry } = makeCommandRegistry();
+
+    const replies = await dispatchAndCollect(registry, "/profile list");
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toContain("Shell profile: general");
+    expect(replies[0]).toContain("general (current)");
+    expect(replies[0]).toContain("coding");
+    expect(replies[0]).toContain("operator");
+  });
+
+  it("updates the shell profile and persists web session runtime state", async () => {
+    const { registry, session, memoryBackend } = makeCommandRegistry();
+
+    const replies = await dispatchAndCollect(registry, "/profile coding");
+
+    expect(session.metadata[SESSION_SHELL_PROFILE_METADATA_KEY]).toBe("coding");
+    expect(memoryBackend.set).toHaveBeenCalled();
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toContain("Shell profile set to coding.");
   });
 });
 

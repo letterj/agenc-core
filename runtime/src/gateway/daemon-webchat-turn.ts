@@ -51,7 +51,11 @@ import {
 } from "./daemon-trace.js";
 import type { HookDispatcher } from "./hooks.js";
 import type { GatewayMessage } from "./message.js";
-import type { Session, SessionManager } from "./session.js";
+import {
+  SESSION_SHELL_PROFILE_METADATA_KEY,
+  type Session,
+  type SessionManager,
+} from "./session.js";
 import type { ToolRoutingDecision } from "./tool-routing.js";
 import { resolveTurnMaxToolRounds } from "./tool-round-budget.js";
 import { buildAssistantDelegatedScopeMetadata } from "../utils/delegated-scope-trust.js";
@@ -165,6 +169,9 @@ export async function executeWebChatConversationTurn(
       senderId: msg.sessionId,
       scope: "dm",
       workspaceId: "default",
+    }, {
+      shellProfile:
+        msg.metadata?.[SESSION_SHELL_PROFILE_METADATA_KEY],
     });
     const toolRoutingDecision = buildToolRoutingDecision(
       msg.sessionId,

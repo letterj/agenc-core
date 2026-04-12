@@ -11,6 +11,7 @@ import {
   persistWebSessionRuntimeState,
 } from "./daemon-session-state.js";
 import {
+  SESSION_SHELL_PROFILE_METADATA_KEY,
   SESSION_STATEFUL_ARTIFACT_CONTEXT_METADATA_KEY,
   SESSION_STATEFUL_ARTIFACT_RECORDS_METADATA_KEY,
   SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY,
@@ -288,6 +289,29 @@ describe("web session runtime state helpers", () => {
     expect(
       hydrated.metadata[SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY],
     ).toEqual(activeTaskContext);
+  });
+
+  it("persists and hydrates non-default shell profiles across web-session resume", async () => {
+    const memoryBackend = createMemoryBackendStub();
+
+    await persistWebSessionRuntimeState(
+      memoryBackend,
+      "web-session-profile",
+      createSession({
+        [SESSION_SHELL_PROFILE_METADATA_KEY]: "coding",
+      }),
+    );
+
+    const hydrated = createSession();
+    await hydrateWebSessionRuntimeState(
+      memoryBackend,
+      "web-session-profile",
+      hydrated,
+    );
+
+    expect(hydrated.metadata[SESSION_SHELL_PROFILE_METADATA_KEY]).toBe(
+      "coding",
+    );
   });
 
   it("persists and hydrates runtime contract status snapshots across web-session resume", async () => {

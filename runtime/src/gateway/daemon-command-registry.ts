@@ -23,10 +23,15 @@ import type { MemoryBackend } from "../memory/types.js";
 import { SlashCommandRegistry, createDefaultCommands } from "./commands.js";
 import {
   clearStatefulContinuationMetadata,
+  coerceSessionShellProfile,
+  DEFAULT_SESSION_SHELL_PROFILE,
+  ensureSessionShellProfile,
+  resolveSessionShellProfile,
   SessionManager,
   SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY,
   SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY,
   type Session,
+  type SessionShellProfile,
 } from "./session.js";
 import type { DiscoveredSkill } from "../skills/markdown/discovery.js";
 import { ToolRegistry } from "../tools/registry.js";
@@ -53,7 +58,10 @@ import {
   resolveLocalCompactionThreshold,
   DEFAULT_GROK_MODEL,
 } from "./llm-provider-manager.js";
-import { clearWebSessionRuntimeState } from "./daemon-session-state.js";
+import {
+  clearWebSessionRuntimeState,
+  persistWebSessionRuntimeState,
+} from "./daemon-session-state.js";
 import { hasRuntimeLimit } from "../llm/runtime-limit-policy.js";
 import {
   listKnownGrokModels,
@@ -327,6 +335,21 @@ function getSessionResumeAnchorResponseId(session: Session | undefined): string 
 
 function getSessionHistoryCompacted(session: Session | undefined): boolean {
   return session?.metadata[SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY] === true;
+}
+
+const SESSION_SHELL_PROFILES: readonly SessionShellProfile[] = [
+  "general",
+  "coding",
+  "research",
+  "validation",
+  "documentation",
+  "operator",
+];
+
+function formatShellProfileList(current: SessionShellProfile): string {
+  return SESSION_SHELL_PROFILES.map((profile) =>
+    `  ${profile}${profile === current ? " (current)" : ""}`,
+  ).join("\n");
 }
 
 function summarizeStoredResponse(response: LLMStoredResponse): string {
@@ -882,10 +905,12 @@ export function createDaemonCommandRegistry(
       const encryptedReasoningEnabled =
         ctx.gateway?.config.llm?.includeEncryptedReasoning === true;
       const responseAnchor = getSessionResumeAnchorResponseId(session);
+      const shellProfile = resolveSessionShellProfile(session?.metadata ?? {});
       await cmdCtx.reply(
         `Agent is running.\n` +
           `Session: ${cmdCtx.sessionId}\n` +
           `History: ${historyLen} messages\n` +
+          `Shell Profile: ${shellProfile}\n` +
           `LLM: ${providerNames}\n` +
           `Stateful: ${
             statefulConfig?.enabled === true
@@ -895,6 +920,63 @@ export function createDaemonCommandRegistry(
           `Memory: ${memoryBackend.name}\n` +
           `Tools: ${registry.size}\n` +
           `Skills: ${availableSkills.length}`,
+      );
+    },
+  });
+  commandRegistry.register({
+    name: "profile",
+    description: "Show or set the active shell profile",
+    args: "[list|general|coding|research|validation|documentation|operator]",
+    global: true,
+    handler: async (cmdCtx) => {
+      const sessionId = resolveSessionId(cmdCtx.sessionId);
+      const session = sessionMgr.get(sessionId);
+      if (!session) {
+        await cmdCtx.reply("No active session.");
+        return;
+      }
+
+      const current = resolveSessionShellProfile(session.metadata);
+      const arg = cmdCtx.argv[0]?.toLowerCase();
+
+      if (!arg || arg === "status") {
+        await cmdCtx.reply(
+          `Shell profile: ${current}\n` +
+            `Available: ${SESSION_SHELL_PROFILES.join(", ")}`,
+        );
+        return;
+      }
+
+      if (arg === "list") {
+        await cmdCtx.reply(
+          `Shell profile: ${current}\n` +
+            `Default: ${DEFAULT_SESSION_SHELL_PROFILE}\n` +
+            "Profiles:\n" +
+            formatShellProfileList(current),
+        );
+        return;
+      }
+
+      const nextProfile = coerceSessionShellProfile(arg);
+      if (!nextProfile) {
+        await cmdCtx.reply(
+          "Usage: /profile [list|general|coding|research|validation|documentation|operator]",
+        );
+        return;
+      }
+
+      ensureSessionShellProfile(session.metadata, nextProfile);
+      if (cmdCtx.channel === "webchat") {
+        await persistWebSessionRuntimeState(
+          memoryBackend,
+          cmdCtx.sessionId,
+          session,
+        );
+      }
+
+      await cmdCtx.reply(
+        `Shell profile set to ${nextProfile}.\n` +
+          "This currently updates session metadata; profile-aware routing and tool curation build on top of it.",
       );
     },
   });

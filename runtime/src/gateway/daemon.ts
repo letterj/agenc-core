@@ -175,6 +175,7 @@ import {
 } from "../telemetry/incident-diagnostics.js";
 import { computeRuntimeSloSnapshot } from "../telemetry/slo.js";
 import {
+  SESSION_SHELL_PROFILE_METADATA_KEY,
   SessionManager,
 } from "./session.js";
 import {
@@ -5548,6 +5549,9 @@ export class DaemonManager {
       senderId: msg.sessionId,
       scope: "dm",
       workspaceId: "default",
+    }, {
+      shellProfile:
+        msg.metadata?.[SESSION_SHELL_PROFILE_METADATA_KEY],
     });
     this.applyWebSessionPolicyContext(session, msg);
 

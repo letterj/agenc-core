@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
+  DEFAULT_SESSION_SHELL_PROFILE,
+  SESSION_SHELL_PROFILE_METADATA_KEY,
   SESSION_STATEFUL_ARTIFACT_CONTEXT_METADATA_KEY,
   SESSION_STATEFUL_ARTIFACT_RECORDS_METADATA_KEY,
   SessionManager,
@@ -64,6 +66,21 @@ describe("SessionManager", () => {
       const second = manager.getOrCreate(makeParams());
       expect(first).toBe(second);
       expect(manager.count).toBe(1);
+    });
+
+    it("assigns the default shell profile and preserves explicit overrides", () => {
+      const defaultSession = manager.getOrCreate(makeParams());
+      const codingSession = manager.getOrCreate(
+        makeParams({ senderId: "coder", channel: "code" }),
+        { shellProfile: "coding" },
+      );
+
+      expect(defaultSession.metadata[SESSION_SHELL_PROFILE_METADATA_KEY]).toBe(
+        DEFAULT_SESSION_SHELL_PROFILE,
+      );
+      expect(codingSession.metadata[SESSION_SHELL_PROFILE_METADATA_KEY]).toBe(
+        "coding",
+      );
     });
   });
 
@@ -588,11 +605,13 @@ describe("SessionManager", () => {
       const info1 = list.find((i) => i.id === s1.id)!;
       expect(info1.channel).toBe("ch1");
       expect(info1.senderId).toBe("alice");
+      expect(info1.shellProfile).toBe(DEFAULT_SESSION_SHELL_PROFILE);
       expect(info1.messageCount).toBe(1);
 
       const info2 = list.find((i) => i.id === s2.id)!;
       expect(info2.channel).toBe("ch2");
       expect(info2.senderId).toBe("bob");
+      expect(info2.shellProfile).toBe(DEFAULT_SESSION_SHELL_PROFILE);
       expect(info2.messageCount).toBe(0);
     });
   });

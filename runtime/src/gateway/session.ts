@@ -18,6 +18,7 @@ import { compactHistoryIntoArtifactContext } from "../llm/context-compaction.js"
 
 export const SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY =
   "statefulResumeAnchor";
+export const SESSION_SHELL_PROFILE_METADATA_KEY = "shellProfile";
 export const SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY =
   "statefulHistoryCompacted";
 export const SESSION_STATEFUL_ARTIFACT_CONTEXT_METADATA_KEY =
@@ -61,6 +62,61 @@ export function buildSessionRuntimeContractStatusSnapshot(
     return undefined;
   }
   return candidate as RuntimeContractStatusSnapshot;
+}
+
+export type SessionShellProfile =
+  | "general"
+  | "coding"
+  | "research"
+  | "validation"
+  | "documentation"
+  | "operator";
+
+export const DEFAULT_SESSION_SHELL_PROFILE: SessionShellProfile = "general";
+
+const SESSION_SHELL_PROFILES = new Set<SessionShellProfile>([
+  "general",
+  "coding",
+  "research",
+  "validation",
+  "documentation",
+  "operator",
+]);
+
+export function isSessionShellProfile(
+  value: unknown,
+): value is SessionShellProfile {
+  return (
+    typeof value === "string" &&
+    SESSION_SHELL_PROFILES.has(value as SessionShellProfile)
+  );
+}
+
+export function coerceSessionShellProfile(
+  value: unknown,
+): SessionShellProfile | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return isSessionShellProfile(normalized) ? normalized : undefined;
+}
+
+export function resolveSessionShellProfile(
+  metadata: Record<string, unknown>,
+): SessionShellProfile {
+  return (
+    coerceSessionShellProfile(metadata[SESSION_SHELL_PROFILE_METADATA_KEY]) ??
+    DEFAULT_SESSION_SHELL_PROFILE
+  );
+}
+
+export function ensureSessionShellProfile(
+  metadata: Record<string, unknown>,
+  preferred?: unknown,
+): SessionShellProfile {
+  const profile =
+    coerceSessionShellProfile(preferred) ?? resolveSessionShellProfile(metadata);
+  metadata[SESSION_SHELL_PROFILE_METADATA_KEY] = profile;
+  return profile;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,9 +206,15 @@ export interface SessionInfo {
   readonly id: string;
   readonly channel: string;
   readonly senderId: string;
+  readonly shellProfile: SessionShellProfile;
   readonly messageCount: number;
   readonly createdAt: number;
   readonly lastActiveAt: number;
+}
+
+export interface SessionCreateOptions {
+  readonly metadata?: Record<string, unknown>;
+  readonly shellProfile?: unknown;
 }
 
 /** Callback that summarizes messages into a single string. */
@@ -334,23 +396,36 @@ export class SessionManager {
   /**
    * Return an existing session or create a new one for the given params.
    */
-  getOrCreate(params: SessionLookupParams): Session {
+  getOrCreate(
+    params: SessionLookupParams,
+    options?: SessionCreateOptions,
+  ): Session {
     const effective = this.resolveConfig(params);
     const id = deriveSessionId(params, effective.scope);
 
     const existing = this.sessions.get(id);
     if (existing) {
+      ensureSessionShellProfile(
+        existing.metadata,
+        options?.shellProfile ??
+          options?.metadata?.[SESSION_SHELL_PROFILE_METADATA_KEY],
+      );
       return existing;
     }
 
     const now = Date.now();
+    const metadata = { ...(options?.metadata ?? {}) };
+    ensureSessionShellProfile(
+      metadata,
+      options?.shellProfile ?? metadata[SESSION_SHELL_PROFILE_METADATA_KEY],
+    );
     const session: Session = {
       id,
       workspaceId: params.workspaceId,
       history: [],
       createdAt: now,
       lastActiveAt: now,
-      metadata: {},
+      metadata,
     };
 
     this.sessions.set(id, session);
@@ -645,6 +720,7 @@ export class SessionManager {
         id,
         channel: params?.channel ?? "",
         senderId: params?.senderId ?? "",
+        shellProfile: resolveSessionShellProfile(session.metadata),
         messageCount: session.history.length,
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt,

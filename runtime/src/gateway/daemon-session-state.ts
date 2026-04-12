@@ -25,6 +25,8 @@ import {
   type ArtifactCompactionState,
 } from "../memory/artifact-store.js";
 import {
+  DEFAULT_SESSION_SHELL_PROFILE,
+  SESSION_SHELL_PROFILE_METADATA_KEY,
   SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY,
   SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY,
   SESSION_RUNTIME_CONTRACT_STATUS_SNAPSHOT_METADATA_KEY,
@@ -32,13 +34,17 @@ import {
   SESSION_STATEFUL_ARTIFACT_RECORDS_METADATA_KEY,
   SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY,
   SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY,
+  coerceSessionShellProfile,
+  resolveSessionShellProfile,
   type Session,
+  type SessionShellProfile,
 } from "./session.js";
 
 const WEB_SESSION_RUNTIME_STATE_KEY_PREFIX = "webchat:runtime-state:";
 
 interface PersistedWebSessionRuntimeState {
-  readonly version: 3;
+  readonly version: 4;
+  readonly shellProfile?: SessionShellProfile;
   readonly statefulResumeAnchor?: LLMStatefulResumeAnchor;
   readonly statefulHistoryCompacted?: boolean;
   readonly artifactSnapshotId?: string;
@@ -223,7 +229,11 @@ function buildPersistedWebSessionRuntimeState(
           session.metadata[SESSION_RUNTIME_CONTRACT_STATUS_SNAPSHOT_METADATA_KEY],
         )
       : undefined;
+  const shellProfile = resolveSessionShellProfile(session.metadata);
+  const hasPersistedShellProfile =
+    shellProfile !== DEFAULT_SESSION_SHELL_PROFILE;
   if (
+    !hasPersistedShellProfile &&
     !resumeAnchor &&
     !historyCompacted &&
     !artifactSnapshotId &&
@@ -234,7 +244,8 @@ function buildPersistedWebSessionRuntimeState(
     return undefined;
   }
   return {
-    version: 3,
+    version: 4,
+    ...(hasPersistedShellProfile ? { shellProfile } : {}),
     ...(resumeAnchor ? { statefulResumeAnchor: resumeAnchor } : {}),
     ...(historyCompacted ? { statefulHistoryCompacted: true } : {}),
     ...(artifactSnapshotId ? { artifactSnapshotId } : {}),
@@ -253,10 +264,12 @@ function coercePersistedWebSessionRuntimeState(
   if (
     candidate.version !== 1 &&
     candidate.version !== 2 &&
-    candidate.version !== 3
+    candidate.version !== 3 &&
+    candidate.version !== 4
   ) {
     return undefined;
   }
+  const shellProfile = coerceSessionShellProfile(candidate.shellProfile);
   const resumeAnchor = isStatefulResumeAnchor(candidate.statefulResumeAnchor)
     ? cloneResumeAnchor(candidate.statefulResumeAnchor)
     : undefined;
@@ -284,6 +297,7 @@ function coercePersistedWebSessionRuntimeState(
   const runtimeContractStatusSnapshot =
     normalizeRuntimeContractStatusSnapshot(candidate.runtimeContractStatusSnapshot);
   if (
+    !shellProfile &&
     !resumeAnchor &&
     !historyCompacted &&
     !artifactSnapshotId &&
@@ -294,7 +308,8 @@ function coercePersistedWebSessionRuntimeState(
     return undefined;
   }
   return {
-    version: 3,
+    version: 4,
+    ...(shellProfile ? { shellProfile } : {}),
     ...(resumeAnchor ? { statefulResumeAnchor: resumeAnchor } : {}),
     ...(historyCompacted ? { statefulHistoryCompacted: true } : {}),
     ...(artifactSnapshotId ? { artifactSnapshotId } : {}),
@@ -382,6 +397,9 @@ export async function hydrateWebSessionRuntimeState(
     await memoryBackend.get(webSessionRuntimeStateKey(webSessionId)),
   );
   if (!persisted) return;
+  if (persisted.shellProfile) {
+    session.metadata[SESSION_SHELL_PROFILE_METADATA_KEY] = persisted.shellProfile;
+  }
   if (persisted.statefulResumeAnchor) {
     session.metadata[SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY] =
       cloneResumeAnchor(persisted.statefulResumeAnchor);
