@@ -57,6 +57,7 @@ import type {
 } from "../utils/delegation-validation.js";
 import type { VerifierRequirement } from "./verifier-probes.js";
 import { SubAgentSpawnError } from "./errors.js";
+import type { SessionShellProfile } from "./shell-profile.js";
 
 // ============================================================================
 // Constants
@@ -148,6 +149,7 @@ export type SubAgentStatus =
 
 export interface SubAgentConfig {
   readonly parentSessionId: string;
+  readonly shellProfile?: SessionShellProfile;
   readonly task: string;
   readonly prompt?: string;
   readonly systemPrompt?: string;

@@ -54,6 +54,10 @@ Useful internal entrypoints:
 - `runtime/dist/bin/agenc-watch.js`
 - `@tetsuo-ai/runtime/operator-events`
 
+Current shell entrypoint:
+
+- `agenc-runtime shell [profile]`
+
 Current operator marketplace entrypoint:
 
 - `agenc-runtime market ...` for non-interactive terminal marketplace flows

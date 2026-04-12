@@ -24,6 +24,7 @@ describe("buildStaticToolRoutingDecision", () => {
     const decision = buildStaticToolRoutingDecision({
       content,
       availableToolNames: TOOLS,
+      shellProfile: "general",
     });
 
     expect(decision?.routedToolNames).toEqual(["agenc.inspectMarketplace"]);
@@ -44,6 +45,7 @@ describe("buildStaticToolRoutingDecision", () => {
       buildStaticToolRoutingDecision({
         content,
         availableToolNames: TOOLS,
+        shellProfile: "general",
       }),
     ).toBeUndefined();
   });
@@ -53,7 +55,34 @@ describe("buildStaticToolRoutingDecision", () => {
       buildStaticToolRoutingDecision({
         content: "Inspect the marketplace overview.",
         availableToolNames: ["agenc.listTasks", "agenc.listSkills"],
+        shellProfile: "general",
       }),
     ).toBeUndefined();
+  });
+
+  it("biases default routing toward coding tools for coding sessions", () => {
+    const decision = buildStaticToolRoutingDecision({
+      content: "Refactor the local TypeScript workspace and run a verification step.",
+      availableToolNames: [
+        "system.readFile",
+        "system.writeFile",
+        "system.bash",
+        "agenc.inspectMarketplace",
+      ],
+      shellProfile: "coding",
+    });
+
+    expect(decision?.diagnostics.clusterKey).toBe("shell-profile:coding");
+    expect(decision?.routedToolNames).toEqual([
+      "system.readFile",
+      "system.writeFile",
+      "system.bash",
+    ]);
+    expect(decision?.expandedToolNames).toEqual([
+      "system.readFile",
+      "system.writeFile",
+      "system.bash",
+      "agenc.inspectMarketplace",
+    ]);
   });
 });

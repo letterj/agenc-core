@@ -9,6 +9,7 @@ AgenC is an installable agent framework product with:
 
 - a public CLI
 - one local daemon/gateway as runtime authority
+- shell profiles on that same runtime authority
 - a TUI/operator console
 - a web dashboard using that same daemon
 - plugin/connector/task/marketplace behavior through the same runtime
@@ -35,8 +36,23 @@ Primary responsibilities:
 
 - onboarding
 - lifecycle control: start/stop/restart/status/logs
+- shell entrypoints such as `agenc shell coding`
 - connector and plugin management
 - eventual task/bid interaction
+
+Shell profiles are a client/runtime contract, not a separate product fork.
+Current supported profiles:
+
+- `general`
+- `coding`
+- `research`
+- `validation`
+- `documentation`
+- `operator`
+
+All profiles share the same daemon, policy authority, approvals, memory, and
+tooling substrate. Profiles only change default behavior such as prompt rules,
+tool advertisement bias, delegation posture, and session identity.
 
 V1 connector contract:
 

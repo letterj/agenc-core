@@ -58,6 +58,9 @@ const { runMarketTuiCommand } = vi.hoisted(() => ({
 const { runAgentRegisterCommand } = vi.hoisted(() => ({
   runAgentRegisterCommand: vi.fn(async () => 0),
 }));
+const { runShellCommand } = vi.hoisted(() => ({
+  runShellCommand: vi.fn(async () => 0),
+}));
 
 vi.mock("./init.js", () => ({
   runInitCommand,
@@ -113,6 +116,10 @@ vi.mock("./agent-cli.js", async () => {
     runAgentRegisterCommand,
   };
 });
+
+vi.mock("./shell.js", () => ({
+  runShellCommand,
+}));
 
 import { runCli } from "./index.js";
 
@@ -228,6 +235,7 @@ describe("runtime root CLI", () => {
     expect(code).toBe(0);
     expect(stderr.data()).toBe("");
     expect(stdout.data()).toContain("init [--help] [options]");
+    expect(stdout.data()).toContain("shell [profile] [--help] [options]");
     expect(stdout.data()).toContain("agent [--help] <command> [options]");
     expect(stdout.data()).toContain("market [--help] <domain> <command> [options]");
     expect(stdout.data()).toContain("market inspect <surface> [subject]");
@@ -239,6 +247,42 @@ describe("runtime root CLI", () => {
       "init      Generate an AGENC.md contributor guide for the current repo",
     );
     expect(stdout.data()).toContain("agenc-runtime init");
+    expect(stdout.data()).toContain("agenc-runtime shell coding");
+  });
+
+  it("routes shell flags through the root CLI command surface", async () => {
+    const stdout = captureStream();
+    const stderr = captureStream();
+
+    const code = await runCli({
+      argv: [
+        "shell",
+        "coding",
+        "--pid-path",
+        "/tmp/agenc.pid",
+        "--port",
+        "4555",
+        "--new",
+        "--session",
+        "session-123",
+      ],
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+    });
+
+    expect(code).toBe(0);
+    expect(runShellCommand).toHaveBeenCalledTimes(1);
+    expect(runShellCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        configPath: process.env.AGENC_CONFIG,
+        pidPath: "/tmp/agenc.pid",
+        controlPlanePort: 4555,
+        profile: "coding",
+        newSession: true,
+        sessionId: "session-123",
+      }),
+    );
   });
 
   it("routes init flags through the root CLI command surface", async () => {

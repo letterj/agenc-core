@@ -1,0 +1,44 @@
+# Shell Profiles
+
+Shell profiles define how a daemon client should bias the shared AgenC runtime
+for a session without creating a second product or a second execution stack.
+
+## Profiles
+
+- `general`
+- `coding`
+- `research`
+- `validation`
+- `documentation`
+- `operator`
+
+## Contract
+
+- Profiles are persisted session identity.
+- `general` is the default when no profile is supplied.
+- Profiles bias prompt rules, tool advertisement, and delegation posture.
+- Profiles do not bypass approvals, policy allowlists, trusted-root checks, or
+  runtime economics controls.
+
+## Precedence
+
+From strongest to weakest:
+
+1. Hard runtime safety and policy controls
+2. Existing delegated scope and allowed-tool constraints
+3. Shell-profile defaults
+4. Session-level explicit overrides
+5. Child/run-level explicit overrides
+
+## Shared runtime authority
+
+`agenc shell`, the operator console, the dashboard, and other daemon clients all
+attach to the same runtime authority:
+
+- one daemon
+- one policy engine
+- one approvals layer
+- one session/memory substrate
+- one tool and connector surface
+
+The coding shell is therefore a mode of AgenC, not a separate runtime product.

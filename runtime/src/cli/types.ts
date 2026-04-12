@@ -258,6 +258,15 @@ export interface DaemonStatusOptions {
   controlPlanePort?: number;
 }
 
+export interface ShellOptions extends BaseCliOptions {
+  configPath: string;
+  pidPath: string;
+  controlPlanePort?: number;
+  profile?: string;
+  newSession?: boolean;
+  sessionId?: string;
+}
+
 export interface ServiceInstallOptions {
   configPath?: string;
   macos?: boolean;

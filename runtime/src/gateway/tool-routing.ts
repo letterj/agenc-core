@@ -21,6 +21,11 @@
  * @module
  */
 
+import {
+  getShellProfilePreferredToolNames,
+  type SessionShellProfile,
+} from "./shell-profile.js";
+
 export interface ToolRoutingDecision {
   readonly routedToolNames: readonly string[];
   readonly expandedToolNames: readonly string[];
@@ -100,8 +105,13 @@ function isMarketplaceInspectPrompt(content: string): boolean {
 export function buildStaticToolRoutingDecision(params: {
   content: string;
   availableToolNames: readonly string[];
+  shellProfile?: SessionShellProfile;
 }): ToolRoutingDecision | undefined {
-  const { content, availableToolNames } = params;
+  const {
+    content,
+    availableToolNames,
+    shellProfile,
+  } = params;
   if (content.trim().length === 0 || availableToolNames.length === 0) {
     return undefined;
   }
@@ -112,6 +122,36 @@ export function buildStaticToolRoutingDecision(params: {
       routedToolName: MARKETPLACE_INSPECT_TOOL,
       clusterKey: "marketplace-inspect",
     });
+  }
+
+  if (shellProfile && shellProfile !== "general") {
+    const preferredToolNames = getShellProfilePreferredToolNames({
+      profile: shellProfile,
+      availableToolNames,
+    });
+    if (
+      preferredToolNames.length > 0 &&
+      preferredToolNames.length < availableToolNames.length
+    ) {
+      const schemaCharsFull = estimateToolSchemaChars(availableToolNames);
+      const schemaCharsRouted = estimateToolSchemaChars(preferredToolNames);
+      return {
+        routedToolNames: preferredToolNames,
+        expandedToolNames: availableToolNames,
+        diagnostics: {
+          cacheHit: false,
+          clusterKey: `shell-profile:${shellProfile}`,
+          confidence: 0.72,
+          totalToolCount: availableToolNames.length,
+          routedToolCount: preferredToolNames.length,
+          expandedToolCount: availableToolNames.length,
+          schemaCharsFull,
+          schemaCharsRouted,
+          schemaCharsExpanded: schemaCharsFull,
+          schemaCharsSaved: Math.max(0, schemaCharsFull - schemaCharsRouted),
+        },
+      };
+    }
   }
 
   return undefined;

@@ -43,6 +43,7 @@ import {
   resolveDelegatedTerminalOutcome,
 } from "./delegated-runtime-result.js";
 import type { VerifierRequirement } from "./verifier-probes.js";
+import type { SessionShellProfile } from "./shell-profile.js";
 
 const DELEGATION_POLL_INTERVAL_MS = 75;
 const DELEGATION_PROGRESS_INTERVAL_MS = 1000;
@@ -68,6 +69,7 @@ export interface ExecuteDelegationToolParams {
   readonly toolArgs: Record<string, unknown>;
   readonly name: string;
   readonly sessionId: string;
+  readonly shellProfile?: SessionShellProfile;
   readonly toolCallId: string;
   readonly subAgentManager: DelegationSubAgentManager | null;
   readonly lifecycleEmitter: DelegationLifecycleEmitter;
@@ -845,6 +847,7 @@ export async function executeDelegationTool(
     });
     childSessionId = await subAgentManager.spawn({
       parentSessionId: sessionId,
+      ...(params.shellProfile ? { shellProfile: params.shellProfile } : {}),
       task: objective,
       prompt: childPrompt,
       ...(continuationSessionId

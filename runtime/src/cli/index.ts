@@ -136,6 +136,8 @@ import {
 import { runInitCommand } from "./init.js";
 import { runSessionsListCommand, runSessionsKillCommand } from "./sessions.js";
 import { runLogsCommand } from "./logs.js";
+import { runShellCommand } from "./shell.js";
+import { coerceSessionShellProfile } from "../gateway/shell-profile.js";
 import {
   runConnectorAddTelegramCommand,
   runConnectorListCommand,
@@ -338,6 +340,7 @@ const RESTART_COMMAND_OPTIONS = new Set([
 ]);
 const STATUS_COMMAND_OPTIONS = new Set(["pid-path", "port"]);
 const SERVICE_COMMAND_OPTIONS = new Set(["macos", "yolo"]);
+const SHELL_COMMAND_OPTIONS = new Set(["pid-path", "port", "profile", "new", "session"]);
 const JOBS_COMMAND_OPTIONS = new Set<string>([]);
 const CONNECTOR_LIST_OPTIONS = new Set(["pid-path", "port"]);
 const CONNECTOR_STATUS_OPTIONS = new Set(["pid-path", "port"]);
@@ -873,6 +876,7 @@ function buildHelp(): string {
     "stop [--help] [options]",
     "restart [--help] [options]",
     "status [--help] [options]",
+    "shell [profile] [--help] [options]",
     "service install [--help] [options]",
     "connector <list|status|add|remove> [--help] [options]",
     "sessions <list|kill> [--help] [options]",
@@ -903,6 +907,7 @@ function buildHelp(): string {
     "  stop      Stop the gateway daemon",
     "  restart   Restart the gateway daemon",
     "  status    Show daemon status",
+    "  shell     Open the line-oriented daemon shell over the existing webchat/control-plane path",
     "  service install  Generate systemd/launchd service template",
     "",
     "Session commands:",
@@ -1026,6 +1031,13 @@ function buildHelp(): string {
     "      --pid-path <path>                         Custom PID file path",
     "      --port <port>                             Override control plane port",
     "",
+    "shell options:",
+    "      --pid-path <path>                         Custom PID file path",
+    "      --port <port>                             Override control plane port",
+    "      --profile <name>                          Shell profile: general|coding|research|validation|documentation|operator",
+    "      --new                                     Force a fresh shell session for this workspace/profile",
+    "      --session <id>                            Resume a specific session id instead of the stored workspace/profile session",
+    "",
     "service install options:",
     "      --macos                                   Generate launchd plist instead of systemd unit",
     "      --yolo                                    Include unsafe benchmark mode (--yolo) in the generated service command",
@@ -1133,6 +1145,8 @@ function buildHelp(): string {
     "  agenc-runtime stop",
     "  agenc-runtime restart --config ~/.agenc/config.json",
     "  agenc-runtime status",
+    "  agenc-runtime shell coding",
+    "  agenc-runtime shell --profile research --new",
     "  agenc-runtime service install",
     "  agenc-runtime service install --macos",
     "  agenc-runtime config init",
@@ -3269,6 +3283,35 @@ async function dispatchDaemonCommands(
   parsed: ParsedArgv,
   context: CliRuntimeContext,
 ): Promise<RoutedStatus> {
+  if (parsed.positional[0] === "shell") {
+    try {
+      validateUnknownStandaloneOptions(parsed.flags, SHELL_COMMAND_OPTIONS);
+      const configPath = resolveGatewayConfigPath(parsed.flags);
+      const pidPath =
+        parseOptionalString(parsed.flags["pid-path"]) ?? getDefaultPidPath();
+      const requestedProfile =
+        (parsed.positional[1] as string | undefined) ??
+        parseOptionalString(parsed.flags.profile);
+      if (requestedProfile && !coerceSessionShellProfile(requestedProfile)) {
+        throw createCliError(
+          "shell profile must be one of general|coding|research|validation|documentation|operator",
+          ERROR_CODES.INVALID_VALUE,
+        );
+      }
+      return await runShellCommand(context, {
+        ...normalizeGlobalFlags(parsed.flags, {}, readEnvironmentConfig()),
+        configPath,
+        pidPath,
+        controlPlanePort: parseIntValue(parsed.flags.port),
+        profile: requestedProfile,
+        newSession: normalizeBool(parsed.flags.new, false),
+        sessionId: parseOptionalString(parsed.flags.session),
+      });
+    } catch (error) {
+      return reportCliError(context, error);
+    }
+  }
+
   if (parsed.positional[0] === "start") {
     try {
       validateUnknownStandaloneOptions(parsed.flags, START_COMMAND_OPTIONS);

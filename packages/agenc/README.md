@@ -8,7 +8,7 @@ This package owns the user-facing global install surface:
 npm install -g @tetsuo-ai/agenc
 agenc onboard
 agenc start
-agenc
+agenc shell coding
 agenc ui
 ```
 
@@ -49,8 +49,17 @@ binary remains `agenc`.
 
 `agenc` exposes two primary local operator surfaces against the same daemon:
 
-- `agenc` attaches the terminal operator console
+- `agenc shell [profile]` opens a line-oriented terminal shell over the daemon's WebChat/control-plane path
 - `agenc ui` opens or prints the local dashboard URL on `/ui/`
+
+Supported shell profiles:
+
+- `general`
+- `coding`
+- `research`
+- `validation`
+- `documentation`
+- `operator`
 
 For automation or remote shells, use:
 

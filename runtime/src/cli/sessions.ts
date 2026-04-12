@@ -23,6 +23,11 @@ const CONTROL_PLANE_TIMEOUT_MS = 3_000;
 
 interface SessionInfo {
   id: string;
+  channel?: string;
+  shellProfile?: string;
+  messageCount?: number;
+  createdAt?: number;
+  lastActiveAt?: number;
   connected: boolean;
 }
 

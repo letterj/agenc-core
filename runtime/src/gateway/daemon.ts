@@ -175,7 +175,9 @@ import {
 } from "../telemetry/incident-diagnostics.js";
 import { computeRuntimeSloSnapshot } from "../telemetry/slo.js";
 import {
+  DEFAULT_SESSION_SHELL_PROFILE,
   SESSION_SHELL_PROFILE_METADATA_KEY,
+  resolveSessionShellProfile,
   SessionManager,
 } from "./session.js";
 import {
@@ -2332,10 +2334,13 @@ export class DaemonManager {
             traceId: `background:${sessionId}:${runId}:${cycleIndex}`,
             hookMetadata: { backgroundRunId: runId },
           }),
-        buildToolRoutingDecision: (_sessionId, content, _history) =>
+        buildToolRoutingDecision: (sessionId, content, _history) =>
           buildStaticToolRoutingDecision({
             content,
             availableToolNames: this.getAdvertisedToolNames(),
+            shellProfile: resolveSessionShellProfile(
+              sessionMgr.get(sessionId)?.metadata ?? {},
+            ),
           }),
         seedHistoryForSession: (sessionId) =>
           sessionMgr.get(sessionId)?.history ?? [],
@@ -3342,6 +3347,7 @@ export class DaemonManager {
         buildStaticToolRoutingDecision({
           content,
           availableToolNames: this.getAdvertisedToolNames(),
+          shellProfile: resolveSessionShellProfile({}),
         }),
       recordToolRoutingOutcome: () => {
         /* no-op: static routing, nothing to record */
@@ -4214,6 +4220,70 @@ export class DaemonManager {
     };
     sendResponse: (response: ControlResponse) => void;
   }): Promise<boolean> {
+    if (params.message.type === "sessions") {
+      const activeBindings = new Map(
+        (this._webChatChannel?.listActiveSessions() ?? []).map((entry) => [
+          entry.sessionId,
+          entry.clientId,
+        ]),
+      );
+      const sessions = (this._webSessionManager?.listActive() ?? [])
+        .filter((session) => session.channel === "webchat")
+        .map((session) => ({
+          id: session.id,
+          channel: session.channel,
+          shellProfile: session.shellProfile,
+          messageCount: session.messageCount,
+          createdAt: session.createdAt,
+          lastActiveAt: session.lastActiveAt,
+          connected: activeBindings.has(session.id),
+        }))
+        .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+      params.sendResponse({
+        type: "sessions",
+        payload: sessions,
+      });
+      return true;
+    }
+
+    if (params.message.type === "sessions.kill") {
+      const rawPayload =
+        typeof params.message.payload === "object" &&
+        params.message.payload !== null &&
+        !Array.isArray(params.message.payload)
+          ? (params.message.payload as { sessionId?: unknown })
+          : {};
+      const targetSessionId =
+        typeof rawPayload.sessionId === "string"
+          ? rawPayload.sessionId.trim()
+          : "";
+      if (!targetSessionId) {
+        params.sendResponse({
+          type: "sessions.kill",
+          error: "Missing sessionId in payload",
+        });
+        return true;
+      }
+      const activeBinding = (this._webChatChannel?.listActiveSessions() ?? []).find(
+        (entry) => entry.sessionId === targetSessionId,
+      );
+      if (!activeBinding) {
+        params.sendResponse({
+          type: "sessions.kill",
+          error: `Session '${targetSessionId}' not found`,
+        });
+        return true;
+      }
+      const killed = this.gateway?.disconnectClient(activeBinding.clientId) ?? false;
+      params.sendResponse({
+        type: "sessions.kill",
+        ...(killed
+          ? { payload: { killed: targetSessionId } }
+          : { error: `Session '${targetSessionId}' not found` }),
+      });
+      return true;
+    }
+
     if (params.message.type !== "init.run") {
       return false;
     }
@@ -5384,6 +5454,9 @@ export class DaemonManager {
 
     const baseSessionHandler = createSessionToolHandler({
       sessionId,
+      shellProfile: resolveSessionShellProfile(
+        this._webSessionManager?.get(sessionId)?.metadata ?? {},
+      ),
       baseHandler: baseToolHandler,
       taskStore: this._taskTrackerStore,
       runtimeContractFlags: resolveRuntimeContractFlags(this.gateway?.config.llm),
@@ -5479,6 +5552,7 @@ export class DaemonManager {
 
     const baseSessionHandler = createSessionToolHandler({
       sessionId,
+      shellProfile: DEFAULT_SESSION_SHELL_PROFILE,
       baseHandler: this._baseToolHandler!,
       taskStore: this._taskTrackerStore,
       runtimeContractFlags: resolveRuntimeContractFlags(this.gateway?.config.llm),
@@ -5879,10 +5953,13 @@ export class DaemonManager {
         contextWindowTokens,
         traceConfig,
         turnTraceId,
-        buildToolRoutingDecision: (_sessionId, content, _history) =>
+        buildToolRoutingDecision: (sessionId, content, _history) =>
           buildStaticToolRoutingDecision({
             content,
             availableToolNames: this.getAdvertisedToolNames(),
+            shellProfile: resolveSessionShellProfile(
+              sessionMgr.get(sessionId)?.metadata ?? {},
+            ),
           }),
         recordToolRoutingOutcome: () => {
           /* no-op */

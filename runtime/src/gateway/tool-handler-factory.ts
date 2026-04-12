@@ -20,6 +20,7 @@ import {
   TASK_TRACKER_TOOL_NAMES,
 } from "../tools/system/task-tracker.js";
 import type { TaskStore } from "../tools/system/task-tracker.js";
+import type { SessionShellProfile } from "./shell-profile.js";
 import {
   didToolCallFail,
   enrichToolResultMetadata,
@@ -2294,6 +2295,8 @@ async function runApprovalGate(params: {
 interface SessionToolHandlerConfig {
   /** Session ID for hook context and approval scoping. */
   sessionId: string;
+  /** Optional shell profile inherited into delegated child sessions. */
+  shellProfile?: SessionShellProfile;
   /** Base tool handler (from ToolRegistry). */
   baseHandler: ToolHandler;
   /** Optional factory that returns a desktop-aware handler per router ID. */
@@ -2389,6 +2392,7 @@ interface SessionToolHandlerConfig {
 export function createSessionToolHandler(config: SessionToolHandlerConfig): ToolHandler {
   const {
     sessionId,
+    shellProfile,
     baseHandler,
     desktopRouterFactory,
     routerId,
@@ -2939,6 +2943,7 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
             toolArgs,
             name: toolName,
             sessionId,
+            shellProfile,
             toolCallId,
             subAgentManager,
             lifecycleEmitter,

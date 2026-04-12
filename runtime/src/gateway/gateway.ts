@@ -260,6 +260,21 @@ export class Gateway {
     }
   }
 
+  getClient(clientId: string): WsWebSocket | undefined {
+    return this.wsClients.get(clientId);
+  }
+
+  disconnectClient(clientId: string): boolean {
+    const socket = this.wsClients.get(clientId);
+    if (!socket) {
+      return false;
+    }
+    socket.close();
+    this.wsClients.delete(clientId);
+    this.authenticatedClients.delete(clientId);
+    return true;
+  }
+
   // --------------------------------------------------------------------------
   // Channel Registry
   // --------------------------------------------------------------------------
@@ -792,17 +807,35 @@ export class Gateway {
         break;
 
       case "sessions":
-        this.sendResponse(socket, {
-          type: "sessions",
-          payload: [...this.wsClients.keys()].map((clientId) => ({
-            id: clientId,
-            connected: true,
-          })),
+        if (!this.controlMessageDelegate) {
+          this.sendResponse(socket, {
+            type: "sessions",
+            payload: [...this.wsClients.keys()].map((clientId) => ({
+              id: clientId,
+              connected: true,
+            })),
+            id,
+          });
+          break;
+        }
+        void this.handleDelegatedControlMessage({
+          clientId,
+          socket,
+          msg,
           id,
         });
         break;
 
       case "sessions.kill": {
+        if (this.controlMessageDelegate) {
+          void this.handleDelegatedControlMessage({
+            clientId,
+            socket,
+            msg,
+            id,
+          });
+          break;
+        }
         const targetId = isRecord(msg.payload)
           ? String(msg.payload.sessionId ?? "")
           : "";

@@ -19,6 +19,10 @@ import type {
 import { createGatewayMessage } from "../../gateway/message.js";
 import { resolveSessionWorkspaceRoot } from "../../gateway/host-workspace.js";
 import { deriveSessionId } from "../../gateway/session.js";
+import {
+  coerceSessionShellProfile,
+  type SessionShellProfile,
+} from "../../gateway/shell-profile.js";
 import { DEFAULT_WORKSPACE_ID } from "../../gateway/workspace.js";
 import type { ControlMessage, ControlResponse } from "../../gateway/types.js";
 import { safeStringify } from "../../tools/types.js";
@@ -207,6 +211,20 @@ export class WebChatChannel
     const send = this.clientSenders.get(clientId);
     if (!send) return;
     this.sendTracedControlResponse(clientId, sessionId, send, response);
+  }
+
+  listActiveSessions(): Array<{
+    sessionId: string;
+    clientId: string;
+    workspaceRoot?: string;
+  }> {
+    return [...this.sessionClients.entries()].map(([sessionId, clientId]) => ({
+      sessionId,
+      clientId,
+      ...(this.sessionWorkspaceRoots.get(sessionId)
+        ? { workspaceRoot: this.sessionWorkspaceRoots.get(sessionId) }
+        : {}),
+    }));
   }
 
   /**
@@ -573,6 +591,7 @@ export class WebChatChannel
       send,
       (ownerKey) => {
         const workspaceRoot = this.parseWorkspaceRoot(payload);
+        const shellProfile = this.parseShellProfile(payload);
         const messageKey =
           typeof id === "string"
             ? this.buildSeenMessageKey(ownerKey, id)
@@ -678,7 +697,14 @@ export class WebChatChannel
           sessionId,
           content: content as string,
           scope: "dm",
-          ...(policyContext ? { metadata: { policyContext } } : {}),
+          ...((policyContext || shellProfile)
+            ? {
+                metadata: {
+                  ...(policyContext ? { policyContext } : {}),
+                  ...(shellProfile ? { shellProfile } : {}),
+                },
+              }
+            : {}),
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
         });
         this.context.onMessage(gatewayMsg).catch((err) => {
@@ -1292,6 +1318,12 @@ export class WebChatChannel
       );
     }
     return workspaceRoot;
+  }
+
+  private parseShellProfile(
+    payload: Record<string, unknown> | undefined,
+  ): SessionShellProfile | undefined {
+    return coerceSessionShellProfile(payload?.shellProfile);
   }
 
   private rememberPersistedSessionMetadata(

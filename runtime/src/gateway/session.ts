@@ -15,10 +15,18 @@ import type {
   RuntimeContractStatusSnapshot,
 } from "../runtime-contract/types.js";
 import { compactHistoryIntoArtifactContext } from "../llm/context-compaction.js";
+import {
+  DEFAULT_SESSION_SHELL_PROFILE,
+  SESSION_SHELL_PROFILE_METADATA_KEY,
+  coerceSessionShellProfile,
+  ensureSessionShellProfile,
+  isSessionShellProfile,
+  resolveSessionShellProfile,
+  type SessionShellProfile,
+} from "./shell-profile.js";
 
 export const SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY =
   "statefulResumeAnchor";
-export const SESSION_SHELL_PROFILE_METADATA_KEY = "shellProfile";
 export const SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY =
   "statefulHistoryCompacted";
 export const SESSION_STATEFUL_ARTIFACT_CONTEXT_METADATA_KEY =
@@ -64,60 +72,15 @@ export function buildSessionRuntimeContractStatusSnapshot(
   return candidate as RuntimeContractStatusSnapshot;
 }
 
-export type SessionShellProfile =
-  | "general"
-  | "coding"
-  | "research"
-  | "validation"
-  | "documentation"
-  | "operator";
-
-export const DEFAULT_SESSION_SHELL_PROFILE: SessionShellProfile = "general";
-
-const SESSION_SHELL_PROFILES = new Set<SessionShellProfile>([
-  "general",
-  "coding",
-  "research",
-  "validation",
-  "documentation",
-  "operator",
-]);
-
-export function isSessionShellProfile(
-  value: unknown,
-): value is SessionShellProfile {
-  return (
-    typeof value === "string" &&
-    SESSION_SHELL_PROFILES.has(value as SessionShellProfile)
-  );
-}
-
-export function coerceSessionShellProfile(
-  value: unknown,
-): SessionShellProfile | undefined {
-  if (typeof value !== "string") return undefined;
-  const normalized = value.trim().toLowerCase();
-  return isSessionShellProfile(normalized) ? normalized : undefined;
-}
-
-export function resolveSessionShellProfile(
-  metadata: Record<string, unknown>,
-): SessionShellProfile {
-  return (
-    coerceSessionShellProfile(metadata[SESSION_SHELL_PROFILE_METADATA_KEY]) ??
-    DEFAULT_SESSION_SHELL_PROFILE
-  );
-}
-
-export function ensureSessionShellProfile(
-  metadata: Record<string, unknown>,
-  preferred?: unknown,
-): SessionShellProfile {
-  const profile =
-    coerceSessionShellProfile(preferred) ?? resolveSessionShellProfile(metadata);
-  metadata[SESSION_SHELL_PROFILE_METADATA_KEY] = profile;
-  return profile;
-}
+export {
+  DEFAULT_SESSION_SHELL_PROFILE,
+  SESSION_SHELL_PROFILE_METADATA_KEY,
+  coerceSessionShellProfile,
+  ensureSessionShellProfile,
+  isSessionShellProfile,
+  resolveSessionShellProfile,
+};
+export type { SessionShellProfile };
 
 // ---------------------------------------------------------------------------
 // Types

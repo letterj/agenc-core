@@ -14,7 +14,11 @@ import type { Logger } from "../utils/logger.js";
 import type { ChatExecutionTraceEvent } from "../llm/chat-executor-types.js";
 import { hasActionableStatefulFallback } from "../llm/chat-executor-recovery.js";
 import type { GatewayMessage } from "./message.js";
-import type { Session, SessionManager } from "./session.js";
+import {
+  resolveSessionShellProfile,
+  type Session,
+  type SessionManager,
+} from "./session.js";
 import type { ToolRoutingDecision } from "./tool-routing.js";
 import { resolveTurnMaxToolRounds } from "./tool-round-budget.js";
 import {
@@ -40,6 +44,7 @@ import type { PersistentWorkerManager } from "./persistent-worker-manager.js";
 import type { SubAgentManager } from "./sub-agent.js";
 import type { TaskStore } from "../tools/system/task-tracker.js";
 import { filterSystemPromptForToolRouting } from "./system-prompt-routing.js";
+import { appendShellProfilePromptSection } from "./shell-profile.js";
 import {
   buildRuntimeContractSessionTraceId,
   logExecutionTraceEvent,
@@ -167,8 +172,12 @@ export async function executeTextChannelTurn(
     msg.content,
     session.history,
   );
-  const effectiveSystemPrompt = filterSystemPromptForToolRouting({
+  const profileAwareSystemPrompt = appendShellProfilePromptSection({
     systemPrompt,
+    profile: resolveSessionShellProfile(session.metadata),
+  });
+  const effectiveSystemPrompt = filterSystemPromptForToolRouting({
+    systemPrompt: profileAwareSystemPrompt,
     routedToolNames: toolRoutingDecision?.routedToolNames,
   });
 
