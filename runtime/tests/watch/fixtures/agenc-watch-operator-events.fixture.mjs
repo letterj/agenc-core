@@ -83,8 +83,8 @@ function classifyOperatorSurfaceEventFamily(type) {
   if (
     type === "chat.session" ||
     type === "chat.owner" ||
-    type === "chat.resumed" ||
-    type === "chat.sessions" ||
+    type === "chat.session.resumed" ||
+    type === "chat.session.list" ||
     type === "chat.history"
   ) {
     return "session";

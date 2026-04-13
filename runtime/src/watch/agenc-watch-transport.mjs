@@ -95,8 +95,12 @@ export function createWatchTransportController(dependencies = {}) {
     transportState.ws?.send(frame);
   }
 
-  function requestCockpit(reason = "refresh") {
-    if (!transportState.isOpen || !watchState.sessionId) {
+  function requestCockpit(reason = "refresh", { force = false } = {}) {
+    if (
+      !transportState.isOpen ||
+      !watchState.sessionId ||
+      (!force && !watchState.bootstrapReady)
+    ) {
       return;
     }
     send("watch.cockpit.get", authPayload({ sessionId: watchState.sessionId }));

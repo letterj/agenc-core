@@ -36,16 +36,13 @@ export const WS_CHAT_HISTORY = "chat.history" as const;
 export const WS_CHAT_SESSION = "chat.session" as const;
 export const WS_CHAT_OWNER = "chat.owner" as const;
 export const WS_CHAT_NEW = "chat.new" as const;
-export const WS_CHAT_RESUMED = "chat.resumed" as const;
 export const WS_CHAT_SESSION_RESUMED = "chat.session.resumed" as const;
-export const WS_CHAT_SESSIONS = "chat.sessions" as const;
 export const WS_CHAT_SESSION_RESUME = "chat.session.resume" as const;
 export const WS_CHAT_SESSION_LIST = "chat.session.list" as const;
 export const WS_CHAT_SESSION_INSPECT = "chat.session.inspect" as const;
 export const WS_CHAT_SESSION_FORK = "chat.session.fork" as const;
 export const WS_CHAT_CANCELLED = "chat.cancelled" as const;
 export const WS_CHAT_CANCEL = "chat.cancel" as const;
-export const WS_CHAT_RESUME = "chat.resume" as const;
 export const WS_CHAT_USAGE = "chat.usage" as const;
 
 // Session command bus
@@ -292,6 +289,34 @@ export interface ExtensionsCommandData {
   readonly status?: Record<string, unknown>;
 }
 
+export interface RuntimeCommandMetric {
+  readonly label: string;
+  readonly value: string;
+  readonly tone?: "neutral" | "success" | "warning" | "danger";
+}
+
+export interface RuntimeCommandSection {
+  readonly title: string;
+  readonly body?: string;
+  readonly items?: readonly string[];
+}
+
+export interface RuntimeCommandData {
+  readonly kind: "runtime";
+  readonly surface:
+    | "context"
+    | "status"
+    | "profile"
+    | "model"
+    | "effort"
+    | "voice"
+    | "memory";
+  readonly status?: string;
+  readonly metrics?: readonly RuntimeCommandMetric[];
+  readonly sections?: readonly RuntimeCommandSection[];
+  readonly detail?: Record<string, unknown>;
+}
+
 export interface ReviewCommandData {
   readonly kind: "review";
   readonly mode: "default" | "security" | "pr-comments";
@@ -344,6 +369,7 @@ export type SessionCommandResultData =
   | TasksCommandData
   | PolicyCommandData
   | ExtensionsCommandData
+  | RuntimeCommandData
   | ReviewCommandData
   | VerifyCommandData;
 

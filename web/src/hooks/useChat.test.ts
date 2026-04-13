@@ -236,31 +236,40 @@ describe("useChat tool result matching", () => {
 });
 
 describe("useChat session lifecycle", () => {
-  it("hydrates continuity records from chat.session.list", () => {
+  it("hydrates continuity records from canonical session command results", () => {
     const send = vi.fn();
     const { result } = renderHook(() => useChat({ send, connected: true }));
 
     act(() => {
       result.current.handleMessage({
-        type: "chat.session.list",
-        payload: [
-          {
-            sessionId: "session-1",
-            label: "Coding Session",
-            preview: "Investigate git diff handling",
-            messageCount: 7,
-            createdAt: 1,
-            updatedAt: 2,
-            lastActiveAt: 3,
-            connected: false,
-            resumabilityState: "disconnected-resumable",
-            shellProfile: "coding",
-            workflowStage: "implement",
-            childSessionCount: 1,
-            worktreeCount: 0,
-            pendingApprovalCount: 0,
+        type: "session.command.result",
+        payload: {
+          commandName: "session",
+          content: "1 session",
+          viewKind: "session",
+          data: {
+            kind: "session",
+            subcommand: "list",
+            sessions: [
+              {
+                sessionId: "session-1",
+                label: "Coding Session",
+                preview: "Investigate git diff handling",
+                messageCount: 7,
+                createdAt: 1,
+                updatedAt: 2,
+                lastActiveAt: 3,
+                connected: false,
+                resumabilityState: "disconnected-resumable",
+                shellProfile: "coding",
+                workflowStage: "implement",
+                childSessionCount: 1,
+                worktreeCount: 0,
+                pendingApprovalCount: 0,
+              },
+            ],
           },
-        ],
+        },
       } as WSMessage);
     });
 
@@ -333,33 +342,42 @@ describe("useChat session lifecycle", () => {
     );
   });
 
-  it("stores inspect payloads from the canonical continuity inspect channel", () => {
+  it("stores inspect payloads from canonical session command results", () => {
     const send = vi.fn();
     const { result } = renderHook(() => useChat({ send, connected: true }));
 
     act(() => {
       result.current.handleMessage({
-        type: "chat.session.inspect",
+        type: "session.command.result",
         payload: {
-          sessionId: "session-2",
-          label: "Review Session",
-          preview: "Review the current changes",
-          messageCount: 9,
-          createdAt: 1,
-          updatedAt: 2,
-          lastActiveAt: 3,
-          connected: true,
-          resumabilityState: "active",
-          shellProfile: "coding",
-          workflowStage: "review",
-          childSessionCount: 2,
-          worktreeCount: 1,
-          pendingApprovalCount: 0,
-          workflowState: {
-            stage: "review",
-            worktreeMode: "child_optional",
-            enteredAt: 1,
-            updatedAt: 2,
+          commandName: "session",
+          content: "Review session detail",
+          viewKind: "session",
+          data: {
+            kind: "session",
+            subcommand: "inspect",
+            detail: {
+              sessionId: "session-2",
+              label: "Review Session",
+              preview: "Review the current changes",
+              messageCount: 9,
+              createdAt: 1,
+              updatedAt: 2,
+              lastActiveAt: 3,
+              connected: true,
+              resumabilityState: "active",
+              shellProfile: "coding",
+              workflowStage: "review",
+              childSessionCount: 2,
+              worktreeCount: 1,
+              pendingApprovalCount: 0,
+              workflowState: {
+                stage: "review",
+                worktreeMode: "child_optional",
+                enteredAt: 1,
+                updatedAt: 2,
+              },
+            },
           },
         },
       } as WSMessage);

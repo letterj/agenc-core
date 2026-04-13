@@ -245,7 +245,6 @@ const INSIGHTS_COMMANDS = Object.freeze([
 const THREAD_SWITCHER_COMMANDS = Object.freeze([
   Object.freeze({
     name: "/agents",
-    aliases: ["/threads"],
     usage: "/agents [roles|list|spawn|assign|inspect|stop]",
     description: "Use the shared child-agent orchestration surface.",
   }),
@@ -335,7 +334,6 @@ const REMOTE_TOOL_COMMANDS = Object.freeze([
 const EXTENSIBILITY_COMMANDS = Object.freeze([
   Object.freeze({
     name: "/extensibility",
-    aliases: ["/extensions"],
     usage: "/extensibility [overview|skills|plugins|mcp|hooks]",
     description: "Inspect local runtime extensibility state, config, and catalogs.",
   }),
@@ -356,7 +354,6 @@ const EXTENSIBILITY_COMMANDS = Object.freeze([
   }),
   Object.freeze({
     name: "/xai",
-    aliases: ["/api"],
     usage: "/xai [set|status|validate|clear]",
     description: "Manage the local xAI API key stored in the runtime config.",
   }),
@@ -427,6 +424,9 @@ export function buildWatchCommands({ featureFlags = {} } = {}) {
   return Object.freeze(commands.map((command) => Object.freeze({
     ...command,
     aliases: Array.isArray(command.aliases) ? Object.freeze([...command.aliases]) : command.aliases,
+    deprecatedAliases: Array.isArray(command.deprecatedAliases)
+      ? Object.freeze([...command.deprecatedAliases])
+      : command.deprecatedAliases,
   })));
 }
 
@@ -454,8 +454,10 @@ export function mergeWatchCommandCatalog(localCommands = WATCH_COMMANDS, sharedC
     const normalizedName = name.toLowerCase();
     const aliases = [
       ...(Array.isArray(entry.aliases) ? entry.aliases : []),
-      ...(Array.isArray(entry.deprecatedAliases) ? entry.deprecatedAliases : []),
     ]
+      .map((alias) => (typeof alias === "string" ? `/${alias.trim()}` : ""))
+      .filter(Boolean);
+    const deprecatedAliases = (Array.isArray(entry.deprecatedAliases) ? entry.deprecatedAliases : [])
       .map((alias) => (typeof alias === "string" ? `/${alias.trim()}` : ""))
       .filter(Boolean);
     const args = typeof entry.args === "string" && entry.args.trim().length > 0
@@ -464,6 +466,7 @@ export function mergeWatchCommandCatalog(localCommands = WATCH_COMMANDS, sharedC
     const nextEntry = Object.freeze({
       name,
       aliases: Object.freeze(aliases),
+      deprecatedAliases: Object.freeze(deprecatedAliases),
       usage: `${name}${args}`,
       description:
         typeof entry.description === "string" && entry.description.trim().length > 0
@@ -580,6 +583,9 @@ export function findWatchCommandDefinition(nameOrAlias, { commands = WATCH_COMMA
     if (Array.isArray(command.aliases) && command.aliases.includes(normalized)) {
       return command;
     }
+    if (Array.isArray(command.deprecatedAliases) && command.deprecatedAliases.includes(normalized)) {
+      return command;
+    }
   }
   return null;
 }
@@ -593,7 +599,11 @@ export function matchWatchCommands(input, { limit = WATCH_COMMANDS.length, comma
   const query = commandToken === "/" ? "" : commandToken.slice(1);
   const ranked = commands
     .map((command) => {
-      const names = [command.name, ...(command.aliases ?? [])];
+      const names = [
+        command.name,
+        ...(command.aliases ?? []),
+        ...(command.deprecatedAliases ?? []),
+      ];
       const exact = names.some((name) => name === commandToken);
       const startsWith = names.some((name) => name.slice(1).startsWith(query));
       if (query.length > 0 && !exact && !startsWith) {

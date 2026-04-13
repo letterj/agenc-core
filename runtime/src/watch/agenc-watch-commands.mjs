@@ -1590,7 +1590,7 @@ export function createWatchCommandController(dependencies = {}) {
         return true;
       }
 
-      if (canonicalName === "/plugins") {
+      if (canonicalName === "/plugin") {
         const subcommand = parsedSlash.args.join(" ").trim();
         return dispatchSessionCommand(
           subcommand.length > 0 ? `/plugin ${subcommand}` : "/plugin list",
@@ -2007,22 +2007,6 @@ export function createWatchCommandController(dependencies = {}) {
         );
       }
 
-      if (canonicalName === "/sessions") {
-        const query = parsedSlash.args.join(" ").trim();
-        watchState.manualSessionsRequestPending = true;
-        watchState.manualSessionsQuery = query.length > 0 ? query : null;
-        return dispatchSessionCommand(
-          query.length > 0 ? `/session list ${query}` : "/session list",
-          {
-            title: "Session List",
-            body:
-              query.length > 0
-                ? `Requested resumable sessions matching: ${query}`
-                : "Requested resumable sessions.",
-          },
-        );
-      }
-
       if (canonicalName === "/session") {
         const args = parsedSlash.args.map((arg) => String(arg ?? "").trim()).filter(Boolean);
         if ((args[0] ?? "").toLowerCase() === "list") {
@@ -2179,30 +2163,6 @@ export function createWatchCommandController(dependencies = {}) {
           {
             title: "Code Review",
             body: "Requested a findings-first review of the current changes.",
-          },
-        );
-      }
-
-      if (canonicalName === "/security-review") {
-        return dispatchSessionCommand(
-          parsedSlash.args.length > 0
-            ? `/review --mode security ${parsedSlash.args.join(" ")}`
-            : "/review --mode security",
-          {
-            title: "Security Review",
-            body: "Requested a security-focused review of the current changes.",
-          },
-        );
-      }
-
-      if (canonicalName === "/pr-comments") {
-        return dispatchSessionCommand(
-          parsedSlash.args.length > 0
-            ? `/review --mode pr-comments ${parsedSlash.args.join(" ")}`
-            : "/review --mode pr-comments",
-          {
-            title: "PR Comments",
-            body: "Requested concise PR review comments for the current changes.",
           },
         );
       }

@@ -172,8 +172,8 @@ function handleSessionResumeResult(payload, data, state, api) {
   requestSharedCommandCatalog(api, state.sessionId);
   api.send("chat.history", api.authPayload({ limit: 50 }));
   api.requestRunInspect("resume", { force: true });
-  api.requestCockpit("resume");
   api.markBootstrapReady(`session resumed: ${state.sessionId}; restoring history`);
+  api.requestCockpit("resume", { force: true });
   return true;
 }
 
@@ -220,10 +220,8 @@ function handleSessionSurfaceEvent(surfaceEvent, state, api) {
         api.persistOwnerToken(state.ownerToken);
       }
       return true;
-    case "chat.resumed":
     case "chat.session.resumed":
       return handleSessionResumeResult(payload, { resumed: { sessionId: payload.sessionId } }, state, api);
-    case "chat.sessions":
     case "chat.session.list": {
       return handleSessionListResult({ sessions: surfaceEvent.payloadList ?? [] }, state, api);
     }
@@ -1071,6 +1069,20 @@ function handleErrorSurfaceEvent(surfaceEvent, rawMessage, state, api) {
   }
   if (api.isRetryableBootstrapError(errorMessage)) {
     api.scheduleBootstrap("webchat handler still starting");
+    return true;
+  }
+  if (
+    errorMessage === "Not authorized to access this session" &&
+    !state.bootstrapReady &&
+    typeof state.sessionId === "string" &&
+    state.sessionId.trim().length > 0
+  ) {
+    state.sessionId = null;
+    state.cockpit = null;
+    state.cockpitUpdatedAt = 0;
+    state.cockpitFingerprint = null;
+    api.persistSessionId(null);
+    api.scheduleBootstrap("stale session authorization failed");
     return true;
   }
   api.eventStore.cancelAgentStream("error");

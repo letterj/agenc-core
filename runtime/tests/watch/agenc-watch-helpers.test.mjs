@@ -142,7 +142,7 @@ test("buildWatchCommands adds review mode commands only when enabled", () => {
   );
   assert.deepEqual(
     reviewCommands
-      .filter((command) => ["/review", "/security-review", "/pr-comments"].includes(command.name))
+      .filter((command) => ["/review"].includes(command.name))
       .map((command) => command.name),
     [],
   );
@@ -440,14 +440,6 @@ test("buildWatchCommands adds extensibility commands only when enabled", () => {
       .map((command) => command.name),
     ["/extensibility", "/skills", "/mcp", "/hooks", "/xai"],
   );
-  assert.equal(
-    findWatchCommandDefinition("/api", { commands: extensibilityCommands })?.name,
-    "/xai",
-  );
-  assert.equal(
-    parseWatchSlashCommand("/api validate", { commands: extensibilityCommands })?.command?.name,
-    "/xai",
-  );
 });
 
 test("buildWatchCommands adds input-mode commands only when enabled", () => {
@@ -489,11 +481,7 @@ test("buildWatchCommands adds thread switcher commands only when enabled", () =>
     true,
   );
   assert.equal(
-    matchWatchCommands("/thr", { commands: threadCommands }).at(0)?.name,
-    "/agents",
-  );
-  assert.equal(
-    parseWatchSlashCommand("/threads all", { commands: threadCommands })?.command?.name,
+    matchWatchCommands("/ag", { commands: threadCommands }).at(0)?.name,
     "/agents",
   );
 });

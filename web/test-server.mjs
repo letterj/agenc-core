@@ -157,7 +157,6 @@ const TEST_COMMAND_CATALOG = [
     category: 'session',
     clients: ['shell', 'console', 'web'],
     viewKind: 'session',
-    deprecatedAliases: [],
     available: true,
   },
   {
@@ -165,11 +164,10 @@ const TEST_COMMAND_CATALOG = [
     description: 'Summarize repo state for review',
     args: '[--staged|--delegate|--mode security|--mode pr-comments]',
     global: true,
-    aliases: ['security-review', 'pr-comments'],
+    aliases: [],
     category: 'coding',
     clients: ['shell', 'console', 'web'],
     viewKind: 'review',
-    deprecatedAliases: [],
     available: true,
   },
   {
@@ -181,7 +179,6 @@ const TEST_COMMAND_CATALOG = [
     category: 'coding',
     clients: ['shell', 'console', 'web'],
     viewKind: 'diff',
-    deprecatedAliases: [],
     available: true,
   },
 ];

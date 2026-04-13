@@ -130,8 +130,7 @@ async function resolveGitSnapshot(
  * counter. WebChat session IDs are intentionally salted with randomness so a
  * daemon restart cannot accidentally reuse old persisted memory by session ID.
  * Session continuity across reconnects is supported via explicit
- * 'chat.session.resume' requests. Legacy 'chat.resume' is kept as a
- * compatibility alias for non-upgraded external clients.
+ * 'chat.session.*' requests.
  */
 export class WebChatChannel
   extends BaseChannelPlugin
@@ -433,13 +432,13 @@ export class WebChatChannel
       return;
     }
 
-    if (type === "chat.resume" || type === "chat.session.resume") {
-      this.handleChatResume(clientId, payload, id, tracedSend, type);
+    if (type === "chat.session.resume") {
+      this.handleChatResume(clientId, payload, id, tracedSend);
       return;
     }
 
-    if (type === "chat.sessions" || type === "chat.session.list") {
-      this.handleChatSessions(clientId, payload, id, tracedSend, type);
+    if (type === "chat.session.list") {
+      this.handleChatSessions(clientId, payload, id, tracedSend);
       return;
     }
 
@@ -887,9 +886,8 @@ export class WebChatChannel
     payload: Record<string, unknown> | undefined,
     id: string | undefined,
     send: SendFn,
-    responseType = "chat.session.resumed",
   ): void {
-    void this.handleChatResumeAsync(clientId, payload, id, send, responseType).catch((error) => {
+    void this.handleChatResumeAsync(clientId, payload, id, send).catch((error) => {
       send({
         type: "error",
         error: `Failed to resume chat session: ${(error as Error).message}`,
@@ -903,9 +901,8 @@ export class WebChatChannel
     payload: Record<string, unknown> | undefined,
     id: string | undefined,
     send: SendFn,
-    responseType = "chat.session.list",
   ): void {
-    void this.handleChatSessionsAsync(clientId, payload, id, send, responseType).catch((error) => {
+    void this.handleChatSessionsAsync(clientId, payload, id, send).catch((error) => {
       send({
         type: "error",
         error: `Failed to list chat sessions: ${(error as Error).message}`,
@@ -1003,7 +1000,6 @@ export class WebChatChannel
     payload: Record<string, unknown> | undefined,
     id: string | undefined,
     send: SendFn,
-    responseType: string,
   ): Promise<void> {
     const targetSessionId = payload?.sessionId;
     if (!targetSessionId || typeof targetSessionId !== "string") {
@@ -1038,7 +1034,7 @@ export class WebChatChannel
       requestedWorkspaceRoot,
     );
     send({
-      type: responseType === "chat.resume" ? "chat.resumed" : "chat.session.resumed",
+      type: "chat.session.resumed",
       payload: resumed,
       id,
     });
@@ -1049,7 +1045,6 @@ export class WebChatChannel
     payload: Record<string, unknown> | undefined,
     id: string | undefined,
     send: SendFn,
-    responseType: string,
   ): Promise<void> {
     const ownerKey = await this.resolveDurableOwner(clientId, payload, send);
     const activeOnly = payload?.activeOnly === true;
@@ -1063,7 +1058,7 @@ export class WebChatChannel
       limit,
       shellProfile: profile,
     });
-    send({ type: responseType, payload: records, id });
+    send({ type: "chat.session.list", payload: records, id });
   }
 
   private async handleChatInspectAsync(

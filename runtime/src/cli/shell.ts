@@ -313,10 +313,7 @@ async function openShellSession(
       }
       return;
     }
-    if (
-      (type === "chat.resumed" || type === "chat.session.resumed") &&
-      typeof payload?.sessionId === "string"
-    ) {
+    if (type === "chat.session.resumed" && typeof payload?.sessionId === "string") {
       activeSessionId = payload.sessionId;
       const resumedProfile = coerceSessionShellProfile(payload?.shellProfile);
       if (resumedProfile) {

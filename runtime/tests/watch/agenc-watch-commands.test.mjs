@@ -48,13 +48,13 @@ function createCommandHarness(overrides = {}) {
     { name: "/bundle", usage: "/bundle", description: "bundle", aliases: ["/export-bundle"] },
     { name: "/insights", usage: "/insights", description: "insights", aliases: [] },
     { name: "/maintenance", usage: "/maintenance", description: "maintenance", aliases: [] },
-    { name: "/agents", usage: "/agents [query]", description: "agents", aliases: ["/threads"] },
-    { name: "/extensibility", usage: "/extensibility [overview|skills|plugins|mcp|hooks]", description: "extensibility", aliases: ["/extensions"] },
+    { name: "/agents", usage: "/agents [query]", description: "agents", aliases: [] },
+    { name: "/extensibility", usage: "/extensibility [overview|skills|plugins|mcp|hooks]", description: "extensibility", aliases: [] },
     { name: "/skills", usage: "/skills [list|enable <name>|disable <name>]", description: "skills", aliases: [] },
-    { name: "/plugins", usage: "/plugins [list|trust <packageName> [subpath ...]|untrust <packageName>]", description: "plugins", aliases: [] },
+    { name: "/plugin", usage: "/plugin [list|inspect <pluginId>|enable <pluginId>|disable <pluginId>|reload <pluginId>]", description: "plugin", aliases: [] },
     { name: "/mcp", usage: "/mcp [list|enable <serverName>|disable <serverName>]", description: "mcp", aliases: [] },
     { name: "/hooks", usage: "/hooks [list|events]", description: "hooks", aliases: [] },
-    { name: "/xai", usage: "/xai [set|status|validate|clear]", description: "xai", aliases: ["/api"] },
+    { name: "/xai", usage: "/xai [set|status|validate|clear]", description: "xai", aliases: [] },
     { name: "/input-mode", usage: "/input-mode [show|default|vim]", description: "input mode", aliases: [] },
     { name: "/keybindings", usage: "/keybindings [show|default|vim]", description: "keybindings", aliases: [] },
     { name: "/theme", usage: "/theme [show|default|aurora|ember]", description: "theme", aliases: [] },
@@ -64,8 +64,6 @@ function createCommandHarness(overrides = {}) {
     { name: "/status", usage: "/status", description: "status", aliases: [] },
     { name: "/new", usage: "/new", description: "new session", aliases: [] },
     { name: "/review", usage: "/review [scope]", description: "review", aliases: [] },
-    { name: "/security-review", usage: "/security-review [scope]", description: "security", aliases: [] },
-    { name: "/pr-comments", usage: "/pr-comments [scope]", description: "comments", aliases: [] },
     { name: "/diff", usage: "/diff", description: "diff", aliases: [] },
     { name: "/compact", usage: "/compact", description: "compact", aliases: [] },
     { name: "/permissions", usage: "/permissions", description: "permissions", aliases: [] },
@@ -525,13 +523,13 @@ test("command controller shows agent threads through /agents", () => {
   );
 });
 
-test("command controller shows extensibility sections and forwards plugin and MCP commands", () => {
+test("command controller shows extensibility sections and forwards canonical plugin and MCP commands", () => {
   const { controller, calls } = createCommandHarness();
 
   assert.equal(controller.dispatchOperatorInput("/extensibility mcp"), true);
   assert.equal(controller.dispatchOperatorInput("/extensibility hooks"), true);
-  assert.equal(controller.dispatchOperatorInput("/plugins trust @demo/plugin channels"), true);
-  assert.equal(controller.dispatchOperatorInput("/plugins untrust @demo/plugin"), true);
+  assert.equal(controller.dispatchOperatorInput("/plugin trust @demo/plugin channels"), true);
+  assert.equal(controller.dispatchOperatorInput("/plugin untrust @demo/plugin"), true);
   assert.equal(controller.dispatchOperatorInput("/mcp enable browser"), true);
   assert.equal(controller.dispatchOperatorInput("/hooks"), true);
 
@@ -571,7 +569,7 @@ test("command controller handles local xai credential commands without daemon me
   assert.equal(controller.dispatchOperatorInput("/xai status"), true);
   assert.equal(controller.dispatchOperatorInput("/xai validate"), true);
   assert.equal(controller.dispatchOperatorInput("/xai clear"), true);
-  assert.equal(controller.dispatchOperatorInput("/api set"), true);
+  assert.equal(controller.dispatchOperatorInput("/xai set"), true);
 
   assert.equal(
     calls.filter((entry) => entry.type === "promptForXaiApiKey").length,
@@ -585,7 +583,7 @@ test("command controller handles local xai credential commands without daemon me
       (entry) =>
         entry.type === "send" &&
         entry.frameType === "chat.message" &&
-        /\/xai|\/api/.test(String(entry.payload?.content ?? "")),
+        /\/xai/.test(String(entry.payload?.content ?? "")),
     ),
     false,
   );
@@ -796,11 +794,11 @@ test("command controller routes review commands through the shared session comma
   assert.equal(reviewSend?.payload?.content, "/review runtime/src/watch");
 });
 
-test("command controller routes security review and pr comment aliases to canonical review modes", () => {
+test("command controller routes canonical review modes through /review", () => {
   const { controller, calls } = createCommandHarness();
 
-  assert.equal(controller.dispatchOperatorInput("/security-review auth"), true);
-  assert.equal(controller.dispatchOperatorInput("/pr-comments diff"), true);
+  assert.equal(controller.dispatchOperatorInput("/review --mode security auth"), true);
+  assert.equal(controller.dispatchOperatorInput("/review --mode pr-comments diff"), true);
 
   const chatPayloads = calls
     .filter((entry) => entry.type === "send" && entry.frameType === "session.command.execute")
@@ -1611,10 +1609,10 @@ test("command controller saves and lists checkpoints through dedicated commands"
   );
 });
 
-test("command controller routes /sessions through the canonical session list command", () => {
+test("command controller routes canonical /session list through the shared command bus", () => {
   const { controller, watchState, calls } = createCommandHarness({
     WATCH_COMMANDS: [
-      { name: "/sessions", usage: "/sessions [query]", description: "sessions", aliases: [] },
+      { name: "/session", usage: "/session list [query]", description: "session", aliases: [] },
     ],
     parseWatchSlashCommand(value) {
       const trimmed = String(value ?? "").trim();
@@ -1623,12 +1621,12 @@ test("command controller routes /sessions through the canonical session list com
       return {
         commandToken,
         args,
-        command: commandToken === "/sessions" ? { name: commandToken } : null,
+        command: commandToken === "/session" ? { name: commandToken } : null,
       };
     },
   });
 
-  assert.equal(controller.dispatchOperatorInput("/sessions runtime"), true);
+  assert.equal(controller.dispatchOperatorInput("/session list runtime"), true);
 
   assert.equal(watchState.manualSessionsRequestPending, true);
   assert.equal(watchState.manualSessionsQuery, "runtime");

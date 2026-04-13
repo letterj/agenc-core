@@ -157,9 +157,7 @@ function classifyOperatorSurfaceEventFamily(type: string): OperatorSurfaceEventF
   if (
     type === "chat.session" ||
     type === "chat.owner" ||
-    type === "chat.resumed" ||
     type === "chat.session.resumed" ||
-    type === "chat.sessions" ||
     type === "chat.session.list" ||
     type === "chat.session.inspect" ||
     type === "chat.session.fork" ||

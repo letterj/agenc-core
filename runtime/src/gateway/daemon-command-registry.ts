@@ -1908,15 +1908,42 @@ export function createDaemonCommandRegistry(
       }
     },
   });
+  const replyRuntimeResult = async (
+    cmdCtx: import("./commands.js").SlashCommandContext,
+    surface: import("../channels/webchat/protocol.js").RuntimeCommandData["surface"],
+    text: string,
+    extras: Omit<import("../channels/webchat/protocol.js").RuntimeCommandData, "kind" | "surface"> = {},
+  ): Promise<void> => {
+    await cmdCtx.replyResult({
+      text,
+      viewKind: "runtime",
+      data: {
+        kind: "runtime",
+        surface,
+        ...extras,
+      },
+    });
+  };
   commandRegistry.register({
     name: "context",
     description: "Show current context window usage",
     global: true,
+    metadata: {
+      category: "runtime",
+      clients: ["shell", "console", "web"],
+      viewKind: "runtime",
+    },
     handler: async (cmdCtx) => {
       const executor = ctx.getChatExecutor();
       if (!executor) {
-        await cmdCtx.reply(
+        await replyRuntimeResult(
+          cmdCtx,
+          "context",
           `Session: ${cmdCtx.sessionId}\nContext usage unavailable (LLM not initialized).`,
+          {
+            status: "unavailable",
+            metrics: [{ label: "Session", value: cmdCtx.sessionId }],
+          },
         );
         return;
       }
@@ -2022,13 +2049,67 @@ export function createDaemonCommandRegistry(
         // Non-blocking — diagnostics may not be available
       }
 
-      await cmdCtx.reply(lines.join("\n"));
+      const memoryHealthItems = lines.includes("Memory health:")
+        ? lines.slice(lines.indexOf("Memory health:") + 1)
+        : [];
+      await replyRuntimeResult(cmdCtx, "context", lines.join("\n"), {
+        status: compactionPending ? "warning" : "healthy",
+        metrics: [
+          {
+            label: "Context Window",
+            value: `${(contextWindowTokens ?? 0).toLocaleString()} tokens`,
+          },
+          {
+            label: "Used",
+            value: `${totalTokens.toLocaleString()} tokens (${percent.toFixed(percent >= 10 ? 0 : 1)}%)`,
+            tone: compactionPending ? "warning" : "neutral",
+          },
+          {
+            label: "Free",
+            value:
+              typeof displayThreshold === "number"
+                ? `${Math.max(0, displayThreshold - totalTokens).toLocaleString()} tokens`
+                : "unknown",
+          },
+          { label: "History", value: `${historyLen} messages` },
+          { label: "Tools", value: `${toolCount}` },
+          { label: "Memory", value: ctx.getMemoryBackendName() ?? "none" },
+        ],
+        sections: [
+          {
+            title: "Workspace Files",
+            items: wsFiles.map(([name, loaded]) => `${loaded ? "loaded" : "missing"}: ${name}`),
+          },
+          ...(memoryHealthItems.length > 0
+            ? [{ title: "Memory Health", items: memoryHealthItems }]
+            : []),
+        ],
+        detail: {
+          sessionId: cmdCtx.sessionId,
+          contextWindowTokens: contextWindowTokens ?? 0,
+          sessionTokenBudget,
+          localCompactionThreshold,
+          totalTokens,
+          displayThreshold,
+          compactionPending,
+          systemPromptTokens,
+          toolCount,
+          historyLen,
+          provider,
+          model,
+        },
+      });
     },
   });
   commandRegistry.register({
     name: "status",
     description: "Show agent status",
     global: true,
+    metadata: {
+      category: "runtime",
+      clients: ["shell", "console", "web"],
+      viewKind: "runtime",
+    },
     handler: async (cmdCtx) => {
       const sessionId = resolveSessionId(cmdCtx.sessionId);
       const session = sessionMgr.get(sessionId);
@@ -2045,7 +2126,7 @@ export function createDaemonCommandRegistry(
         preferred: resolveSessionShellProfile(session?.metadata ?? {}),
       });
       const workflowState = resolveSessionWorkflowState(session?.metadata ?? {});
-      await cmdCtx.reply(
+      const text =
         `Agent is running.\n` +
           `Session: ${cmdCtx.sessionId}\n` +
           `History: ${historyLen} messages\n` +
@@ -2060,8 +2141,43 @@ export function createDaemonCommandRegistry(
           }\n` +
           `Memory: ${memoryBackend.name}\n` +
           `Tools: ${registry.size}\n` +
-          `Skills: ${availableSkills.length}`,
-      );
+          `Skills: ${availableSkills.length}`;
+      await replyRuntimeResult(cmdCtx, "status", text, {
+        status: "running",
+        metrics: [
+          { label: "Session", value: cmdCtx.sessionId },
+          { label: "History", value: `${historyLen} messages` },
+          { label: "Profile", value: shellProfile },
+          { label: "Stage", value: workflowState.stage },
+          { label: "Worktree", value: workflowState.worktreeMode },
+          { label: "Tools", value: `${registry.size}` },
+          { label: "Skills", value: `${availableSkills.length}` },
+        ],
+        sections: [
+          { title: "LLM", items: [providerNames] },
+          {
+            title: "Stateful Responses",
+            items: [
+              statefulConfig?.enabled === true
+                ? `enabled (store=${statefulConfig.store === true ? "yes" : "no"}, encrypted_reasoning=${encryptedReasoningEnabled ? "yes" : "no"}, anchor=${responseAnchor ?? "none"})`
+                : "disabled",
+            ],
+          },
+        ],
+        detail: {
+          sessionId: cmdCtx.sessionId,
+          historyLen,
+          shellProfile,
+          workflowState,
+          providerNames,
+          statefulEnabled: statefulConfig?.enabled === true,
+          encryptedReasoningEnabled,
+          responseAnchor,
+          memoryBackend: memoryBackend.name,
+          tools: registry.size,
+          skills: availableSkills.length,
+        },
+      });
     },
   });
   commandRegistry.register({
@@ -2069,6 +2185,12 @@ export function createDaemonCommandRegistry(
     description: "Show or set the active shell profile",
     args: "[list|general|coding|research|validation|documentation|operator]",
     global: true,
+    metadata: {
+      category: "runtime",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "shellProfiles",
+      viewKind: "runtime",
+    },
     handler: async (cmdCtx) => {
       const sessionId = resolveSessionId(cmdCtx.sessionId);
       const session = sessionMgr.get(sessionId);
@@ -2085,19 +2207,46 @@ export function createDaemonCommandRegistry(
       const arg = cmdCtx.argv[0]?.toLowerCase();
 
       if (!arg || arg === "status") {
-        await cmdCtx.reply(
-          `Shell profile: ${current}\n` +
-            `Available: ${SESSION_SHELL_PROFILES.join(", ")}`,
+        await replyRuntimeResult(
+          cmdCtx,
+          "profile",
+          `Shell profile: ${current}\nAvailable: ${SESSION_SHELL_PROFILES.join(", ")}`,
+          {
+            status: "active",
+            metrics: [
+              { label: "Current", value: current },
+              { label: "Default", value: DEFAULT_SESSION_SHELL_PROFILE },
+            ],
+            sections: [
+              { title: "Profiles", items: [...SESSION_SHELL_PROFILES] },
+            ],
+            detail: { current, available: SESSION_SHELL_PROFILES },
+          },
         );
         return;
       }
 
       if (arg === "list") {
-        await cmdCtx.reply(
-          `Shell profile: ${current}\n` +
-            `Default: ${DEFAULT_SESSION_SHELL_PROFILE}\n` +
-            "Profiles:\n" +
-            formatShellProfileList(current),
+        await replyRuntimeResult(
+          cmdCtx,
+          "profile",
+          `Shell profile: ${current}\nDefault: ${DEFAULT_SESSION_SHELL_PROFILE}\nProfiles:\n${formatShellProfileList(current)}`,
+          {
+            status: "active",
+            metrics: [
+              { label: "Current", value: current },
+              { label: "Default", value: DEFAULT_SESSION_SHELL_PROFILE },
+            ],
+            sections: [
+              {
+                title: "Profiles",
+                items: SESSION_SHELL_PROFILES.map((profile) =>
+                  profile === current ? `${profile} (active)` : profile,
+                ),
+              },
+            ],
+            detail: { current, available: SESSION_SHELL_PROFILES },
+          },
         );
         return;
       }
@@ -2128,7 +2277,7 @@ export function createDaemonCommandRegistry(
         );
       }
 
-      await cmdCtx.reply(
+      const profileText =
         resolvedProfile.coerced
           ? [
               `Shell profile set to ${resolvedProfile.profile}.`,
@@ -2137,8 +2286,20 @@ export function createDaemonCommandRegistry(
                 decision: resolvedProfile.decision,
               }),
             ].join("\n")
-          : `Shell profile set to ${resolvedProfile.profile}.\nThis currently updates session metadata; profile-aware routing and tool curation build on top of it.`,
-      );
+          : `Shell profile set to ${resolvedProfile.profile}.\nThis currently updates session metadata; profile-aware routing and tool curation build on top of it.`;
+      await replyRuntimeResult(cmdCtx, "profile", profileText, {
+        status: resolvedProfile.coerced ? "warning" : "active",
+        metrics: [
+          { label: "Current", value: resolvedProfile.profile },
+          { label: "Requested", value: resolvedProfile.requestedProfile },
+        ],
+        detail: {
+          current: resolvedProfile.profile,
+          requested: resolvedProfile.requestedProfile,
+          coerced: resolvedProfile.coerced,
+          heldBackReason: resolvedProfile.decision?.reason ?? null,
+        },
+      });
     },
   });
   commandRegistry.register({
@@ -2726,7 +2887,6 @@ export function createDaemonCommandRegistry(
       clients: ["shell", "console", "web"],
       rolloutFeature: "codingCommands",
       viewKind: "review",
-      aliases: ["security-review", "pr-comments"],
     },
     handler: async (cmdCtx) => {
       if (
@@ -5400,6 +5560,11 @@ export function createDaemonCommandRegistry(
     description: "Show or switch the current LLM model",
     args: "[model-name | current | list]",
     global: true,
+    metadata: {
+      category: "runtime",
+      clients: ["shell", "console", "web"],
+      viewKind: "runtime",
+    },
     handler: async (cmdCtx) => {
       const sessionId = cmdCtx.sessionId;
       const last = ctx.getSessionModelInfo(sessionId);
@@ -5437,7 +5602,33 @@ export function createDaemonCommandRegistry(
           "",
           "Switch with: /model <model-name>",
         ];
-        await cmdCtx.reply(lines.join("\n"));
+        await replyRuntimeResult(cmdCtx, "model", lines.join("\n"), {
+          status: "active",
+          metrics: [
+            {
+              label: "Last Completion",
+              value: last
+                ? `${last.provider}:${last.model}${last.usedFallback ? " (fallback)" : ""}`
+                : "none recorded",
+            },
+            {
+              label: "Primary",
+              value: `${configuredPrimaryProvider}:${configuredPrimaryModel}`,
+            },
+            {
+              label: "Fallbacks",
+              value: configuredFallbacks.length > 0 ? configuredFallbacks.join(", ") : "none",
+            },
+          ],
+          sections: [
+            { title: "Available Chat Models", items: chatModels.map((entry) => entry.id) },
+          ],
+          detail: {
+            last,
+            primary: { provider: configuredPrimaryProvider, model: configuredPrimaryModel },
+            fallbacks: configuredFallbacks,
+          },
+        });
         return;
       }
 
@@ -5455,7 +5646,23 @@ export function createDaemonCommandRegistry(
             );
           }
         }
-        await cmdCtx.reply(lines.join("\n"));
+        await replyRuntimeResult(cmdCtx, "model", lines.join("\n"), {
+          status: "catalog",
+          sections: [
+            {
+              title: "Known xAI Models",
+              items: knownGrokModels.map((entry) =>
+                entry.modality
+                  ? `${entry.id} [${entry.modality}]`
+                  : `${entry.id}${entry.id === configuredPrimaryModel ? " (active)" : ""}`,
+              ),
+            },
+          ],
+          detail: {
+            configuredPrimaryModel,
+            models: knownGrokModels,
+          },
+        });
         return;
       }
 
@@ -5498,7 +5705,11 @@ export function createDaemonCommandRegistry(
       }
 
       if (match.id === configuredPrimaryModel) {
-        await cmdCtx.reply(`Already using ${match.id}.`);
+        await replyRuntimeResult(cmdCtx, "model", `Already using ${match.id}.`, {
+          status: "active",
+          metrics: [{ label: "Current", value: match.id }],
+          detail: { model: match.id, unchanged: true },
+        });
         return;
       }
 
@@ -5513,8 +5724,22 @@ export function createDaemonCommandRegistry(
         ctx.logger.info(`Model switched to ${match.id} via /model command`);
         // Trigger config reload explicitly — filesystem watchers can be unreliable
         await ctx.handleConfigReload();
-        await cmdCtx.reply(
+        await replyRuntimeResult(
+          cmdCtx,
+          "model",
           `Model switched: ${configuredPrimaryModel} → ${match.id} (${match.contextWindowTokens.toLocaleString("en-US")} ctx)`,
+          {
+            status: "updated",
+            metrics: [
+              { label: "Previous", value: configuredPrimaryModel },
+              { label: "Current", value: match.id },
+            ],
+            detail: {
+              previous: configuredPrimaryModel,
+              current: match.id,
+              contextWindowTokens: match.contextWindowTokens,
+            },
+          },
         );
       } catch (err) {
         ctx.logger.error("Failed to update model config", { error: toErrorMessage(err) });
@@ -5527,13 +5752,20 @@ export function createDaemonCommandRegistry(
     description: "Show or switch the configured reasoning effort",
     args: "[current|list|low|medium|high|xhigh]",
     global: true,
+    metadata: {
+      category: "runtime",
+      clients: ["shell", "console", "web"],
+      viewKind: "runtime",
+    },
     handler: async (cmdCtx) => {
       const arg = cmdCtx.args.trim().toLowerCase();
       const configuredEffort =
         ctx.gateway?.config.llm?.reasoningEffort ?? "medium";
 
       if (!arg || arg === "current" || arg === "status") {
-        await cmdCtx.reply(
+        await replyRuntimeResult(
+          cmdCtx,
+          "effort",
           [
             "Reasoning effort:",
             `  Current: ${configuredEffort}`,
@@ -5541,13 +5773,33 @@ export function createDaemonCommandRegistry(
             "",
             "Switch with: /effort <low|medium|high|xhigh>",
           ].join("\n"),
+          {
+            status: "active",
+            metrics: [{ label: "Current", value: configuredEffort }],
+            sections: [{ title: "Available", items: [...REASONING_EFFORTS] }],
+            detail: { current: configuredEffort, available: REASONING_EFFORTS },
+          },
         );
         return;
       }
 
       if (arg === "list") {
-        await cmdCtx.reply(
+        await replyRuntimeResult(
+          cmdCtx,
+          "effort",
           `Reasoning efforts:\n${REASONING_EFFORTS.map((effort) => `  ${effort}${effort === configuredEffort ? " (active)" : ""}`).join("\n")}`,
+          {
+            status: "catalog",
+            sections: [
+              {
+                title: "Reasoning Efforts",
+                items: REASONING_EFFORTS.map((effort) =>
+                  effort === configuredEffort ? `${effort} (active)` : effort,
+                ),
+              },
+            ],
+            detail: { current: configuredEffort, available: REASONING_EFFORTS },
+          },
         );
         return;
       }
@@ -5560,7 +5812,16 @@ export function createDaemonCommandRegistry(
       }
 
       if (arg === configuredEffort) {
-        await cmdCtx.reply(`Already using reasoning effort "${arg}".`);
+        await replyRuntimeResult(
+          cmdCtx,
+          "effort",
+          `Already using reasoning effort "${arg}".`,
+          {
+            status: "active",
+            metrics: [{ label: "Current", value: arg }],
+            detail: { current: arg, unchanged: true },
+          },
+        );
         return;
       }
 
@@ -5573,8 +5834,18 @@ export function createDaemonCommandRegistry(
         await writeFile(ctx.configPath, JSON.stringify(config, null, 2) + "\n");
         ctx.logger.info(`Reasoning effort switched to ${arg} via /effort command`);
         await ctx.handleConfigReload();
-        await cmdCtx.reply(
+        await replyRuntimeResult(
+          cmdCtx,
+          "effort",
           `Reasoning effort switched: ${configuredEffort} → ${arg}`,
+          {
+            status: "updated",
+            metrics: [
+              { label: "Previous", value: configuredEffort },
+              { label: "Current", value: arg },
+            ],
+            detail: { previous: configuredEffort, current: arg },
+          },
         );
       } catch (error) {
         ctx.logger.error("Failed to update reasoning effort config", {
@@ -5594,6 +5865,11 @@ export function createDaemonCommandRegistry(
     description: "Show voice config or change voice persona",
     args: "[Ara|Rex|Sal|Eve|Leo|status|enable|disable]",
     global: true,
+    metadata: {
+      category: "runtime",
+      clients: ["shell", "console", "web"],
+      viewKind: "runtime",
+    },
     handler: async (cmdCtx) => {
       const arg = cmdCtx.args.trim();
       const voiceConfig = ctx.gateway?.config.voice;
@@ -5611,7 +5887,32 @@ export function createDaemonCommandRegistry(
           `VAD threshold: ${voiceConfig?.vadThreshold ?? 0.5}`,
           `VAD silence: ${voiceConfig?.vadSilenceDurationMs ?? 800}ms`,
         ];
-        await cmdCtx.reply(lines.join("\n"));
+        await replyRuntimeResult(cmdCtx, "voice", lines.join("\n"), {
+          status: count > 0 ? "active" : "idle",
+          metrics: [
+            { label: "Sessions", value: `${count}` },
+            { label: "Enabled", value: voiceConfig?.enabled !== false && bridge ? "yes" : "no" },
+            { label: "Voice", value: voiceConfig?.voice ?? "Ara" },
+          ],
+          sections: [
+            {
+              title: "Voice Runtime",
+              items: [
+                `Mode: ${voiceConfig?.mode ?? "vad"}`,
+                `Model: ${voiceConfig?.model ?? DEFAULT_GROK_MODEL}`,
+                `VAD threshold: ${voiceConfig?.vadThreshold ?? 0.5}`,
+                `VAD silence: ${voiceConfig?.vadSilenceDurationMs ?? 800}ms`,
+              ],
+            },
+          ],
+          detail: {
+            activeSessionCount: count,
+            enabled: voiceConfig?.enabled !== false && bridge ? "yes" : "no",
+            voice: voiceConfig?.voice ?? "Ara",
+            mode: voiceConfig?.mode ?? "vad",
+            model: voiceConfig?.model ?? DEFAULT_GROK_MODEL,
+          },
+        });
         return;
       }
 
@@ -5621,7 +5922,11 @@ export function createDaemonCommandRegistry(
         if (ctx.gateway?.config.voice) {
           ctx.gateway.config.voice.enabled = enable;
         }
-        await cmdCtx.reply(`Voice ${enable ? "enabled" : "disabled"}.`);
+        await replyRuntimeResult(cmdCtx, "voice", `Voice ${enable ? "enabled" : "disabled"}.`, {
+          status: enable ? "updated" : "idle",
+          metrics: [{ label: "Enabled", value: enable ? "yes" : "no" }],
+          detail: { enabled: enable },
+        });
         return;
       }
 
@@ -5635,8 +5940,15 @@ export function createDaemonCommandRegistry(
         } else if (ctx.gateway?.config) {
           (ctx.gateway.config as any).voice = { voice: matchedVoice };
         }
-        await cmdCtx.reply(
+        await replyRuntimeResult(
+          cmdCtx,
+          "voice",
           `Voice set to ${matchedVoice}. New voice sessions will use this persona.`,
+          {
+            status: "updated",
+            metrics: [{ label: "Voice", value: matchedVoice }],
+            detail: { voice: matchedVoice },
+          },
         );
         return;
       }
@@ -6196,6 +6508,11 @@ export function createDaemonCommandRegistry(
     name: "memory",
     description: "Inspect and manage memory (search, list, forget, pin)",
     global: true,
+    metadata: {
+      category: "runtime",
+      clients: ["shell", "console", "web"],
+      viewKind: "runtime",
+    },
     handler: async (cmdCtx) => {
       const args = (cmdCtx.args ?? "").trim();
       const subcommand = args.split(/\s+/)[0]?.toLowerCase() ?? "";
@@ -6219,7 +6536,16 @@ export function createDaemonCommandRegistry(
             if (matches.length >= 10) break;
           }
           if (matches.length === 0) {
-            await cmdCtx.reply(`No memory entries matching "${rest}".`);
+            await replyRuntimeResult(
+              cmdCtx,
+              "memory",
+              `No memory entries matching "${rest}".`,
+              {
+                status: "empty",
+                metrics: [{ label: "Query", value: rest }],
+                detail: { query: rest, matches: [] },
+              },
+            );
             return;
           }
           const lines = matches.map((e, i) => {
@@ -6234,7 +6560,20 @@ export function createDaemonCommandRegistry(
               : "";
             return `  ${i + 1}. [${e.role}] ${preview}${preview.length >= 80 ? "…" : ""} (${age}h ago${conf}${access})`;
           });
-          await cmdCtx.reply(`Memory search results for "${rest}":\n${lines.join("\n")}`);
+          await replyRuntimeResult(
+            cmdCtx,
+            "memory",
+            `Memory search results for "${rest}":\n${lines.join("\n")}`,
+            {
+              status: "results",
+              metrics: [
+                { label: "Query", value: rest },
+                { label: "Matches", value: `${matches.length}` },
+              ],
+              sections: [{ title: "Matches", items: lines }],
+              detail: { query: rest, matches },
+            },
+          );
         } catch (err) {
           await cmdCtx.reply(`Memory search error: ${toErrorMessage(err)}`);
         }
@@ -6247,7 +6586,37 @@ export function createDaemonCommandRegistry(
           const { collectMemoryHealthReport, formatMemoryHealthReport } =
             await import("../memory/diagnostics.js");
           const report = await collectMemoryHealthReport({ memoryBackend });
-          await cmdCtx.reply(formatMemoryHealthReport(report));
+          await replyRuntimeResult(
+            cmdCtx,
+            "memory",
+            formatMemoryHealthReport(report),
+            {
+              status: report.healthy ? "healthy" : "warning",
+              metrics: [
+                { label: "Backend", value: report.backendType },
+                { label: "Durability", value: report.durability },
+                { label: "Entries", value: `${report.entryCount}` },
+                { label: "Sessions", value: `${report.sessionCount}` },
+              ],
+              sections: [
+                {
+                  title: "Providers",
+                  items: [
+                    report.embeddingProvider
+                      ? `Embeddings: ${report.embeddingProvider.name} (${report.embeddingProvider.available ? "available" : "unavailable"})`
+                      : "Embeddings: unavailable",
+                    report.vectorStore
+                      ? `Vector store: dim=${report.vectorStore.dimension || "?"}${report.vectorStore.persistent ? " (persistent)" : " (ephemeral)"}`
+                      : "Vector store: unavailable",
+                    report.knowledgeGraph
+                      ? `Graph: ${report.knowledgeGraph.nodeCount} nodes, ${report.knowledgeGraph.edgeCount} edges`
+                      : "Graph: unavailable",
+                  ],
+                },
+              ],
+              detail: asRecord(report) ?? {},
+            },
+          );
         } catch (err) {
           await cmdCtx.reply(`Memory health error: ${toErrorMessage(err)}`);
         }
@@ -6291,7 +6660,10 @@ export function createDaemonCommandRegistry(
             limit: count,
           });
           if (results.length === 0) {
-            await cmdCtx.reply("No memory entries found.");
+            await replyRuntimeResult(cmdCtx, "memory", "No memory entries found.", {
+              status: "empty",
+              detail: { recent: [] },
+            });
             return;
           }
           const lines = results.map((e, i) => {
@@ -6299,7 +6671,17 @@ export function createDaemonCommandRegistry(
             const preview = e.content.slice(0, 80).replace(/\n/g, " ");
             return `  ${i + 1}. [${e.role}] ${preview}${preview.length >= 80 ? "…" : ""} (${age}h ago) id=${e.id.slice(0, 8)}`;
           });
-          await cmdCtx.reply(`Recent memory entries:\n${lines.join("\n")}`);
+          await replyRuntimeResult(
+            cmdCtx,
+            "memory",
+            `Recent memory entries:\n${lines.join("\n")}`,
+            {
+              status: "results",
+              metrics: [{ label: "Entries", value: `${results.length}` }],
+              sections: [{ title: "Recent Entries", items: lines }],
+              detail: { recent: results },
+            },
+          );
         } catch (err) {
           await cmdCtx.reply(`Memory list error: ${toErrorMessage(err)}`);
         }

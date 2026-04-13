@@ -22,9 +22,6 @@ import {
   WS_CHAT_SESSION,
   WS_CHAT_OWNER,
   WS_CHAT_NEW,
-  WS_CHAT_SESSION_FORK,
-  WS_CHAT_SESSION_INSPECT,
-  WS_CHAT_SESSION_LIST,
   WS_CHAT_CANCELLED,
   WS_CHAT_CANCEL,
   WS_CHAT_USAGE,
@@ -322,12 +319,39 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
     [],
   );
 
+  const executeSessionCommand = useCallback(
+    (
+      content: string,
+      options?: {
+        requestIdPrefix?: string;
+        targetSessionId?: string | null;
+      },
+    ) => {
+      const trimmed = content.trim();
+      if (!trimmed.startsWith('/')) {
+        return;
+      }
+      send({
+        type: 'session.command.execute',
+        id: nextRequestId(options?.requestIdPrefix ?? 'cmd'),
+        payload: authPayload({
+          content: trimmed,
+          client: 'web',
+          ...((options?.targetSessionId ?? sessionId)
+            ? { sessionId: (options?.targetSessionId ?? sessionId) as string }
+            : {}),
+        }),
+      });
+    },
+    [authPayload, nextRequestId, send, sessionId],
+  );
+
   const refreshSessions = useCallback(() => {
-    send({
-      type: WS_CHAT_SESSION_LIST,
-      payload: authPayload(),
+    executeSessionCommand('/session list', {
+      requestIdPrefix: 'cmd_sessions',
+      targetSessionId: null,
     });
-  }, [authPayload, send]);
+  }, [executeSessionCommand]);
 
   const refreshCockpit = useCallback((targetSessionId?: string | null) => {
     const effectiveSessionId = targetSessionId ?? sessionId;
@@ -375,24 +399,17 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
   }, [connected, refreshCockpit, refreshCommandCatalog, sessionId]);
 
   const resumeSession = useCallback((targetSessionId: string) => {
-    send({
-      type: 'session.command.execute',
-      id: nextRequestId('cmd_resume'),
-      payload: authPayload({
-        content: `/session resume ${targetSessionId}`,
-        client: 'web',
-        ...(sessionId ? { sessionId } : {}),
-      }),
+    executeSessionCommand(`/session resume ${targetSessionId}`, {
+      requestIdPrefix: 'cmd_resume',
     });
-  }, [authPayload, nextRequestId, send, sessionId]);
+  }, [executeSessionCommand]);
 
   const inspectSession = useCallback((targetSessionId: string) => {
-    send({
-      type: WS_CHAT_SESSION_INSPECT,
-      id: nextRequestId('session_inspect'),
-      payload: authPayload({ sessionId: targetSessionId }),
+    executeSessionCommand(`/session inspect ${targetSessionId}`, {
+      requestIdPrefix: 'cmd_session_inspect',
+      targetSessionId,
     });
-  }, [authPayload, nextRequestId, send]);
+  }, [executeSessionCommand]);
 
   const loadSessionHistory = useCallback(
     (
@@ -427,17 +444,19 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
       targetSessionId: string,
       options?: { objective?: string; profile?: string },
     ) => {
-      send({
-        type: WS_CHAT_SESSION_FORK,
-        id: nextRequestId('session_fork'),
-        payload: authPayload({
-          sessionId: targetSessionId,
-          ...(options?.objective ? { objective: options.objective } : {}),
-          ...(options?.profile ? { shellProfile: options.profile } : {}),
-        }),
+      const fragments = ['/session fork', targetSessionId];
+      if (options?.objective) {
+        fragments.push(`--objective ${JSON.stringify(options.objective)}`);
+      }
+      if (options?.profile) {
+        fragments.push(`--profile ${options.profile}`);
+      }
+      executeSessionCommand(fragments.join(' '), {
+        requestIdPrefix: 'cmd_session_fork',
+        targetSessionId,
       });
     },
-    [authPayload, nextRequestId, send],
+    [executeSessionCommand],
   );
 
   const startNewChat = useCallback(() => {
@@ -851,14 +870,6 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
         break;
       }
 
-      case WS_CHAT_SESSION_LIST: {
-        const payload = msg.payload as ContinuityRecord[];
-        if (Array.isArray(payload)) {
-          setSessions(payload);
-        }
-        break;
-      }
-
       case WS_CHAT_SESSION_RESUMED: {
         const payload = (msg.payload ?? msg) as Record<string, unknown>;
         const id = (payload.sessionId as string) ?? null;
@@ -868,25 +879,6 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
           refreshSessions();
           refreshCommandCatalog(id);
           refreshCockpit(id);
-        }
-        break;
-      }
-
-      case WS_CHAT_SESSION_INSPECT: {
-        const payload = msg.payload as ContinuityDetail | undefined;
-        if (payload && typeof payload.sessionId === 'string') {
-          setSelectedSessionDetail(payload);
-        }
-        break;
-      }
-
-      case WS_CHAT_SESSION_FORK: {
-        const payload = (msg.payload ?? msg) as Record<string, unknown>;
-        const targetSessionId =
-          typeof payload.targetSessionId === 'string' ? payload.targetSessionId : null;
-        if (targetSessionId) {
-          refreshSessions();
-          inspectSession(targetSessionId);
         }
         break;
       }
@@ -937,6 +929,16 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
           }
           if (resultData.subcommand === 'fork' && resultData.forked?.targetSessionId) {
             refreshSessions();
+            inspectSession(resultData.forked.targetSessionId);
+          }
+          if (resultData.subcommand === 'history' && Array.isArray(resultData.history)) {
+            const historyMsgs = resultData.history.map((entry, index) => ({
+              id: `history_${entry.timestamp}_${index}`,
+              content: entry.content,
+              sender: entry.sender,
+              timestamp: entry.timestamp,
+            }));
+            setMessages(historyMsgs);
           }
         }
         if (

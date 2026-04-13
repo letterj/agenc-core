@@ -248,12 +248,12 @@ describe("operator event normalization", () => {
 
     expect(
       projectOperatorSurfaceEvent({
-        type: "chat.sessions",
+        type: "chat.session.list",
         payload: [{ sessionId: "session:1" }],
       }),
     ).toMatchObject({
       family: "session",
-      type: "chat.sessions",
+      type: "chat.session.list",
       payloadRecord: {},
       payloadList: [{ sessionId: "session:1" }],
       isSessionScoped: false,

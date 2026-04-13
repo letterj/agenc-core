@@ -43,6 +43,9 @@ async function queryControlPlane(
   port: number,
   type: string,
   payload?: unknown,
+  options?: {
+    expectType?: string;
+  },
 ): Promise<{ payload?: unknown; error?: string }> {
   let WsConstructor: new (url: string) => WsLike;
   try {
@@ -57,6 +60,8 @@ async function queryControlPlane(
   return new Promise<{ payload?: unknown; error?: string }>(
     (resolvePromise, rejectPromise) => {
       const ws = new WsConstructor(`ws://127.0.0.1:${port}`);
+      const requestId = `cli_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      const expectedType = options?.expectType ?? type;
       let settled = false;
 
       const timer = setTimeout(() => {
@@ -83,6 +88,7 @@ async function queryControlPlane(
       ws.on("open", () => {
         ws.send(
           JSON.stringify({
+            id: requestId,
             type,
             ...(payload !== undefined ? { payload } : {}),
           }),
@@ -92,9 +98,19 @@ async function queryControlPlane(
       ws.on("message", (data: unknown) => {
         try {
           const parsed = JSON.parse(String(data)) as {
+            type?: unknown;
+            id?: unknown;
             payload?: unknown;
             error?: string;
           };
+          if (
+            typeof parsed.id !== "string" ||
+            parsed.id !== requestId ||
+            typeof parsed.type !== "string" ||
+            parsed.type !== expectedType
+          ) {
+            return;
+          }
           ws.close();
           resolveResult(parsed);
         } catch {
@@ -163,6 +179,8 @@ async function runContinuityQuery(
     response = await queryControlPlane(portResult.port, query.type, {
       ...query.payload,
       ...(ownerToken ? { ownerToken } : {}),
+    }, {
+      expectType: query.type,
     });
   } catch (error) {
     context.error({
