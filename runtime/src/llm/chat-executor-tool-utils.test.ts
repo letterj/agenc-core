@@ -203,6 +203,56 @@ describe("chat-executor-tool-utils", () => {
       });
       expect(repaired.repairedFields).toEqual(["constraintHash", "taskId"]);
     });
+
+    it("normalizes human-friendly agenc.createTask arguments from model output", () => {
+      const repaired = repairToolCallArgumentsFromMessageText(
+        "agenc.createTask",
+        {
+          fullDescription: "Write one fun fact about Solana devnet.",
+          reward: "0.01",
+          requiredCapabilities: '["INFERENCE"]',
+          taskId: "random-tech-fact-001",
+          rewardMint: "So11111111111111111111111111111111111111112",
+        },
+        "create a random task",
+      );
+
+      expect(repaired.args).toEqual({
+        description: "Write one fun fact about Solana devnet.",
+        fullDescription: "Write one fun fact about Solana devnet.",
+        reward: "10000000",
+        requiredCapabilities: "2",
+      });
+      expect(repaired.repairedFields).toEqual([
+        "taskId",
+        "rewardMint",
+        "description",
+        "reward",
+        "requiredCapabilities",
+      ]);
+    });
+
+    it("falls back to COMPUTE for tag-like agenc.createTask capabilities", () => {
+      const repaired = repairToolCallArgumentsFromMessageText(
+        "agenc.createTask",
+        {
+          description: "Random joke task",
+          reward: "1 SOL",
+          requiredCapabilities: "meme, relationship, humor",
+        },
+        "create a random task",
+      );
+
+      expect(repaired.args).toEqual({
+        description: "Random joke task",
+        reward: "1000000000",
+        requiredCapabilities: "1",
+      });
+      expect(repaired.repairedFields).toEqual([
+        "reward",
+        "requiredCapabilities",
+      ]);
+    });
   });
 
   describe("summarizeToolArgumentChanges", () => {

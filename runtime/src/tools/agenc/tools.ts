@@ -462,12 +462,25 @@ async function resolveCreatorAgentPda(
   creator: PublicKey,
   providedCreatorAgentPda?: unknown,
 ): Promise<[PublicKey | null, ToolResult | null]> {
+  const matches = await findSignerAgentChoices(program, creator);
+
   if (!isOptionalPlaceholder(providedCreatorAgentPda)) {
     const [pda, err] = parseBase58(providedCreatorAgentPda);
-    return [pda, err];
-  }
+    if (pda && matches.some((match) => match.agentPda === pda.toBase58())) {
+      return [pda, null];
+    }
 
-  const matches = await findSignerAgentChoices(program, creator);
+    if (matches.length === 1) {
+      return [new PublicKey(matches[0]!.agentPda), null];
+    }
+
+    if (matches.length > 1) {
+      return [null, ambiguousSignerAgentsResult(creator, matches)];
+    }
+
+    if (err) return [null, err];
+    return [null, errorResult('creatorAgentPda is not registered for signer wallet. Run `agenc-runtime agent register --rpc <url>` first, or provide one of this signer wallet\'s agent PDA values.')];
+  }
 
   if (matches.length === 0) {
     return [null, errorResult('No agent registration found for signer wallet. Run `agenc-runtime agent register --rpc <url>` first, or provide creatorAgentPda.')];
