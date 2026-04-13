@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { VoiceState, VoiceMode } from '../../types';
+import type { CommandCatalogEntry, VoiceState, VoiceMode } from '../../types';
 import { VoiceButton } from './VoiceButton';
 
 interface ChatInputProps {
@@ -12,6 +12,7 @@ interface ChatInputProps {
   onVoiceToggle?: () => void;
   onPushToTalkStart?: () => void;
   onPushToTalkStop?: () => void;
+  commands?: CommandCatalogEntry[];
 }
 
 interface SlashCommandOption {
@@ -20,28 +21,19 @@ interface SlashCommandOption {
   args?: string;
 }
 
-const SLASH_COMMANDS: SlashCommandOption[] = [
+const FALLBACK_SLASH_COMMANDS: SlashCommandOption[] = [
   { name: 'help', description: 'Show available commands' },
   { name: 'status', description: 'Show agent status' },
   { name: 'new', description: 'Start a new session' },
-  { name: 'reset', description: 'Reset session and clear context' },
-  { name: 'restart', description: 'Restart current chat context' },
-  { name: 'stop', description: 'Pause the agent' },
-  { name: 'start', description: 'Resume the agent' },
+  { name: 'session', description: 'Show or resume shell sessions', args: '[status|list|resume <sessionId>]' },
   { name: 'context', description: 'Show context window usage' },
   { name: 'compact', description: 'Force conversation compaction' },
   { name: 'model', description: 'Show current model', args: '[name]' },
-  { name: 'skills', description: 'List available skills' },
-  { name: 'task', description: 'Show current task status' },
+  { name: 'review', description: 'Review current changes', args: '[--delegate]' },
   { name: 'tasks', description: 'List tasks' },
-  { name: 'balance', description: 'Show token balance' },
-  { name: 'reputation', description: 'Show reputation score' },
-  { name: 'eval', description: 'Model eval or in-session tool eval', args: '[prompt] | full [prompt] | script [args]' },
-  { name: 'progress', description: 'Show recent task progress' },
-  { name: 'pipeline', description: 'Run pipeline from JSON steps', args: '<json>' },
-  { name: 'resume', description: 'Resume halted pipeline', args: '[pipeline-id]' },
-  { name: 'goal', description: 'Create or list goals', args: '[description]' },
-  { name: 'desktop', description: 'Desktop sandbox control', args: '<start|stop|status|vnc|list|attach> [--memory 4g] [--cpu 2.0]' },
+  { name: 'mcp', description: 'Inspect configured MCP servers' },
+  { name: 'skills', description: 'List local discovered skills' },
+  { name: 'plugin', description: 'Inspect the local plugin catalog' },
 ];
 
 function getSlashQuery(value: string): string | null {
@@ -62,6 +54,7 @@ export function ChatInput({
   onVoiceToggle,
   onPushToTalkStart,
   onPushToTalkStop,
+  commands = [],
 }: ChatInputProps) {
   const [value, setValue] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
@@ -69,11 +62,20 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const slashQuery = useMemo(() => getSlashQuery(value), [value]);
+  const availableCommands = useMemo<SlashCommandOption[]>(
+    () =>
+      (commands.length > 0 ? commands : FALLBACK_SLASH_COMMANDS).map((cmd) => ({
+        name: cmd.name,
+        description: cmd.description,
+        ...(cmd.args ? { args: cmd.args } : {}),
+      })),
+    [commands],
+  );
   const visibleCommands = useMemo(() => {
     if (slashQuery === null) return [];
-    if (!slashQuery) return SLASH_COMMANDS;
-    return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(slashQuery));
-  }, [slashQuery]);
+    if (!slashQuery) return availableCommands;
+    return availableCommands.filter((cmd) => cmd.name.startsWith(slashQuery));
+  }, [availableCommands, slashQuery]);
   const showCommandMenu = visibleCommands.length > 0;
 
   useEffect(() => {

@@ -60,7 +60,7 @@ import {
 
 const WEB_SESSION_RUNTIME_STATE_KEY_PREFIX = "webchat:runtime-state:";
 
-export interface PersistedWebSessionRuntimeState {
+export interface PersistedSessionRuntimeState {
   readonly version: 6;
   readonly shellProfile?: SessionShellProfile;
   readonly workflowState?: SessionWorkflowState;
@@ -80,6 +80,9 @@ export interface PersistedWebSessionRuntimeState {
    */
   readonly activeTaskContext?: unknown;
 }
+
+/** @deprecated Use PersistedSessionRuntimeState. */
+export type PersistedWebSessionRuntimeState = PersistedSessionRuntimeState;
 
 const SESSION_STATEFUL_LINEAGE_PHASES = new Set([
   "initial",
@@ -377,18 +380,18 @@ function coercePersistedWebSessionRuntimeState(
   };
 }
 
-function clonePersistedWebSessionRuntimeState(
-  state: PersistedWebSessionRuntimeState,
-): PersistedWebSessionRuntimeState {
+function clonePersistedSessionRuntimeState(
+  state: PersistedSessionRuntimeState,
+): PersistedSessionRuntimeState {
   return JSON.parse(
     JSON.stringify(state),
-  ) as PersistedWebSessionRuntimeState;
+  ) as PersistedSessionRuntimeState;
 }
 
-export async function loadPersistedWebSessionRuntimeState(
+export async function loadPersistedSessionRuntimeState(
   memoryBackend: MemoryBackend,
   webSessionId: string,
-): Promise<PersistedWebSessionRuntimeState | undefined> {
+): Promise<PersistedSessionRuntimeState | undefined> {
   return coercePersistedWebSessionRuntimeState(
     await memoryBackend.get(webSessionRuntimeStateKey(webSessionId)),
   );
@@ -415,7 +418,7 @@ export function buildSessionStatefulOptions(
   };
 }
 
-export async function persistWebSessionRuntimeState(
+export async function persistSessionRuntimeState(
   memoryBackend: MemoryBackend,
   webSessionId: string,
   session: Session,
@@ -447,7 +450,7 @@ export async function persistWebSessionRuntimeState(
   await memoryBackend.set(key, persisted);
 }
 
-export async function clearWebSessionRuntimeState(
+export async function clearSessionRuntimeState(
   memoryBackend: MemoryBackend,
   webSessionId: string,
 ): Promise<void> {
@@ -461,7 +464,7 @@ export async function clearWebSessionRuntimeState(
   await memoryBackend.delete(webSessionRuntimeStateKey(webSessionId));
 }
 
-export async function hydrateWebSessionRuntimeState(
+export async function hydrateSessionRuntimeState(
   memoryBackend: MemoryBackend,
   webSessionId: string,
   session: Session,
@@ -517,7 +520,7 @@ export async function hydrateWebSessionRuntimeState(
   }
 }
 
-export async function forkWebSessionRuntimeState(
+export async function forkSessionRuntimeState(
   memoryBackend: MemoryBackend,
   params: {
     sourceWebSessionId: string;
@@ -526,7 +529,7 @@ export async function forkWebSessionRuntimeState(
     workflowState?: Partial<SessionWorkflowState>;
   },
 ): Promise<boolean> {
-  const persisted = await loadPersistedWebSessionRuntimeState(
+  const persisted = await loadPersistedSessionRuntimeState(
     memoryBackend,
     params.sourceWebSessionId,
   );
@@ -536,7 +539,7 @@ export async function forkWebSessionRuntimeState(
 
   const artifactStore = new MemoryArtifactStore(memoryBackend);
   const next = {
-    ...clonePersistedWebSessionRuntimeState(persisted),
+    ...clonePersistedSessionRuntimeState(persisted),
   } as {
     version: 6;
     shellProfile?: SessionShellProfile;
@@ -628,6 +631,17 @@ export async function forkWebSessionRuntimeState(
   );
   return true;
 }
+
+/** @deprecated Use loadPersistedSessionRuntimeState. */
+export const loadPersistedWebSessionRuntimeState = loadPersistedSessionRuntimeState;
+/** @deprecated Use persistSessionRuntimeState. */
+export const persistWebSessionRuntimeState = persistSessionRuntimeState;
+/** @deprecated Use clearSessionRuntimeState. */
+export const clearWebSessionRuntimeState = clearSessionRuntimeState;
+/** @deprecated Use hydrateSessionRuntimeState. */
+export const hydrateWebSessionRuntimeState = hydrateSessionRuntimeState;
+/** @deprecated Use forkSessionRuntimeState. */
+export const forkWebSessionRuntimeState = forkSessionRuntimeState;
 
 export function resolveSessionStatefulContinuation(
   result: ChatExecutorResult,

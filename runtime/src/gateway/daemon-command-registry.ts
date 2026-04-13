@@ -102,6 +102,7 @@ import type {
 } from "./subagent-infrastructure.js";
 import type { VoiceBridge } from "./voice-bridge.js";
 import type { WebChatChannel } from "../channels/webchat/plugin.js";
+import type { SessionContinuityDetail } from "../channels/webchat/types.js";
 import { PluginCatalog } from "../skills/catalog.js";
 import { TASK_LIST_ARG } from "../tools/system/task-tracker.js";
 import type {
@@ -1085,82 +1086,69 @@ function updateVerificationSurfaceState(
   return next;
 }
 
-function formatContinuitySessionInspect(
-  detail: Record<string, unknown>,
-): string {
-  const session = asRecord(detail.session);
-  if (!session) {
-    return typeof detail.error === "string"
-      ? `Session inspect failed: ${detail.error}`
-      : "Session detail unavailable.";
-  }
+function formatContinuitySessionInspect(detail: SessionContinuityDetail): string {
   const lines = [
     "Session detail:",
-    `  Session id: ${typeof session.sessionId === "string" ? session.sessionId : "unknown"}`,
-    `  Profile: ${typeof session.shellProfile === "string" ? session.shellProfile : "general"}`,
-    `  Workflow stage: ${typeof session.workflowStage === "string" ? session.workflowStage : "idle"}`,
-    `  Resumability: ${typeof session.resumabilityState === "string" ? session.resumabilityState : "unknown"}`,
-    ...(typeof session.workspaceRoot === "string"
-      ? [`  Workspace root: ${session.workspaceRoot}`]
+    `  Session id: ${detail.sessionId}`,
+    `  Profile: ${detail.shellProfile}`,
+    `  Workflow stage: ${detail.workflowStage}`,
+    `  Resumability: ${detail.resumabilityState}`,
+    ...(typeof detail.workspaceRoot === "string"
+      ? [`  Workspace root: ${detail.workspaceRoot}`]
       : []),
-    ...(typeof session.repoRoot === "string"
-      ? [`  Repo root: ${session.repoRoot}`]
+    ...(typeof detail.repoRoot === "string"
+      ? [`  Repo root: ${detail.repoRoot}`]
       : []),
-    ...(typeof session.branch === "string" ? [`  Branch: ${session.branch}`] : []),
-    ...(typeof session.head === "string" ? [`  Head: ${session.head}`] : []),
-    ...(typeof detail.objective === "string" ? [`  Objective: ${detail.objective}`] : []),
-    `  Messages: ${typeof session.messageCount === "number" ? session.messageCount : 0}`,
-    `  Pending approvals: ${typeof session.pendingApprovalCount === "number" ? session.pendingApprovalCount : 0}`,
-    `  Child sessions: ${typeof session.childSessionCount === "number" ? session.childSessionCount : 0}`,
-    `  Worktrees: ${typeof session.worktreeCount === "number" ? session.worktreeCount : 0}`,
-    ...(typeof session.activeTaskSummary === "string"
-      ? [`  Active task: ${session.activeTaskSummary}`]
+    ...(typeof detail.branch === "string" ? [`  Branch: ${detail.branch}`] : []),
+    ...(typeof detail.head === "string" ? [`  Head: ${detail.head}`] : []),
+    ...(typeof detail.workflowState.objective === "string"
+      ? [`  Objective: ${detail.workflowState.objective}`]
       : []),
-    ...(typeof session.lastAssistantOutputPreview === "string"
-      ? [`  Last assistant output: ${session.lastAssistantOutputPreview}`]
+    `  Messages: ${detail.messageCount}`,
+    `  Pending approvals: ${detail.pendingApprovalCount}`,
+    `  Child sessions: ${detail.childSessionCount}`,
+    `  Worktrees: ${detail.worktreeCount}`,
+    ...(typeof detail.activeTaskSummary === "string"
+      ? [`  Active task: ${detail.activeTaskSummary}`]
+      : []),
+    ...(typeof detail.lastAssistantOutputPreview === "string"
+      ? [`  Last assistant output: ${detail.lastAssistantOutputPreview}`]
       : []),
   ];
-  const forkLineage = asRecord(session.forkLineage);
-  if (forkLineage) {
+  if (detail.forkLineage) {
     lines.push(
-      `  Forked from: ${typeof forkLineage.parentSessionId === "string" ? forkLineage.parentSessionId : "unknown"} (${typeof forkLineage.source === "string" ? forkLineage.source : "unknown"})`,
+      `  Forked from: ${detail.forkLineage.parentSessionId} (${detail.forkLineage.source})`,
     );
   }
-  const backgroundRun = asRecord(detail.backgroundRun);
-  if (backgroundRun) {
+  if (detail.backgroundRun) {
     lines.push("");
     lines.push("Background run:");
     lines.push(
-      `  ${typeof backgroundRun.runId === "string" ? backgroundRun.runId : "unknown"} ${typeof backgroundRun.state === "string" ? `[${backgroundRun.state}]` : ""} ${typeof backgroundRun.currentPhase === "string" ? backgroundRun.currentPhase : ""}`.trim(),
+      `  ${detail.backgroundRun.runId} [${detail.backgroundRun.state}] ${detail.backgroundRun.currentPhase ?? ""}`.trim(),
     );
-    if (typeof backgroundRun.objective === "string") {
-      lines.push(`  Objective: ${backgroundRun.objective}`);
+    if (typeof detail.backgroundRun.objective === "string") {
+      lines.push(`  Objective: ${detail.backgroundRun.objective}`);
     }
-    if (backgroundRun.checkpointAvailable === true) {
+    if (detail.backgroundRun.checkpointAvailable === true) {
       lines.push("  Checkpoint available: yes");
     }
   }
-  const history = Array.isArray(detail.recentHistory)
-    ? detail.recentHistory
-        .map((entry) => asRecord(entry))
-        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-    : [];
-  if (history.length > 0) {
+  if ((detail.recentHistory?.length ?? 0) > 0) {
     lines.push("");
     lines.push("Recent history:");
-    for (const entry of history) {
-      const sender =
-        typeof entry.sender === "string" ? entry.sender : "unknown";
-      const content =
-        typeof entry.content === "string" ? entry.content.trim() : "";
-      lines.push(`  ${sender}: ${content || "(empty)"}`);
+    for (const entry of detail.recentHistory ?? []) {
+      lines.push(`  ${entry.sender}: ${entry.content.trim() || "(empty)"}`);
     }
   }
   return lines.join("\n");
 }
 
 function formatSessionHistoryReply(
-  history: readonly Record<string, unknown>[],
+  history: readonly {
+    readonly content: string;
+    readonly sender: string;
+    readonly toolName?: string;
+  }[],
 ): string {
   if (history.length === 0) {
     return "No session history found.";
@@ -1168,15 +1156,9 @@ function formatSessionHistoryReply(
   return [
     `Session history (${history.length}):`,
     ...history.map((entry) => {
-      const sender =
-        typeof entry.sender === "string" ? entry.sender : "unknown";
-      const toolName =
-        typeof entry.toolName === "string" ? ` ${entry.toolName}` : "";
-      const content =
-        typeof entry.content === "string" && entry.content.trim().length > 0
-          ? entry.content.trim()
-          : "(empty)";
-      return `  ${sender}${toolName}: ${content}`;
+      const toolName = entry.toolName ? ` ${entry.toolName}` : "";
+      const content = entry.content.trim().length > 0 ? entry.content.trim() : "(empty)";
+      return `  ${entry.sender}${toolName}: ${content}`;
     }),
   ].join("\n");
 }
@@ -2005,6 +1987,12 @@ export function createDaemonCommandRegistry(
     description: "Show repo inventory or search files in the active workspace",
     args: "[query|json]",
     global: true,
+    metadata: {
+      category: "coding",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "codingCommands",
+      viewKind: "files",
+    },
     handler: async (cmdCtx) => {
       if (
         !(await requireShellFeature({
@@ -2078,6 +2066,12 @@ export function createDaemonCommandRegistry(
     description: "Search repo-local files with the native coding grep tool",
     args: "<pattern|json>",
     global: true,
+    metadata: {
+      category: "coding",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "codingCommands",
+      viewKind: "grep",
+    },
     handler: async (cmdCtx) => {
       if (
         !(await requireShellFeature({
@@ -2138,6 +2132,12 @@ export function createDaemonCommandRegistry(
     description: "Run structured git status, diff, branch, show, summary, or worktree commands",
     args: "<status|diff|show|branch|summary|worktree>",
     global: true,
+    metadata: {
+      category: "coding",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "codingCommands",
+      viewKind: "git",
+    },
     handler: async (cmdCtx) => {
       if (
         !(await requireShellFeature({
@@ -2344,6 +2344,12 @@ export function createDaemonCommandRegistry(
     name: "branch",
     description: "Alias for /git branch",
     global: true,
+    metadata: {
+      category: "coding",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "codingCommands",
+      viewKind: "git",
+    },
     handler: async (cmdCtx) => {
       await commandRegistry
         .get("git")
@@ -2359,6 +2365,12 @@ export function createDaemonCommandRegistry(
     description: "Alias for /git worktree",
     args: "<list|create|remove|status>",
     global: true,
+    metadata: {
+      category: "coding",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "codingCommands",
+      viewKind: "git",
+    },
     handler: async (cmdCtx) => {
       const args = cmdCtx.args.trim();
       const forwardedArgs =
@@ -2382,6 +2394,12 @@ export function createDaemonCommandRegistry(
     description: "Show repo change summary plus a structured git diff",
     args: "[--staged|json]",
     global: true,
+    metadata: {
+      category: "coding",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "codingCommands",
+      viewKind: "diff",
+    },
     handler: async (cmdCtx) => {
       if (
         !(await requireShellFeature({
@@ -2429,8 +2447,15 @@ export function createDaemonCommandRegistry(
   commandRegistry.register({
     name: "review",
     description: "Summarize the current repo state for human or agent review",
-    args: "[--staged|--delegate]",
+    args: "[--staged|--delegate|--mode security|--mode pr-comments]",
     global: true,
+    metadata: {
+      category: "coding",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "codingCommands",
+      viewKind: "review",
+      aliases: ["security-review", "pr-comments"],
+    },
     handler: async (cmdCtx) => {
       if (
         !(await requireShellFeature({
@@ -2446,11 +2471,21 @@ export function createDaemonCommandRegistry(
       try {
         jsonArgs = parseCommandJsonArgs(cmdCtx.args);
       } catch (error) {
-        await cmdCtx.reply(`Usage: /review [--staged] [--delegate]\n${toErrorMessage(error)}`);
+        await cmdCtx.reply(
+          `Usage: /review [--staged] [--delegate|--mode security|--mode pr-comments]\n${toErrorMessage(error)}`,
+        );
         return;
       }
       const wantsDelegate =
         jsonArgs?.delegate === true || hasInlineFlag(cmdCtx.argv, "delegate");
+      const requestedMode =
+        typeof jsonArgs?.mode === "string"
+          ? jsonArgs.mode.trim().toLowerCase()
+          : parseInlineFlag(cmdCtx.argv, "mode")?.trim().toLowerCase();
+      const reviewMode =
+        requestedMode === "security" || requestedMode === "pr-comments"
+          ? requestedMode
+          : "default";
       const branchInfo = await executeStructuredTool(
         baseToolHandler,
         "system.gitBranchInfo",
@@ -2468,7 +2503,11 @@ export function createDaemonCommandRegistry(
           (hasInlineFlag(cmdCtx.argv, "staged") ? { staged: true } : {}),
       );
       const reviewSurface = [
-        "Review surface:",
+        reviewMode === "security"
+          ? "Security review surface:"
+          : reviewMode === "pr-comments"
+            ? "PR comment drafting surface:"
+            : "Review surface:",
         formatGitBranchReply(branchInfo),
         "",
         formatGitSummaryReply(summary),
@@ -2506,7 +2545,12 @@ export function createDaemonCommandRegistry(
       const delegated = await ctx.launchShellAgentTask({
         parentSessionId: resolvedSessionId,
         roleId: "review",
-        objective: "Review the current changes and return findings-first output.",
+        objective:
+          reviewMode === "security"
+            ? "Review the current changes for security issues and return findings-first output."
+            : reviewMode === "pr-comments"
+              ? "Review the current changes and draft concise PR comments."
+              : "Review the current changes and return findings-first output.",
         prompt: buildReviewDelegatePrompt({
           branchReply: formatGitBranchReply(branchInfo),
           summaryReply: formatGitSummaryReply(summary),
@@ -2544,6 +2588,12 @@ export function createDaemonCommandRegistry(
     description: "List, spawn, inspect, assign, or stop child agents",
     args: "[roles|list|spawn|assign|inspect|stop]",
     global: true,
+    metadata: {
+      category: "agents",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "multiAgent",
+      viewKind: "agents",
+    },
     handler: async (cmdCtx) => {
       const sessionId = resolveSessionId(cmdCtx.sessionId);
       const session = sessionMgr.get(sessionId);
@@ -2763,6 +2813,11 @@ export function createDaemonCommandRegistry(
     description: "List or inspect session task-tracker tasks",
     args: "[list|get <taskId>|wait <taskId>|output <taskId>]",
     global: true,
+    metadata: {
+      category: "tasks",
+      clients: ["shell", "console", "web"],
+      viewKind: "tasks",
+    },
     handler: async (cmdCtx) => {
       let jsonArgs: Record<string, unknown> | undefined;
       try {
@@ -2868,6 +2923,12 @@ export function createDaemonCommandRegistry(
     description: "Show or change the current coding workflow stage for this session",
     args: "[status|enter|exit|implement|review|verify]",
     global: true,
+    metadata: {
+      category: "workflow",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "codingCommands",
+      viewKind: "workflow",
+    },
     handler: async (cmdCtx) => {
       const sessionId = resolveSessionId(cmdCtx.sessionId);
       const session = sessionMgr.get(sessionId);
@@ -3161,6 +3222,12 @@ export function createDaemonCommandRegistry(
     description: "Show verification state or run the restricted verifier child",
     args: "[--delegate]",
     global: true,
+    metadata: {
+      category: "coding",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "codingCommands",
+      viewKind: "verify",
+    },
     handler: async (cmdCtx) => {
       const resolvedSessionId = resolveSessionId(cmdCtx.sessionId);
       const session = sessionMgr.get(resolvedSessionId);
@@ -3296,6 +3363,11 @@ export function createDaemonCommandRegistry(
     name: "session",
     description: "Inspect the current shell session or continuity catalog",
     global: true,
+    metadata: {
+      category: "session",
+      clients: ["shell", "console", "web"],
+      viewKind: "session",
+    },
     handler: async (cmdCtx) => {
       const subcommand = cmdCtx.argv[0]?.toLowerCase() ?? "status";
       const webChat = ctx.getWebChatChannel();
@@ -3421,9 +3493,7 @@ export function createDaemonCommandRegistry(
             hasInlineFlag(cmdCtx.argv.slice(1), "include-tools"),
         });
         await cmdCtx.reply(
-          formatSessionHistoryReply(
-            history as unknown as readonly Record<string, unknown>[],
-          ),
+          formatSessionHistoryReply(history),
         );
         return;
       }
@@ -3629,6 +3699,11 @@ export function createDaemonCommandRegistry(
     description: "Show policy state or simulate a tool policy decision",
     args: "[status|simulate <toolName> [jsonArgs]|credentials|revoke-credentials [credentialId]|update <allow|deny|clear|reset> [pattern]]",
     global: true,
+    metadata: {
+      category: "policy",
+      clients: ["shell", "console", "web"],
+      viewKind: "policy",
+    },
     handler: async (cmdCtx) => {
       const subcommand = cmdCtx.argv[0]?.toLowerCase();
       if (!subcommand || subcommand === "status") {
@@ -3793,6 +3868,11 @@ export function createDaemonCommandRegistry(
     description: "Alias for /policy with coding-shell wording",
     args: "[status|simulate <toolName> [jsonArgs]|credentials|revoke-credentials [credentialId]|update <allow|deny|clear|reset> [pattern]]",
     global: true,
+    metadata: {
+      category: "policy",
+      clients: ["shell", "console", "web"],
+      viewKind: "policy",
+    },
     handler: async (cmdCtx) => {
       const policy = commandRegistry.get("policy");
       if (!policy) {
@@ -3807,6 +3887,12 @@ export function createDaemonCommandRegistry(
     description: "Inspect and control already-configured MCP servers",
     args: "[status|list|inspect <server>|tools [server]|validate [server]|reconnect <server>|enable <server>|disable <server>]",
     global: true,
+    metadata: {
+      category: "extensions",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "shellExtensions",
+      viewKind: "extensions",
+    },
     handler: async (cmdCtx) => {
       if (
         !(await requireShellFeature({
@@ -4362,6 +4448,12 @@ export function createDaemonCommandRegistry(
     description: "Inspect and toggle local discovered skills",
     args: "[list|inspect <name>|enable <name>|disable <name>|sources]",
     global: true,
+    metadata: {
+      category: "extensions",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "shellExtensions",
+      viewKind: "extensions",
+    },
     handler: async (cmdCtx) => {
       if (
         !(await requireShellFeature({
@@ -4517,6 +4609,12 @@ export function createDaemonCommandRegistry(
     description: "Inspect and toggle the local plugin catalog",
     args: "[list|inspect <pluginId>|enable <pluginId>|disable <pluginId>|reload <pluginId>]",
     global: true,
+    metadata: {
+      category: "extensions",
+      clients: ["shell", "console", "web"],
+      rolloutFeature: "shellExtensions",
+      viewKind: "extensions",
+    },
     handler: async (cmdCtx) => {
       if (
         !(await requireShellFeature({

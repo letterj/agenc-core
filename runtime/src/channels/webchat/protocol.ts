@@ -7,6 +7,8 @@
  * @module
  */
 
+import type { SlashCommandViewKind } from "../../gateway/commands.js";
+
 // ============================================================================
 // Shared constants
 // ============================================================================
@@ -26,10 +28,24 @@ export const WS_CHAT_OWNER = "chat.owner" as const;
 export const WS_CHAT_NEW = "chat.new" as const;
 export const WS_CHAT_RESUMED = "chat.resumed" as const;
 export const WS_CHAT_SESSIONS = "chat.sessions" as const;
+export const WS_CHAT_SESSION_LIST = "chat.session.list" as const;
+export const WS_CHAT_SESSION_INSPECT = "chat.session.inspect" as const;
+export const WS_CHAT_SESSION_FORK = "chat.session.fork" as const;
 export const WS_CHAT_CANCELLED = "chat.cancelled" as const;
 export const WS_CHAT_CANCEL = "chat.cancel" as const;
 export const WS_CHAT_RESUME = "chat.resume" as const;
 export const WS_CHAT_USAGE = "chat.usage" as const;
+
+// Session command bus
+export const WS_SESSION_COMMAND_CATALOG_GET =
+  "session.command.catalog.get" as const;
+export const WS_SESSION_COMMAND_CATALOG = "session.command.catalog" as const;
+export const WS_SESSION_COMMAND_EXECUTE = "session.command.execute" as const;
+export const WS_SESSION_COMMAND_RESULT = "session.command.result" as const;
+
+// Watch cockpit
+export const WS_WATCH_COCKPIT_GET = "watch.cockpit.get" as const;
+export const WS_WATCH_COCKPIT = "watch.cockpit" as const;
 
 // Events
 export const WS_EVENTS_SUBSCRIBE = "events.subscribe" as const;
@@ -140,6 +156,21 @@ export interface SubagentLifecyclePayload {
   data?: Record<string, unknown>;
   traceId?: string;
   parentTraceId?: string;
+}
+
+export interface SessionCommandExecutePayload {
+  readonly content: string;
+  readonly sessionId?: string;
+  readonly client?: "shell" | "console" | "web";
+}
+
+export interface SessionCommandResultPayload {
+  readonly commandName: string;
+  readonly content: string;
+  readonly sessionId?: string;
+  readonly client?: "shell" | "console" | "web";
+  readonly viewKind?: SlashCommandViewKind;
+  readonly data?: Record<string, unknown>;
 }
 
 type WebChatFilterList = readonly string[] | null;

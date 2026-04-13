@@ -1560,13 +1560,13 @@ describe("WebChatChannel", () => {
           )).payload,
         ).toEqual(
           expect.objectContaining({
-            session: expect.objectContaining({
-              sessionId: "session-continuity",
-              shellProfile: "coding",
-              workflowStage: "review",
-              pendingApprovalCount: 0,
+            sessionId: "session-continuity",
+            shellProfile: "coding",
+            workflowStage: "review",
+            pendingApprovalCount: 0,
+            workflowState: expect.objectContaining({
+              objective: "Investigate the regression",
             }),
-            objective: "Investigate the regression",
           }),
         );
 

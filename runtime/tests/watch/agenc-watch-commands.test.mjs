@@ -508,10 +508,17 @@ test("command controller shows agent threads through /agents", () => {
 
   assert.equal(controller.dispatchOperatorInput("/agents all"), true);
 
-  assert.ok(calls.some((entry) => entry.type === "showAgents" && entry.query === "all"));
+  assert.ok(
+    calls.some(
+      (entry) =>
+        entry.type === "send" &&
+        entry.frameType === "session.command.execute" &&
+        entry.payload?.content === "/agents list --all",
+    ),
+  );
 });
 
-test("command controller shows extensibility sections and mutates local config helpers", () => {
+test("command controller shows extensibility sections and forwards plugin and MCP commands", () => {
   const { controller, calls } = createCommandHarness();
 
   assert.equal(controller.dispatchOperatorInput("/extensibility mcp"), true);
@@ -522,11 +529,32 @@ test("command controller shows extensibility sections and mutates local config h
   assert.equal(controller.dispatchOperatorInput("/hooks"), true);
 
   assert.ok(calls.some((entry) => entry.type === "showExtensibility" && entry.section === "mcp"));
-  assert.ok(calls.some((entry) => entry.type === "trustPluginPackage" && entry.packageName === "@demo/plugin"));
-  assert.ok(calls.some((entry) => entry.type === "untrustPluginPackage" && entry.packageName === "@demo/plugin"));
-  assert.ok(calls.some((entry) => entry.type === "setMcpServerEnabled" && entry.serverName === "browser" && entry.enabled === true));
   assert.ok(calls.some((entry) => entry.type === "showExtensibility" && entry.section === "hooks"));
   assert.ok(calls.some((entry) => entry.type === "send" && entry.frameType === "hooks.list"));
+  assert.ok(
+    calls.some(
+      (entry) =>
+        entry.type === "send" &&
+        entry.frameType === "session.command.execute" &&
+        entry.payload?.content === "/plugin trust @demo/plugin channels",
+    ),
+  );
+  assert.ok(
+    calls.some(
+      (entry) =>
+        entry.type === "send" &&
+        entry.frameType === "session.command.execute" &&
+        entry.payload?.content === "/plugin untrust @demo/plugin",
+    ),
+  );
+  assert.ok(
+    calls.some(
+      (entry) =>
+        entry.type === "send" &&
+        entry.frameType === "session.command.execute" &&
+        entry.payload?.content === "/mcp enable browser",
+    ),
+  );
 });
 
 test("command controller handles local xai credential commands without daemon messages", () => {
@@ -569,26 +597,37 @@ test("command controller manages input preferences locally", () => {
   assert.ok(calls.some((entry) => entry.type === "showInputModes"));
 });
 
-test("command controller uses the typed skill catalog messages", () => {
+test("command controller forwards local skill commands through the daemon bus", () => {
   const { controller, calls } = createCommandHarness();
 
   assert.equal(controller.dispatchOperatorInput("/skills"), true);
   assert.equal(controller.dispatchOperatorInput("/skills enable browser"), true);
   assert.equal(controller.dispatchOperatorInput("/skills disable browser"), true);
 
-  assert.ok(calls.some((entry) => entry.type === "send" && entry.frameType === "skills.list"));
-  assert.ok(calls.some((entry) =>
-    entry.type === "send" &&
-    entry.frameType === "skills.toggle" &&
-    entry.payload?.skillName === "browser" &&
-    entry.payload?.enabled === true
-  ));
-  assert.ok(calls.some((entry) =>
-    entry.type === "send" &&
-    entry.frameType === "skills.toggle" &&
-    entry.payload?.skillName === "browser" &&
-    entry.payload?.enabled === false
-  ));
+  assert.ok(
+    calls.some(
+      (entry) =>
+        entry.type === "send" &&
+        entry.frameType === "session.command.execute" &&
+        entry.payload?.content === "/skills list",
+    ),
+  );
+  assert.ok(
+    calls.some(
+      (entry) =>
+        entry.type === "send" &&
+        entry.frameType === "session.command.execute" &&
+        entry.payload?.content === "/skills enable browser",
+    ),
+  );
+  assert.ok(
+    calls.some(
+      (entry) =>
+        entry.type === "send" &&
+        entry.frameType === "session.command.execute" &&
+        entry.payload?.content === "/skills disable browser",
+    ),
+  );
 });
 
 test("command controller queues input while bootstrap is pending", () => {
@@ -729,13 +768,13 @@ test("command controller handles local voice controls without daemon round-trips
   );
 });
 
-test("command controller translates review mode commands into findings-first chat prompts", () => {
+test("command controller routes review commands through the shared session command bus", () => {
   const { controller, watchState, calls } = createCommandHarness();
 
   assert.equal(controller.dispatchOperatorInput("/review runtime/src/watch"), true);
-  assert.equal(watchState.currentObjective, "Code Review");
-  assert.equal(watchState.runState, "starting");
-  assert.equal(watchState.runPhase, "queued");
+  assert.equal(watchState.currentObjective, null);
+  assert.equal(watchState.runState, "idle");
+  assert.equal(watchState.runPhase, null);
   assert.ok(
     calls.some(
       (entry) =>
@@ -745,24 +784,23 @@ test("command controller translates review mode commands into findings-first cha
     ),
   );
   const reviewSend = calls.find(
-    (entry) => entry.type === "send" && entry.frameType === "chat.message",
+    (entry) => entry.type === "send" && entry.frameType === "session.command.execute",
   );
-  assert.match(reviewSend?.payload?.content ?? "", /Focus on bugs, regressions, risky assumptions, and missing tests\./);
-  assert.match(reviewSend?.payload?.content ?? "", /Scope: runtime\/src\/watch\./);
+  assert.equal(reviewSend?.payload?.content, "/review runtime/src/watch");
 });
 
-test("command controller translates security review and pr comments distinctly", () => {
+test("command controller routes security review and pr comment aliases to canonical review modes", () => {
   const { controller, calls } = createCommandHarness();
 
   assert.equal(controller.dispatchOperatorInput("/security-review auth"), true);
   assert.equal(controller.dispatchOperatorInput("/pr-comments diff"), true);
 
   const chatPayloads = calls
-    .filter((entry) => entry.type === "send" && entry.frameType === "chat.message")
+    .filter((entry) => entry.type === "send" && entry.frameType === "session.command.execute")
     .map((entry) => entry.payload?.content ?? "");
 
-  assert.ok(chatPayloads.some((content) => /security-focused review/i.test(content)));
-  assert.ok(chatPayloads.some((content) => /Draft concise PR review comments/i.test(content)));
+  assert.ok(chatPayloads.includes("/review --mode security auth"));
+  assert.ok(chatPayloads.includes("/review --mode pr-comments diff"));
 });
 
 test("command controller opens the latest diff preview through /diff", () => {
@@ -1569,7 +1607,7 @@ test("command controller saves and lists checkpoints through dedicated commands"
   );
 });
 
-test("command controller stores session list filters before requesting chat.sessions", () => {
+test("command controller routes /sessions through the canonical session list command", () => {
   const { controller, watchState, calls } = createCommandHarness({
     WATCH_COMMANDS: [
       { name: "/sessions", usage: "/sessions [query]", description: "sessions", aliases: [] },
@@ -1588,13 +1626,14 @@ test("command controller stores session list filters before requesting chat.sess
 
   assert.equal(controller.dispatchOperatorInput("/sessions runtime"), true);
 
-  assert.equal(watchState.manualSessionsRequestPending, true);
-  assert.equal(watchState.manualSessionsQuery, "runtime");
+  assert.equal(watchState.manualSessionsRequestPending, false);
+  assert.equal(watchState.manualSessionsQuery, null);
   assert.ok(
     calls.some(
       (entry) =>
         entry.type === "send" &&
-        entry.frameType === "chat.sessions",
+        entry.frameType === "session.command.execute" &&
+        entry.payload?.content === "/session list runtime",
     ),
   );
 });

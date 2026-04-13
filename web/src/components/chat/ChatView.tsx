@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChatMessage, TokenUsage, VoiceState, VoiceMode } from '../../types';
+import type { ChatMessage, CommandCatalogEntry, TokenUsage, VoiceState, VoiceMode } from '../../types';
 
 import type { ChatSessionInfo } from '../../hooks/useChat';
 import { assetUrl } from '../../utils/assets';
@@ -25,6 +25,7 @@ interface ChatViewProps {
   theme?: 'light' | 'dark';
   onToggleTheme?: () => void;
   chatSessions?: ChatSessionInfo[];
+  commands?: CommandCatalogEntry[];
   activeSessionId?: string | null;
   onSelectSession?: (sessionId: string) => void;
   onNewChat?: () => void;
@@ -50,6 +51,7 @@ export function ChatView({
   delegationTask = '',
   theme = 'dark',
   chatSessions = [],
+  commands = [],
   activeSessionId,
   onSelectSession,
   onNewChat,
@@ -231,6 +233,7 @@ export function ChatView({
             onSend={onSend}
             onStop={onStop}
             isGenerating={isTyping}
+            commands={commands}
             voiceState={voiceState}
             voiceMode={voiceMode}
             onVoiceToggle={onVoiceToggle}
@@ -440,6 +443,7 @@ export function ChatView({
         onSend={onSend}
         onStop={onStop}
         isGenerating={isTyping}
+        commands={commands}
         voiceState={voiceState}
         voiceMode={voiceMode}
         onVoiceToggle={onVoiceToggle}

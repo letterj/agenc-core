@@ -135,7 +135,8 @@ function handleSessionSurfaceEvent(surfaceEvent, state, api) {
       api.requestCockpit("resume");
       api.markBootstrapReady(`session resumed: ${state.sessionId}; restoring history`);
       return true;
-    case "chat.sessions": {
+    case "chat.sessions":
+    case "chat.session.list": {
       const sessions = surfaceEvent.payloadList ?? [];
       if (state.manualSessionsRequestPending) {
         state.manualSessionsRequestPending = false;
@@ -185,6 +186,12 @@ function handleSessionSurfaceEvent(surfaceEvent, state, api) {
       }
       return true;
     }
+    case "session.command.catalog":
+      state.sharedCommandCatalog = Array.isArray(surfaceEvent.payloadList)
+        ? surfaceEvent.payloadList
+        : [];
+      api.setTransientStatus("command catalog updated");
+      return true;
     case "chat.history": {
       const history = surfaceEvent.payloadList ?? [];
       if (state.manualHistoryRequestPending) {
@@ -222,6 +229,24 @@ function handleChatSurfaceEvent(surfaceEvent, state, api) {
         api.requestRunInspect("agent reply");
       }
       return true;
+    case "session.command.result": {
+      const content =
+        typeof payload.content === "string" && payload.content.trim().length > 0
+          ? payload.content
+          : "(empty)";
+      const commandName =
+        typeof payload.commandName === "string" && payload.commandName.trim().length > 0
+          ? payload.commandName.trim()
+          : "command";
+      if (typeof payload.sessionId === "string" && payload.sessionId.trim().length > 0) {
+        state.sessionId = payload.sessionId.trim();
+        api.persistSessionId(state.sessionId);
+      }
+      api.setTransientStatus(`/${commandName} ready`);
+      api.eventStore.pushEvent("operator", `/${commandName}`, content, "teal");
+      api.requestCockpit(`/${commandName}`);
+      return true;
+    }
     case "chat.stream":
       {
         const chunk =

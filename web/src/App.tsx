@@ -348,6 +348,7 @@ export default function App() {
               delegationTask={voice.delegationTask}
               theme={theme}
               chatSessions={chat.sessions}
+              commands={chat.commands}
               activeSessionId={chat.sessionId}
               onSelectSession={chat.resumeSession}
               onNewChat={chat.startNewChat}

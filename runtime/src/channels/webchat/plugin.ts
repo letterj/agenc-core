@@ -30,9 +30,9 @@ import {
 import { DEFAULT_WORKSPACE_ID } from "../../gateway/workspace.js";
 import type { ControlMessage, ControlResponse } from "../../gateway/types.js";
 import {
-  forkWebSessionRuntimeState,
-  loadPersistedWebSessionRuntimeState,
-  type PersistedWebSessionRuntimeState,
+  forkSessionRuntimeState,
+  loadPersistedSessionRuntimeState,
+  type PersistedSessionRuntimeState,
 } from "../../gateway/daemon-session-state.js";
 import { safeStringify } from "../../tools/types.js";
 import { summarizeTracePayloadForPreview } from "../../utils/trace-payload-serialization.js";
@@ -41,8 +41,14 @@ import type {
   WebChatDeps,
   WebChatChannelConfig,
   SessionContinuityRecord,
+  SessionContinuityDetail,
+  SessionHistoryItem,
   SessionResumabilityState,
 } from "./types.js";
+import type {
+  SessionCommandExecutePayload,
+  SessionCommandResultPayload,
+} from "./protocol.js";
 import { HANDLER_MAP } from "./handlers.js";
 import type { SendFn } from "./handlers.js";
 import type { HandlerRequestContext } from "./handlers.js";
@@ -63,13 +69,6 @@ const MESSAGE_ID_TTL_MS = 5 * 60_000;
 const MAX_TRACKED_MESSAGE_IDS = 5_000;
 const WS_TRACE_PAYLOAD_MAX_CHARS = 2_000;
 const execFileAsync = promisify(execFile);
-
-interface SessionHistoryItem {
-  readonly content: string;
-  readonly sender: "user" | "agent" | "tool";
-  readonly timestamp: number;
-  readonly toolName?: string;
-}
 
 function compactPreview(content: string, maxChars = 140): string | undefined {
   const compact = content.replace(/\s+/g, " ").trim();
@@ -428,23 +427,33 @@ export class WebChatChannel
       return;
     }
 
-    if (type === "chat.sessions") {
-      this.handleChatSessions(clientId, payload, id, tracedSend);
+    if (type === "chat.sessions" || type === "chat.session.list") {
+      this.handleChatSessions(clientId, payload, id, tracedSend, type);
       return;
     }
 
-    if (type === "chat.inspect") {
-      this.handleChatInspect(clientId, payload, id, tracedSend);
+    if (type === "chat.inspect" || type === "chat.session.inspect") {
+      this.handleChatInspect(clientId, payload, id, tracedSend, type);
       return;
     }
 
-    if (type === "chat.fork") {
-      this.handleChatFork(clientId, payload, id, tracedSend);
+    if (type === "chat.fork" || type === "chat.session.fork") {
+      this.handleChatFork(clientId, payload, id, tracedSend, type);
       return;
     }
 
     if (type === "watch.cockpit.get") {
       this.handleWatchCockpitGet(clientId, payload, id, tracedSend);
+      return;
+    }
+
+    if (type === "session.command.catalog.get") {
+      this.handleSessionCommandCatalog(clientId, payload, id, tracedSend);
+      return;
+    }
+
+    if (type === "session.command.execute") {
+      this.handleSessionCommandExecute(clientId, payload, id, tracedSend);
       return;
     }
 
@@ -882,8 +891,9 @@ export class WebChatChannel
     payload: Record<string, unknown> | undefined,
     id: string | undefined,
     send: SendFn,
+    responseType = "chat.sessions",
   ): void {
-    void this.handleChatSessionsAsync(clientId, payload, id, send).catch((error) => {
+    void this.handleChatSessionsAsync(clientId, payload, id, send, responseType).catch((error) => {
       send({
         type: "error",
         error: `Failed to list chat sessions: ${(error as Error).message}`,
@@ -897,8 +907,9 @@ export class WebChatChannel
     payload: Record<string, unknown> | undefined,
     id: string | undefined,
     send: SendFn,
+    responseType = "chat.inspect",
   ): void {
-    void this.handleChatInspectAsync(clientId, payload, id, send).catch((error) => {
+    void this.handleChatInspectAsync(clientId, payload, id, send, responseType).catch((error) => {
       send({
         type: "error",
         error: `Failed to inspect chat session: ${(error as Error).message}`,
@@ -912,8 +923,9 @@ export class WebChatChannel
     payload: Record<string, unknown> | undefined,
     id: string | undefined,
     send: SendFn,
+    responseType = "chat.fork",
   ): void {
-    void this.handleChatForkAsync(clientId, payload, id, send).catch((error) => {
+    void this.handleChatForkAsync(clientId, payload, id, send, responseType).catch((error) => {
       send({
         type: "error",
         error: `Failed to fork chat session: ${(error as Error).message}`,
@@ -1020,6 +1032,7 @@ export class WebChatChannel
     payload: Record<string, unknown> | undefined,
     id: string | undefined,
     send: SendFn,
+    responseType: string,
   ): Promise<void> {
     const ownerKey = await this.resolveDurableOwner(clientId, payload, send);
     if (payload?.continuity === true) {
@@ -1034,7 +1047,7 @@ export class WebChatChannel
         limit,
         shellProfile: profile,
       });
-      send({ type: "chat.sessions", payload: records, id });
+      send({ type: responseType, payload: records, id });
       return;
     }
     if (this.sessionStore && this.isDurableOwnerKey(ownerKey)) {
@@ -1055,7 +1068,7 @@ export class WebChatChannel
           };
         })
         .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
-      send({ type: "chat.sessions", payload: sessions, id });
+      send({ type: responseType, payload: sessions, id });
       return;
     }
 
@@ -1088,7 +1101,7 @@ export class WebChatChannel
     }
 
     sessions.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
-    send({ type: "chat.sessions", payload: sessions, id });
+    send({ type: responseType, payload: sessions, id });
   }
 
   private async handleChatInspectAsync(
@@ -1096,6 +1109,7 @@ export class WebChatChannel
     payload: Record<string, unknown> | undefined,
     id: string | undefined,
     send: SendFn,
+    responseType: string,
   ): Promise<void> {
     const boundSessionId = this.clientSessions.get(clientId);
     const ownerKey = await this.resolveDurableOwner(clientId, payload, send);
@@ -1122,7 +1136,7 @@ export class WebChatChannel
     }
 
     const record = await this.inspectContinuitySession(targetSessionId, ownerKey);
-    send({ type: "chat.inspect", payload: record, id });
+    send({ type: responseType, payload: record, id });
   }
 
   private async handleChatForkAsync(
@@ -1130,6 +1144,7 @@ export class WebChatChannel
     payload: Record<string, unknown> | undefined,
     id: string | undefined,
     send: SendFn,
+    responseType: string,
   ): Promise<void> {
     const boundSessionId = this.clientSessions.get(clientId);
     const ownerKey = await this.resolveDurableOwner(clientId, payload, send);
@@ -1162,7 +1177,7 @@ export class WebChatChannel
           ? payload.objective.trim()
           : undefined,
     });
-    send({ type: "chat.fork", payload: forked, id });
+    send({ type: responseType, payload: forked, id });
   }
 
   private async handleWatchCockpitGetAsync(
@@ -1190,16 +1205,8 @@ export class WebChatChannel
       return;
     }
     const continuity = await this.inspectContinuitySession(targetSessionId, ownerKey);
-    if (!continuity) {
-      send({ type: "error", error: "Session not found", id });
-      return;
-    }
     const sessionRecord =
-      continuity.session &&
-      typeof continuity.session === "object" &&
-      !Array.isArray(continuity.session)
-        ? (continuity.session as SessionContinuityRecord)
-        : undefined;
+      "error" in continuity ? undefined : (continuity as SessionContinuityRecord);
     if (!sessionRecord) {
       send({ type: "error", error: "Session continuity unavailable", id });
       return;
@@ -1240,6 +1247,157 @@ export class WebChatChannel
     });
   }
 
+  private handleSessionCommandCatalog(
+    clientId: string,
+    payload: Record<string, unknown> | undefined,
+    id: string | undefined,
+    send: SendFn,
+  ): void {
+    void this.handleSessionCommandCatalogAsync(clientId, payload, id, send).catch(
+      (error) => {
+        send({
+          type: "error",
+          error: (error as Error).message,
+          id,
+        });
+      },
+    );
+  }
+
+  private async handleSessionCommandCatalogAsync(
+    clientId: string,
+    payload: Record<string, unknown> | undefined,
+    id: string | undefined,
+    send: SendFn,
+  ): Promise<void> {
+    await this.resolveDurableOwner(clientId, payload, send);
+    const client =
+      payload?.client === "shell" ||
+      payload?.client === "console" ||
+      payload?.client === "web"
+        ? payload.client
+        : undefined;
+    const catalog = (this.deps.commandRegistry?.getCatalog() ?? []).filter(
+      (entry) => !client || entry.clients.includes(client),
+    );
+    send({
+      type: "session.command.catalog",
+      payload: catalog,
+      id,
+    });
+  }
+
+  private handleSessionCommandExecute(
+    clientId: string,
+    payload: Record<string, unknown> | undefined,
+    id: string | undefined,
+    send: SendFn,
+  ): void {
+    void this.handleSessionCommandExecuteAsync(clientId, payload, id, send).catch(
+      (error) => {
+        send({
+          type: "error",
+          error: (error as Error).message,
+          id,
+        });
+      },
+    );
+  }
+
+  private async handleSessionCommandExecuteAsync(
+    clientId: string,
+    payload: Record<string, unknown> | undefined,
+    id: string | undefined,
+    send: SendFn,
+  ): Promise<void> {
+    const ownerKey = await this.resolveDurableOwner(clientId, payload, send);
+    const request = (payload ?? {}) as unknown as SessionCommandExecutePayload;
+    const content =
+      typeof request.content === "string" ? request.content.trim() : "";
+    if (!content.startsWith("/")) {
+      send({
+        type: "error",
+        error: "session.command.execute requires a slash command payload",
+        id,
+      });
+      return;
+    }
+    const registry = this.deps.commandRegistry;
+    if (!registry) {
+      send({
+        type: "error",
+        error: "Command registry unavailable",
+        id,
+      });
+      return;
+    }
+
+    let targetSessionId =
+      typeof request.sessionId === "string" && request.sessionId.trim().length > 0
+        ? request.sessionId.trim()
+        : this.clientSessions.get(clientId);
+    if (!targetSessionId) {
+      targetSessionId = this.ensureSession(clientId, ownerKey);
+    }
+    const authorized = await this.isAuthorizedSession(
+      targetSessionId,
+      ownerKey,
+      clientId,
+    );
+    if (!authorized) {
+      send({
+        type: "error",
+        error: `Session "${targetSessionId}" not found`,
+        id,
+      });
+      return;
+    }
+
+    const parsed = registry.parse(content);
+    if (!parsed.isCommand || !parsed.name) {
+      send({
+        type: "error",
+        error: "Invalid slash command payload",
+        id,
+      });
+      return;
+    }
+
+    const replies: string[] = [];
+    const handled = await registry.dispatch(
+      content,
+      targetSessionId,
+      this.currentActorId(clientId),
+      this.name,
+      async (replyContent) => {
+        replies.push(replyContent);
+      },
+    );
+    if (!handled) {
+      send({
+        type: "error",
+        error: `Unknown command: /${parsed.name}`,
+        id,
+      });
+      return;
+    }
+    const command = registry.get(parsed.name);
+    const result: SessionCommandResultPayload = {
+      commandName: command?.name ?? parsed.name,
+      content: replies.join("\n\n").trim(),
+      sessionId: targetSessionId,
+      ...(request.client ? { client: request.client } : {}),
+      ...(command?.metadata?.viewKind
+        ? { viewKind: command.metadata.viewKind }
+        : {}),
+    };
+    send({
+      type: "session.command.result",
+      payload: result,
+      id,
+    });
+  }
+
   async listContinuitySessionsForSession(
     requesterSessionId: string,
     params?: {
@@ -1258,7 +1416,7 @@ export class WebChatChannel
   async inspectOwnedSession(
     requesterSessionId: string,
     targetSessionId?: string,
-  ): Promise<Record<string, unknown> | undefined> {
+  ): Promise<SessionContinuityDetail | undefined> {
     const ownerKey = await this.resolveOwnerKeyForSession(requesterSessionId);
     if (!ownerKey) {
       return undefined;
@@ -1272,7 +1430,8 @@ export class WebChatChannel
     if (!authorized) {
       return undefined;
     }
-    return this.inspectContinuitySession(requestedTarget, ownerKey);
+    const detail = await this.inspectContinuitySession(requestedTarget, ownerKey);
+    return "error" in detail ? undefined : detail;
   }
 
   async loadOwnedSessionHistory(
@@ -1882,7 +2041,7 @@ export class WebChatChannel
     await Promise.resolve(this.deps.hydrateSessionContext?.(targetSessionId));
     const history = await this.loadSessionHistory(targetSessionId);
     const runtimeState = this.deps.memoryBackend
-      ? await loadPersistedWebSessionRuntimeState(
+      ? await loadPersistedSessionRuntimeState(
           this.deps.memoryBackend,
           targetSessionId,
         )
@@ -1967,7 +2126,7 @@ export class WebChatChannel
   private async inspectContinuitySession(
     sessionId: string,
     ownerKey: string,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<SessionContinuityDetail | { sessionId: string; error: string }> {
     const persisted = await this.sessionStore?.loadSession(sessionId);
     if (!persisted || persisted.ownerKey !== ownerKey) {
       return {
@@ -1977,7 +2136,7 @@ export class WebChatChannel
     }
     const continuity = await this.buildSessionContinuityRecord(persisted);
     const runtimeState = this.deps.memoryBackend
-      ? await loadPersistedWebSessionRuntimeState(
+      ? await loadPersistedSessionRuntimeState(
           this.deps.memoryBackend,
           sessionId,
         )
@@ -1987,10 +2146,30 @@ export class WebChatChannel
     });
     const backgroundRun = await this.deps.inspectBackgroundRun?.(sessionId);
     return {
-      session: continuity,
-      ...(runtimeState?.workflowState?.objective
-        ? { objective: runtimeState.workflowState.objective }
-        : {}),
+      ...continuity,
+      workflowState:
+        runtimeState?.workflowState ?? {
+          stage: continuity.workflowStage,
+          worktreeMode: "off",
+          enteredAt: continuity.updatedAt,
+          updatedAt: continuity.updatedAt,
+        },
+      runtimeState: runtimeState
+        ? {
+            ...(runtimeState.activeTaskContext
+              ? { activeTaskContext: runtimeState.activeTaskContext }
+              : {}),
+            ...(runtimeState.reviewSurfaceState?.status
+              ? { reviewStatus: runtimeState.reviewSurfaceState.status }
+              : {}),
+            ...(runtimeState.verificationSurfaceState?.status
+              ? { verificationStatus: runtimeState.verificationSurfaceState.status }
+              : {}),
+            ...(runtimeState.verificationSurfaceState?.verdict
+              ? { verificationVerdict: runtimeState.verificationSurfaceState.verdict }
+              : {}),
+          }
+        : undefined,
       recentHistory: history,
       ...(backgroundRun
         ? {
@@ -2010,7 +2189,7 @@ export class WebChatChannel
     session: PersistedWebChatSession,
   ): Promise<SessionContinuityRecord> {
     const runtimeState = this.deps.memoryBackend
-      ? await loadPersistedWebSessionRuntimeState(
+      ? await loadPersistedSessionRuntimeState(
           this.deps.memoryBackend,
           session.sessionId,
         )
@@ -2071,7 +2250,7 @@ export class WebChatChannel
     connected: boolean;
     workspaceRoot?: string;
     messageCount: number;
-    runtimeState?: PersistedWebSessionRuntimeState;
+    runtimeState?: PersistedSessionRuntimeState;
   }): SessionResumabilityState {
     if (params.connected) {
       return "active";
@@ -2094,7 +2273,7 @@ export class WebChatChannel
   }
 
   private summarizeActiveTask(
-    runtimeState: PersistedWebSessionRuntimeState | undefined,
+    runtimeState: PersistedSessionRuntimeState | undefined,
   ): string | undefined {
     const activeTaskContext =
       runtimeState?.activeTaskContext &&
@@ -2221,7 +2400,7 @@ export class WebChatChannel
     }
 
     if (!forkSource && this.deps.memoryBackend) {
-      const forkedRuntimeState = await forkWebSessionRuntimeState(
+      const forkedRuntimeState = await forkSessionRuntimeState(
         this.deps.memoryBackend,
         {
           sourceWebSessionId: sourceSessionId,
@@ -2310,12 +2489,14 @@ export class WebChatChannel
     this.sessionOwners.set(targetSessionId, ownerKey);
 
     const continuity = await this.inspectContinuitySession(targetSessionId, ownerKey);
+    const continuitySession =
+      "error" in continuity ? undefined : continuity;
     return {
       sourceSessionId,
       targetSessionId,
       forkSource,
       resumed: false,
-      session: continuity.session,
+      ...(continuitySession ? { session: continuitySession } : {}),
       ...(params?.objective ? { objective: params.objective } : {}),
       ...(params?.shellProfile ? { shellProfile: params.shellProfile } : {}),
     };

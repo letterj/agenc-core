@@ -191,6 +191,7 @@ export function createWatchTransportController(dependencies = {}) {
     }
     send("events.subscribe", { filters: [...liveEventFilters] });
     send("status.get", {});
+    send("session.command.catalog.get", { client: "console" });
     ensureStatusPollTimer();
     sendBootstrapProbe();
   }

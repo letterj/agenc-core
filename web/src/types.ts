@@ -22,6 +22,12 @@ import type {
   ObservabilityTraceDetail,
   ObservabilityTraceStatus,
   ObservabilityTraceSummary,
+  SessionContinuityDetail,
+  SessionContinuityRecord,
+  SessionCommandResultPayload,
+  SlashCommandCatalogEntry,
+  SlashCommandViewKind,
+  WatchCockpitSnapshot,
 } from '@tetsuo-ai/runtime/browser';
 export type { GatewayChannelStatus } from '@tetsuo-ai/runtime/browser';
 
@@ -367,6 +373,10 @@ export type TraceStatus = ObservabilityTraceStatus | 'all';
 export type TraceSummaryMetrics = ObservabilitySummary;
 export type TraceArtifact = ObservabilityArtifactResponse;
 export type TraceLogTail = ObservabilityLogResponse;
+export type CommandCatalogEntry = SlashCommandCatalogEntry;
+export type ContinuityRecord = SessionContinuityRecord;
+export type ContinuityDetail = SessionContinuityDetail;
+export type CockpitSnapshot = WatchCockpitSnapshot;
 
 // ============================================================================
 // WebSocket Message Envelope
@@ -402,9 +412,13 @@ export interface WSMessage {
   messageCount?: number;
   active?: boolean;
   filters?: string[];
+  commandName?: string;
+  viewKind?: SlashCommandViewKind;
   // Subagent lifecycle
   subagent?: SubagentLifecyclePayload;
 }
+
+export type SessionCommandResult = SessionCommandResultPayload;
 
 // ============================================================================
 // Voice

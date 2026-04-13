@@ -550,6 +550,7 @@ export function createWatchState({
     skillCatalog: [],
     hookCatalog: [],
     voiceCompanion: null,
+    sharedCommandCatalog: [],
     pendingAttachments: Array.isArray(persistedWatchState.pendingAttachments)
       ? persistedWatchState.pendingAttachments.map((attachment) => ({ ...attachment }))
       : [],

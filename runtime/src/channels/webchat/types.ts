@@ -33,6 +33,9 @@ import type {
   ObservabilityTraceSummary,
 } from "../../observability/types.js";
 import type { WatchCockpitSnapshot } from "../../gateway/watch-cockpit.js";
+import type { SessionShellProfile } from "../../gateway/shell-profile.js";
+import type { SessionWorkflowState } from "../../gateway/workflow-state.js";
+import type { SlashCommandRegistry } from "../../gateway/commands.js";
 
 // ============================================================================
 // WebChatDeps (dependency injection)
@@ -81,8 +84,8 @@ export interface SessionContinuityRecord {
   readonly lastActiveAt: number;
   readonly connected: boolean;
   readonly resumabilityState: SessionResumabilityState;
-  readonly shellProfile: string;
-  readonly workflowStage: string;
+  readonly shellProfile: SessionShellProfile;
+  readonly workflowStage: SessionWorkflowState["stage"];
   readonly workspaceRoot?: string;
   readonly repoRoot?: string;
   readonly branch?: string;
@@ -96,6 +99,31 @@ export interface SessionContinuityRecord {
     readonly parentSessionId: string;
     readonly source: string;
     readonly forkedAt: number;
+  };
+}
+
+export interface SessionHistoryItem {
+  readonly content: string;
+  readonly sender: "user" | "agent" | "tool";
+  readonly timestamp: number;
+  readonly toolName?: string;
+}
+
+export interface SessionContinuityDetail extends SessionContinuityRecord {
+  readonly workflowState: SessionWorkflowState;
+  readonly runtimeState?: {
+    readonly activeTaskContext?: unknown;
+    readonly reviewStatus?: string;
+    readonly verificationStatus?: string;
+    readonly verificationVerdict?: string;
+  };
+  readonly recentHistory?: readonly SessionHistoryItem[];
+  readonly backgroundRun?: {
+    readonly runId: string;
+    readonly state: string;
+    readonly currentPhase?: string;
+    readonly objective?: string;
+    readonly checkpointAvailable?: boolean;
   };
 }
 
@@ -223,6 +251,8 @@ export interface WebChatDeps {
     readonly lines?: number;
     readonly traceId?: string;
   }) => Promise<ObservabilityLogResponse | undefined>;
+  /** Shared daemon slash-command registry for first-party command catalog/execution. */
+  commandRegistry?: SlashCommandRegistry;
   /** Optional session-authorized watch cockpit snapshot builder. */
   getWatchCockpitSnapshot?: (params: {
     readonly sessionId: string;

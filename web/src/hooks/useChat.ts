@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ChatMessage,
   ChatMessageAttachment,
+  CommandCatalogEntry,
+  ContinuityRecord,
   ContextUsageSection,
   SubagentTimelineEvent,
   SubagentTimelineItem,
@@ -64,6 +66,8 @@ export interface UseChatReturn {
   isTyping: boolean;
   sessionId: string | null;
   sessions: ChatSessionInfo[];
+  commands: CommandCatalogEntry[];
+  refreshCommandCatalog: () => void;
   refreshSessions: () => void;
   resumeSession: (sessionId: string) => void;
   startNewChat: () => void;
@@ -276,6 +280,7 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
   const [isTyping, setIsTyping] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSessionInfo[]>([]);
+  const [commands, setCommands] = useState<CommandCatalogEntry[]>([]);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   // Tracks the placeholder message ID for the current response round
   const pendingMsgIdRef = useRef<string | null>(null);
@@ -312,10 +317,23 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
     });
   }, [authPayload, send]);
 
+  const refreshCommandCatalog = useCallback(() => {
+    send({
+      type: 'session.command.catalog.get',
+      payload: authPayload({
+        client: 'web',
+        ...(sessionId ? { sessionId } : {}),
+      }),
+    });
+  }, [authPayload, send, sessionId]);
+
   // Fetch sessions when connected
   useEffect(() => {
-    if (connected) refreshSessions();
-  }, [connected, refreshSessions]);
+    if (connected) {
+      refreshSessions();
+      refreshCommandCatalog();
+    }
+  }, [connected, refreshCommandCatalog, refreshSessions]);
 
   const resumeSession = useCallback((targetSessionId: string) => {
     send({
@@ -368,11 +386,24 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
       const id = `user_${++msgCounterRef.current}`;
       const userMsg: ChatMessage = { id, content, sender: 'user', timestamp: Date.now() };
       setMessages((prev) => [...prev, userMsg]);
-      send({
-        type: WS_CHAT_MESSAGE,
-        id: nextRequestId('chat_msg'),
-        payload: authPayload({ content }),
-      });
+      const trimmed = content.trim();
+      if (trimmed.startsWith('/')) {
+        send({
+          type: 'session.command.execute',
+          id: nextRequestId('cmd_exec'),
+          payload: authPayload({
+            content: trimmed,
+            client: 'web',
+            ...(sessionId ? { sessionId } : {}),
+          }),
+        });
+      } else {
+        send({
+          type: WS_CHAT_MESSAGE,
+          id: nextRequestId('chat_msg'),
+          payload: authPayload({ content }),
+        });
+      }
       return;
     }
 
@@ -427,7 +458,7 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
         }),
       });
     });
-  }, [authPayload, nextRequestId, send]);
+  }, [authPayload, nextRequestId, send, sessionId]);
 
   const appendSubagentLifecycle = useCallback((event: ParsedSubagentEvent) => {
     setMessages((prev) => {
@@ -731,10 +762,40 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
       }
 
       case WS_CHAT_SESSIONS: {
-        const payload = msg.payload as ChatSessionInfo[];
+        const payload = msg.payload as ContinuityRecord[];
         if (Array.isArray(payload)) {
-          setSessions(payload);
+          setSessions(
+            payload.map((entry) => ({
+              sessionId: entry.sessionId,
+              label: entry.label,
+              messageCount: entry.messageCount,
+              lastActiveAt: entry.lastActiveAt,
+            })),
+          );
         }
+        break;
+      }
+
+      case 'session.command.catalog': {
+        const payload = msg.payload as CommandCatalogEntry[];
+        if (Array.isArray(payload)) {
+          setCommands(payload);
+        }
+        break;
+      }
+
+      case 'session.command.result': {
+        const payload = (msg.payload ?? msg) as Record<string, unknown>;
+        const resultContent = asString(payload.content);
+        const resultSessionId = asString(payload.sessionId);
+        if (resultSessionId) {
+          setSessionId(resultSessionId);
+        }
+        if (resultContent) {
+          injectMessage(resultContent, 'agent');
+        }
+        pendingMsgIdRef.current = null;
+        setIsTyping(false);
         break;
       }
 
@@ -869,11 +930,11 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
         break;
       }
     }
-  }, [authPayload, send]);
+  }, [authPayload, injectMessage, send]);
 
   return {
     messages, sendMessage, stopGeneration, injectMessage, replaceLastUserMessage, isTyping, sessionId,
-    sessions, refreshSessions, resumeSession, startNewChat, tokenUsage,
+    sessions, commands, refreshCommandCatalog, refreshSessions, resumeSession, startNewChat, tokenUsage,
     handleMessage,
   };
 }
