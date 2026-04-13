@@ -104,6 +104,11 @@ import type { VoiceBridge } from "./voice-bridge.js";
 import type { WebChatChannel } from "../channels/webchat/plugin.js";
 import { PluginCatalog } from "../skills/catalog.js";
 import { TASK_LIST_ARG } from "../tools/system/task-tracker.js";
+import type {
+  ShellAgentRoleDescriptor,
+  ShellAgentRoleSource,
+  ShellAgentToolBundleName,
+} from "./shell-agent-roles.js";
 
 // ============================================================================
 // Eval script helpers (moved from daemon.ts top-level)
@@ -375,11 +380,31 @@ const SESSION_SHELL_PROFILES: readonly SessionShellProfile[] = [
   "documentation",
   "operator",
 ];
+const SHELL_AGENT_TOOL_BUNDLES: readonly ShellAgentToolBundleName[] = [
+  "inherit",
+  "coding-core",
+  "docs-core",
+  "research-evidence",
+  "verification-probes",
+  "operator-core",
+  "marketplace-core",
+  "browser-test",
+  "remote-debug",
+];
 
 function formatShellProfileList(current: SessionShellProfile): string {
   return SESSION_SHELL_PROFILES.map((profile) =>
     `  ${profile}${profile === current ? " (current)" : ""}`,
   ).join("\n");
+}
+
+function coerceShellAgentToolBundleName(
+  value: unknown,
+): ShellAgentToolBundleName | undefined {
+  return typeof value === "string" &&
+    SHELL_AGENT_TOOL_BUNDLES.includes(value as ShellAgentToolBundleName)
+    ? (value as ShellAgentToolBundleName)
+    : undefined;
 }
 
 const REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
@@ -807,6 +832,98 @@ function formatTaskDetailReply(result: Record<string, unknown>): string {
     `  Status: ${typeof task.status === "string" ? task.status : "unknown"}`,
     `  Subject: ${typeof task.subject === "string" ? task.subject : "unknown"}`,
     `  Description: ${typeof task.description === "string" ? task.description : "none"}`,
+  ].join("\n");
+}
+
+function formatAgentRoleCatalog(
+  roles: readonly ShellAgentRoleDescriptor[],
+): string {
+  if (roles.length === 0) {
+    return "No child-agent roles are available.";
+  }
+  return [
+    `Child-agent roles (${roles.length}):`,
+    ...roles.map((role) =>
+      [
+        `  ${role.id}`,
+        `source=${role.source}`,
+        `trust=${role.trustLabel}`,
+        `profile=${role.defaultShellProfile}`,
+        `bundle=${role.defaultToolBundle}`,
+        role.worktreeEligible ? "worktree=eligible" : "worktree=off",
+        role.mutating ? "mutating=yes" : "mutating=no",
+        `:: ${role.description}`,
+      ].join(" "),
+    ),
+  ].join("\n");
+}
+
+function formatAgentListReply(entries: readonly {
+  sessionId: string;
+  status: string;
+  task: string;
+  role?: string;
+  roleSource?: string;
+  toolBundle?: string;
+  taskId?: string;
+  shellProfile?: SessionShellProfile;
+  executionLocation?: string;
+  worktreePath?: string;
+}[]): string {
+  if (entries.length === 0) {
+    return "No child agents matched the current filter.";
+  }
+  return [
+    `Child agents (${entries.length}):`,
+    ...entries.map((entry) =>
+      [
+        `  ${entry.sessionId}`,
+        `[${entry.status}]`,
+        entry.role ? `role=${entry.role}` : null,
+        entry.roleSource ? `source=${entry.roleSource}` : null,
+        entry.taskId ? `task=${entry.taskId}` : null,
+        entry.shellProfile ? `profile=${entry.shellProfile}` : null,
+        entry.toolBundle ? `bundle=${entry.toolBundle}` : null,
+        entry.executionLocation ? `exec=${entry.executionLocation}` : null,
+        entry.worktreePath ? `worktree=${entry.worktreePath}` : null,
+        `:: ${entry.task}`,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(" "),
+    ),
+  ].join("\n");
+}
+
+function formatAgentInspectReply(entry: {
+  sessionId?: string;
+  taskId?: string;
+  status: string;
+  task: string;
+  role?: string;
+  roleSource?: string;
+  toolBundle?: string;
+  shellProfile?: SessionShellProfile;
+  executionLocation?: string;
+  workspaceRoot?: string;
+  workingDirectory?: string;
+  worktreePath?: string;
+  outputPreview?: string;
+}): string {
+  return [
+    "Child agent:",
+    `  Session: ${entry.sessionId ?? "none"}`,
+    `  Task id: ${entry.taskId ?? "none"}`,
+    `  Status: ${entry.status}`,
+    `  Role: ${entry.role ?? "unknown"}`,
+    `  Role source: ${entry.roleSource ?? "unknown"}`,
+    `  Shell profile: ${entry.shellProfile ?? "unknown"}`,
+    `  Tool bundle: ${entry.toolBundle ?? "inherit"}`,
+    `  Objective: ${entry.task}`,
+    `  Execution: ${entry.executionLocation ?? "unknown"}`,
+    `  Workspace: ${entry.workspaceRoot ?? "unknown"}`,
+    `  Working directory: ${entry.workingDirectory ?? "unknown"}`,
+    `  Worktree: ${entry.worktreePath ?? "none"}`,
+    `  Preview: ${entry.outputPreview ?? "none"}`,
   ].join("\n");
 }
 
@@ -1379,25 +1496,62 @@ export interface CommandRegistryDaemonContext {
     channel: string;
     reply: (content: string) => Promise<void>;
   }): Promise<{ filePath: string; started: boolean }>;
-  runNamedAgentTask(params: {
+  listAgentRoles(): readonly ShellAgentRoleDescriptor[];
+  launchShellAgentTask(params: {
     parentSessionId: string;
-    agentName: "review" | "verify";
-    task: string;
-    prompt: string;
+    roleId: string;
+    objective: string;
+    prompt?: string;
+    taskId?: string;
     shellProfile?: SessionShellProfile;
+    toolBundle?: ShellAgentToolBundleName;
+    workspaceRoot?: string;
     workingDirectory?: string;
+    worktree?: "auto" | string;
+    wait?: boolean;
     timeoutMs?: number;
   }): Promise<{
+    role: ShellAgentRoleDescriptor;
     sessionId: string;
+    taskId?: string;
     output: string;
     success: boolean;
     status: string;
+    waited: boolean;
+  }>;
+  inspectShellAgentTask(parentSessionId: string, target: string): Promise<{
+    sessionId?: string;
+    taskId?: string;
+    status: string;
+    task: string;
+    role?: string;
+    roleSource?: ShellAgentRoleSource;
+    toolBundle?: string;
+    shellProfile?: SessionShellProfile;
+    executionLocation?: string;
+    workspaceRoot?: string;
+    workingDirectory?: string;
+    worktreePath?: string;
+    outputPreview?: string;
+  } | undefined>;
+  stopShellAgentTask(parentSessionId: string, target: string): Promise<{
+    stopped: boolean;
+    sessionId?: string;
+    taskId?: string;
   }>;
   listSubAgentInfo(parentSessionId: string): Array<{
     sessionId: string;
     status: string;
     task: string;
+    role?: string;
+    roleSource?: string;
+    toolBundle?: string;
+    taskId?: string;
     shellProfile?: SessionShellProfile;
+    workspaceRoot?: string;
+    workingDirectory?: string;
+    executionLocation?: string;
+    worktreePath?: string;
   }>;
 }
 
@@ -2193,10 +2347,10 @@ export function createDaemonCommandRegistry(
         });
         await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
       }
-      const delegated = await ctx.runNamedAgentTask({
+      const delegated = await ctx.launchShellAgentTask({
         parentSessionId: resolvedSessionId,
-        agentName: "review",
-        task: "Review the current changes and return findings-first output.",
+        roleId: "review",
+        objective: "Review the current changes and return findings-first output.",
         prompt: buildReviewDelegatePrompt({
           branchReply: formatGitBranchReply(branchInfo),
           summaryReply: formatGitSummaryReply(summary),
@@ -2206,10 +2360,7 @@ export function createDaemonCommandRegistry(
               : "No diff content to review.",
         }),
         shellProfile: resolveSessionShellProfile(session?.metadata ?? {}),
-        workingDirectory:
-          (session?.metadata?.workspaceRoot as string | undefined) ??
-          ctx.getHostWorkspacePath() ??
-          process.cwd(),
+        wait: true,
       });
       if (session) {
         updateReviewSurfaceState(session, {
@@ -2229,6 +2380,215 @@ export function createDaemonCommandRegistry(
             ? delegated.output.trim()
             : "Delegated reviewer returned no output.",
         ].join("\n"),
+      );
+    },
+  });
+  commandRegistry.register({
+    name: "agents",
+    description: "List, spawn, inspect, assign, or stop child agents",
+    args: "[roles|list|spawn|assign|inspect|stop]",
+    global: true,
+    handler: async (cmdCtx) => {
+      const sessionId = resolveSessionId(cmdCtx.sessionId);
+      const session = sessionMgr.get(sessionId);
+      if (!session) {
+        await cmdCtx.reply("No active session.");
+        return;
+      }
+      let jsonArgs: Record<string, unknown> | undefined;
+      try {
+        jsonArgs = parseCommandJsonArgs(cmdCtx.args);
+      } catch (error) {
+        await cmdCtx.reply(
+          `Usage: /agents [roles|list|spawn|assign|inspect|stop]\n${toErrorMessage(error)}`,
+        );
+        return;
+      }
+      const subcommand =
+        typeof jsonArgs?.subcommand === "string"
+          ? jsonArgs.subcommand.trim().toLowerCase()
+          : cmdCtx.argv[0]?.toLowerCase() ?? "list";
+      if (subcommand === "roles") {
+        await cmdCtx.reply(formatAgentRoleCatalog(ctx.listAgentRoles()));
+        return;
+      }
+      if (subcommand === "list") {
+        const includeAll =
+          jsonArgs?.all === true || hasInlineFlag(cmdCtx.argv, "all");
+        const entries = ctx.listSubAgentInfo(sessionId).filter((entry) =>
+          includeAll ? true : entry.status === "running"
+        );
+        await cmdCtx.reply(formatAgentListReply(entries));
+        return;
+      }
+      if (subcommand === "inspect") {
+        const target =
+          typeof jsonArgs?.target === "string"
+            ? jsonArgs.target.trim()
+            : cmdCtx.argv[1]?.trim();
+        if (!target) {
+          await cmdCtx.reply("Usage: /agents inspect <childSessionId|taskId>");
+          return;
+        }
+        const detail = await ctx.inspectShellAgentTask(sessionId, target);
+        await cmdCtx.reply(
+          detail
+            ? formatAgentInspectReply(detail)
+            : `Child agent "${target}" is unavailable.`,
+        );
+        return;
+      }
+      if (subcommand === "stop") {
+        const target =
+          typeof jsonArgs?.target === "string"
+            ? jsonArgs.target.trim()
+            : cmdCtx.argv[1]?.trim();
+        if (!target) {
+          await cmdCtx.reply("Usage: /agents stop <childSessionId|taskId>");
+          return;
+        }
+        const stopped = await ctx.stopShellAgentTask(sessionId, target);
+        await cmdCtx.reply(
+          stopped.stopped
+            ? `Stopped child agent ${stopped.sessionId ?? target}.${stopped.taskId ? ` Task ${stopped.taskId}.` : ""}`
+            : `Child agent "${target}" could not be stopped.`,
+        );
+        return;
+      }
+      if (subcommand !== "spawn" && subcommand !== "assign") {
+        await cmdCtx.reply(
+          "Usage: /agents [roles|list|spawn|assign|inspect|stop]",
+        );
+        return;
+      }
+
+      const taskId =
+        subcommand === "assign"
+          ? typeof jsonArgs?.taskId === "string"
+            ? jsonArgs.taskId.trim()
+            : cmdCtx.argv[1]?.trim()
+          : undefined;
+      const roleId =
+        typeof jsonArgs?.roleId === "string"
+          ? jsonArgs.roleId.trim()
+          : subcommand === "assign"
+            ? cmdCtx.argv[2]?.trim()
+            : cmdCtx.argv[1]?.trim();
+      if (!roleId) {
+        await cmdCtx.reply(
+          subcommand === "assign"
+            ? "Usage: /agents assign <taskId> <role> [--objective <text>] [--profile <name>] [--bundle <name>] [--workspace <path>] [--worktree auto|<path>] [--cwd <path>] [--wait]"
+            : "Usage: /agents spawn <role> --objective <text> [--profile <name>] [--bundle <name>] [--workspace <path>] [--worktree auto|<path>] [--cwd <path>] [--wait]",
+        );
+        return;
+      }
+      const shellProfile = coerceSessionShellProfile(
+        typeof jsonArgs?.profile === "string"
+          ? jsonArgs.profile
+          : parseInlineFlag(cmdCtx.argv, "profile"),
+      );
+      const toolBundle = coerceShellAgentToolBundleName(
+        typeof jsonArgs?.toolBundle === "string"
+          ? jsonArgs.toolBundle
+          : parseInlineFlag(cmdCtx.argv, "bundle"),
+      );
+      const worktreeValue =
+        typeof jsonArgs?.worktree === "string"
+          ? jsonArgs.worktree.trim()
+          : parseInlineFlag(cmdCtx.argv, "worktree");
+      const workspaceRoot =
+        typeof jsonArgs?.workspaceRoot === "string"
+          ? jsonArgs.workspaceRoot.trim()
+          : parseInlineFlag(cmdCtx.argv, "workspace");
+      const workingDirectory =
+        typeof jsonArgs?.workingDirectory === "string"
+          ? jsonArgs.workingDirectory.trim()
+          : parseInlineFlag(cmdCtx.argv, "cwd");
+      const wantsWait =
+        jsonArgs?.wait === true || hasInlineFlag(cmdCtx.argv, "wait");
+
+      let objective =
+        typeof jsonArgs?.objective === "string"
+          ? jsonArgs.objective.trim()
+          : parseInlineFlag(cmdCtx.argv, "objective");
+      let prompt =
+        typeof jsonArgs?.prompt === "string" ? jsonArgs.prompt.trim() : undefined;
+      if (subcommand === "assign") {
+        if (!taskId) {
+          await cmdCtx.reply(
+            "Usage: /agents assign <taskId> <role> [--objective <text>] [--profile <name>] [--bundle <name>] [--workspace <path>] [--worktree auto|<path>] [--cwd <path>] [--wait]",
+          );
+          return;
+        }
+        const taskDetail = await executeStructuredTool(
+          baseToolHandler,
+          "task.get",
+          { [TASK_LIST_ARG]: cmdCtx.sessionId, taskId },
+        );
+        const taskRecord =
+          typeof taskDetail.task === "object" && taskDetail.task !== null
+            ? (taskDetail.task as Record<string, unknown>)
+            : undefined;
+        if (!taskRecord) {
+          await cmdCtx.reply(`Task "${taskId}" is unavailable.`);
+          return;
+        }
+        objective =
+          objective ??
+          (typeof taskRecord.subject === "string" ? taskRecord.subject : undefined);
+        prompt =
+          prompt ??
+          [
+            "Execute the assigned task for the parent session.",
+            `Task id: ${taskId}`,
+            `Subject: ${typeof taskRecord.subject === "string" ? taskRecord.subject : "unknown"}`,
+            `Description: ${typeof taskRecord.description === "string" ? taskRecord.description : "none"}`,
+            objective ? `Objective: ${objective}` : null,
+          ]
+            .filter((value): value is string => Boolean(value))
+            .join("\n");
+      }
+      if (!objective) {
+        await cmdCtx.reply(
+          subcommand === "assign"
+            ? "Assigned child agents need a task subject or explicit --objective."
+            : "Child agent spawn requires --objective <text>.",
+        );
+        return;
+      }
+
+      const launched = await ctx.launchShellAgentTask({
+        parentSessionId: sessionId,
+        roleId,
+        objective,
+        ...(prompt ? { prompt } : {}),
+        ...(taskId ? { taskId } : {}),
+        ...(shellProfile ? { shellProfile } : {}),
+        ...(toolBundle ? { toolBundle } : {}),
+        ...(workspaceRoot ? { workspaceRoot } : {}),
+        ...(workingDirectory ? { workingDirectory } : {}),
+        ...(worktreeValue
+          ? { worktree: worktreeValue === "auto" ? "auto" : worktreeValue }
+          : {}),
+        ...(wantsWait ? { wait: true } : {}),
+      });
+      await cmdCtx.reply(
+        launched.waited
+          ? [
+              `${launched.role.displayName} agent ${launched.sessionId} [${launched.status}]`,
+              ...(launched.taskId ? [`Task: ${launched.taskId}`] : []),
+              launched.output.trim().length > 0
+                ? launched.output.trim()
+                : `${launched.role.displayName} agent returned no output.`,
+            ].join("\n")
+          : [
+              `${launched.role.displayName} agent started.`,
+              `Session: ${launched.sessionId}`,
+              ...(launched.taskId ? [`Task: ${launched.taskId}`] : []),
+              `Role: ${launched.role.id}`,
+              `Profile: ${shellProfile ?? launched.role.defaultShellProfile}`,
+              `Bundle: ${toolBundle ?? launched.role.defaultToolBundle}`,
+            ].join("\n"),
       );
     },
   });
@@ -2512,10 +2872,10 @@ export function createDaemonCommandRegistry(
           "system.gitDiff",
           wantsStaged ? { staged: true } : {},
         );
-        const delegated = await ctx.runNamedAgentTask({
+        const delegated = await ctx.launchShellAgentTask({
           parentSessionId: sessionId,
-          agentName: "review",
-          task: "Review the current changes and return findings-first output.",
+          roleId: "review",
+          objective: "Review the current changes and return findings-first output.",
           prompt: buildReviewDelegatePrompt({
             branchReply: formatGitBranchReply(branchInfo),
             summaryReply: formatGitSummaryReply(summary),
@@ -2525,10 +2885,7 @@ export function createDaemonCommandRegistry(
                 : "No diff content to review.",
           }),
           shellProfile,
-          workingDirectory:
-            (session.metadata.workspaceRoot as string | undefined) ??
-            ctx.getHostWorkspacePath() ??
-            process.cwd(),
+          wait: true,
         });
         updateReviewSurfaceState(session, {
           status: delegated.success === true ? "completed" : "failed",
@@ -2568,10 +2925,10 @@ export function createDaemonCommandRegistry(
           );
           return;
         }
-        const delegated = await ctx.runNamedAgentTask({
+        const delegated = await ctx.launchShellAgentTask({
           parentSessionId: sessionId,
-          agentName: "verify",
-          task: "Verify the current implementation state and return a verdict.",
+          roleId: "verify",
+          objective: "Verify the current implementation state and return a verdict.",
           prompt: buildVerifyDelegatePrompt({
             branchReply: formatGitBranchReply(branchInfo),
             summaryReply: formatGitSummaryReply(summary),
@@ -2579,10 +2936,7 @@ export function createDaemonCommandRegistry(
             runtimeStatusSnapshot,
           }),
           shellProfile,
-          workingDirectory:
-            (session.metadata.workspaceRoot as string | undefined) ??
-            ctx.getHostWorkspacePath() ??
-            process.cwd(),
+          wait: true,
         });
         updateVerificationSurfaceState(session, {
           status: delegated.success === true ? "completed" : "failed",
@@ -2689,10 +3043,10 @@ export function createDaemonCommandRegistry(
         verdict: "unknown",
       });
       await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
-      const delegated = await ctx.runNamedAgentTask({
+      const delegated = await ctx.launchShellAgentTask({
         parentSessionId: resolvedSessionId,
-        agentName: "verify",
-        task: "Verify the current implementation state and return a verdict.",
+        roleId: "verify",
+        objective: "Verify the current implementation state and return a verdict.",
         prompt: buildVerifyDelegatePrompt({
           branchReply: formatGitBranchReply(branchInfo),
           summaryReply: formatGitSummaryReply(summary),
@@ -2700,10 +3054,7 @@ export function createDaemonCommandRegistry(
           runtimeStatusSnapshot,
         }),
         shellProfile: resolveSessionShellProfile(session.metadata),
-        workingDirectory:
-          (session.metadata.workspaceRoot as string | undefined) ??
-          ctx.getHostWorkspacePath() ??
-          process.cwd(),
+        wait: true,
       });
       updateVerificationSurfaceState(session, {
         status: delegated.success === true ? "completed" : "failed",

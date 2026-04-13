@@ -380,6 +380,12 @@ const SHELL_EXEC_COMMAND_OPTIONS = new Set([
   "limit",
   "active-only",
   "include-tools",
+  "bundle",
+  "workspace",
+  "worktree",
+  "cwd",
+  "wait",
+  "all",
 ]);
 const JOBS_COMMAND_OPTIONS = new Set<string>([]);
 const CONNECTOR_LIST_OPTIONS = new Set(["pid-path", "port"]);
@@ -920,6 +926,7 @@ function buildHelp(): string {
     "resume [--help] [options]",
     "session [status|list|inspect|history|resume|fork] [--help] [options]",
     "plan [--help] [options]",
+    "agents [roles|list|spawn|assign|inspect|stop] [--help] [options]",
     "tasks [list|get|wait|output] [--help] [options]",
     "files [query] [--help] [options]",
     "grep <pattern> [--help] [options]",
@@ -969,6 +976,7 @@ function buildHelp(): string {
     "",
     "Coding shell commands:",
     "  plan [status|enter|exit|implement|review|verify]  Control the coding workflow stage",
+    "  agents [roles|list|spawn|assign|inspect|stop]  Manage child agents and explicit delegation",
     "  tasks [list|get|wait|output]   Inspect session tasks",
     "  files [query]           Show repo inventory or search files",
     "  grep <pattern>          Search repo-local files",
@@ -1134,6 +1142,12 @@ function buildHelp(): string {
     "      --timeout <ms>                            Task wait/output timeout",
     "      --status <value>                          Task status filter",
     "      --block                                   Block waiting for task output",
+    "      --bundle <name>                           Child-agent tool bundle override",
+    "      --workspace <path>                        Child-agent workspace root override",
+    "      --worktree auto|<path>                    Child-agent worktree policy or existing worktree path",
+    "      --cwd <path>                              Child-agent working directory under the resolved root",
+    "      --wait                                    Wait for child-agent completion",
+    "      --all                                     Include completed child agents where supported",
     "",
     "service install options:",
     "      --macos                                   Generate launchd plist instead of systemd unit",
@@ -1245,6 +1259,9 @@ function buildHelp(): string {
     "  agenc-runtime shell coding",
     "  agenc-runtime resume --profile coding",
     "  agenc-runtime plan",
+    "  agenc-runtime agents roles",
+    '  agenc-runtime agents spawn coding --objective "Implement the task" --worktree auto',
+    "  agenc-runtime agents assign task-123 verification --wait",
     "  agenc-runtime files package",
     "  agenc-runtime grep shellProfile --glob src/**/*.ts",
     "  agenc-runtime git status",
@@ -3474,6 +3491,89 @@ async function dispatchPhase3ShellCommands(
       );
     } catch (error) {
       return reportCliError(context, error);
+    }
+  }
+
+  if (root === "agents") {
+    try {
+      validateUnknownStandaloneOptions(parsed.flags, SHELL_EXEC_COMMAND_OPTIONS);
+      const subcommand = parsed.positional[1] ?? "list";
+      if (subcommand === "roles") {
+        return await runShellExec(
+          "/agents roles",
+          resolveShellAliasProfile(parsed, "coding"),
+        );
+      }
+      if (subcommand === "list") {
+        const payload: Record<string, unknown> = {
+          ...(normalizeBool(parsed.flags.all, false) ? { all: true } : {}),
+        };
+        return await runShellExec(
+          Object.keys(payload).length > 0
+            ? `/agents ${serializeArgs({ subcommand, ...payload })}`
+            : "/agents list",
+          resolveShellAliasProfile(parsed, "coding"),
+        );
+      }
+      if (subcommand === "inspect" || subcommand === "stop") {
+        const target = parsed.positional[2];
+        if (!target) {
+          throw createCliError(
+            `agents ${subcommand} requires a child session or task identifier`,
+            ERROR_CODES.MISSING_TARGET,
+          );
+        }
+        return await runShellExec(
+          `/agents ${serializeArgs({ subcommand, target })}`,
+          resolveShellAliasProfile(parsed, "coding"),
+        );
+      }
+      if (subcommand === "spawn" || subcommand === "assign") {
+        const taskId = subcommand === "assign" ? parsed.positional[2] : undefined;
+        const roleId = subcommand === "assign" ? parsed.positional[3] : parsed.positional[2];
+        if (!roleId || (subcommand === "assign" && !taskId)) {
+          throw createCliError(
+            subcommand === "assign"
+              ? "agents assign requires <taskId> <role>"
+              : "agents spawn requires a role argument",
+            ERROR_CODES.MISSING_TARGET,
+          );
+        }
+        const payload: Record<string, unknown> = {
+          subcommand,
+          roleId,
+          ...(taskId ? { taskId } : {}),
+          ...(parseOptionalStringFlag(parsed.flags.objective)
+            ? { objective: parseOptionalStringFlag(parsed.flags.objective) }
+            : {}),
+          ...(parseOptionalStringFlag(parsed.flags.profile)
+            ? { profile: parseOptionalStringFlag(parsed.flags.profile) }
+            : {}),
+          ...(parseOptionalStringFlag(parsed.flags.bundle)
+            ? { toolBundle: parseOptionalStringFlag(parsed.flags.bundle) }
+            : {}),
+          ...(parseOptionalStringFlag(parsed.flags.workspace)
+            ? { workspaceRoot: parseOptionalStringFlag(parsed.flags.workspace) }
+            : {}),
+          ...(parseOptionalStringFlag(parsed.flags.worktree)
+            ? { worktree: parseOptionalStringFlag(parsed.flags.worktree) }
+            : {}),
+          ...(parseOptionalStringFlag(parsed.flags.cwd)
+            ? { workingDirectory: parseOptionalStringFlag(parsed.flags.cwd) }
+            : {}),
+          ...(normalizeBool(parsed.flags.wait, false) ? { wait: true } : {}),
+        };
+        return await runShellExec(
+          `/agents ${serializeArgs(payload)}`,
+          resolveShellAliasProfile(parsed, "coding"),
+        );
+      }
+      throw createCliError(
+        `unknown agents subcommand: ${subcommand}`,
+        ERROR_CODES.UNKNOWN_COMMAND,
+      );
+    } catch (error) {
+      return reportCliError(context, error, [ERROR_CODES.MISSING_TARGET]);
     }
   }
 

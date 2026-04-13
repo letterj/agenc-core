@@ -129,13 +129,93 @@ function makeCommandRegistry(params?: {
     elevatedPatterns: [],
     deniedPatterns: [],
   }));
-  const runNamedAgentTask = vi.fn(async ({ agentName }) => ({
-    sessionId: `child-${agentName}-1`,
-    output: `${agentName} complete`,
+  const listAgentRoles = vi.fn(() => [
+    {
+      id: "coding",
+      displayName: "Coding",
+      description: "Implement code changes",
+      source: "runtime",
+      trustLabel: "builtin",
+      curated: true,
+      definitionName: "implement",
+      defaultShellProfile: "coding",
+      defaultToolBundle: "coding-core",
+      mutating: true,
+      worktreeEligible: true,
+    },
+    {
+      id: "review",
+      displayName: "Reviewer",
+      description: "Review the current changes",
+      source: "runtime",
+      trustLabel: "builtin",
+      curated: true,
+      definitionName: "review",
+      defaultShellProfile: "coding",
+      defaultToolBundle: "verification-probes",
+      mutating: false,
+      worktreeEligible: false,
+    },
+    {
+      id: "verify",
+      displayName: "Verifier",
+      description: "Verify the current implementation",
+      source: "runtime",
+      trustLabel: "builtin",
+      curated: true,
+      definitionName: "verify",
+      defaultShellProfile: "validation",
+      defaultToolBundle: "verification-probes",
+      mutating: false,
+      worktreeEligible: false,
+    },
+  ]);
+  const launchShellAgentTask = vi.fn(async ({ roleId, taskId, wait }) => ({
+    role:
+      listAgentRoles().find((role: { id: string }) => role.id === roleId) ??
+      listAgentRoles()[0],
+    sessionId: `child-${roleId}-1`,
+    taskId: taskId ?? `task-${roleId}-1`,
+    output: `${roleId} complete`,
     success: true,
     status: "completed",
+    waited: wait === true,
   }));
-  const listSubAgentInfo = vi.fn(() => []);
+  const inspectShellAgentTask = vi.fn(async (parentSessionId: string, target: string) => ({
+    sessionId: target.startsWith("child-") ? target : "child-coding-1",
+    taskId: target.startsWith("task-") ? target : "task-coding-1",
+    status: "running",
+    task: "Implement the task",
+    role: "coding",
+    roleSource: "runtime",
+    toolBundle: "coding-core",
+    shellProfile: "coding",
+    executionLocation: "host",
+    workspaceRoot: "/tmp/project",
+    workingDirectory: "/tmp/project/src",
+    outputPreview: `inspect ${parentSessionId}`,
+  }));
+  const stopShellAgentTask = vi.fn(async (_parentSessionId: string, target: string) => ({
+    stopped: true,
+    sessionId: target.startsWith("child-") ? target : "child-coding-1",
+    taskId: target.startsWith("task-") ? target : "task-coding-1",
+  }));
+  const listSubAgentInfo = vi.fn(() => [
+    {
+      sessionId: "child-coding-1",
+      status: "running",
+      task: "Implement the task",
+      role: "coding",
+      roleSource: "runtime",
+      toolBundle: "coding-core",
+      taskId: "task-coding-1",
+      shellProfile: "coding",
+      workspaceRoot: "/tmp/project",
+      workingDirectory: "/tmp/project/src",
+      executionLocation: "host",
+      worktreePath: "/tmp/project/.worktrees/child-coding-1",
+    },
+  ]);
   const webChatChannel = {
     loadSessionWorkspaceRoot: vi.fn(async () => "/tmp/project"),
     listContinuitySessionsForSession: vi.fn(async () => [
@@ -463,7 +543,10 @@ function makeCommandRegistry(params?: {
         filePath: "/tmp/project/AGENC.md",
         started: true,
       })),
-      runNamedAgentTask,
+      listAgentRoles,
+      launchShellAgentTask,
+      inspectShellAgentTask,
+      stopShellAgentTask,
       listSubAgentInfo,
     },
     {
@@ -491,7 +574,10 @@ function makeCommandRegistry(params?: {
     memoryBackend,
     providers,
     getSessionPolicyState,
-    runNamedAgentTask,
+    listAgentRoles,
+    launchShellAgentTask,
+    inspectShellAgentTask,
+    stopShellAgentTask,
     listSubAgentInfo,
     webChatChannel,
     updateSessionPolicyState,
@@ -952,6 +1038,84 @@ describe("createDaemonCommandRegistry coding shell commands", () => {
     expect(disableReplies[0]).toContain("Catalog updated. Live plugin effects depend");
   });
 
+  it("shows the shell agent role catalog and active child agents", async () => {
+    const { registry, listAgentRoles, listSubAgentInfo } = makeCommandRegistry();
+
+    const roleReplies = await dispatchAndCollect(registry, "/agents roles");
+    const listReplies = await dispatchAndCollect(registry, "/agents list");
+
+    expect(roleReplies[0]).toContain("Child-agent roles (3):");
+    expect(roleReplies[0]).toContain("coding");
+    expect(roleReplies[0]).toContain("verification-probes");
+    expect(listReplies[0]).toContain("Child agents (1):");
+    expect(listReplies[0]).toContain("child-coding-1");
+    expect(listReplies[0]).toContain("role=coding");
+    expect(listAgentRoles).toHaveBeenCalled();
+    expect(listSubAgentInfo).toHaveBeenCalledWith("session-1");
+  });
+
+  it("spawns, inspects, assigns, and stops child agents through the shared launcher", async () => {
+    const {
+      registry,
+      launchShellAgentTask,
+      inspectShellAgentTask,
+      stopShellAgentTask,
+      baseToolHandler,
+    } = makeCommandRegistry();
+
+    const spawnReplies = await dispatchAndCollect(
+      registry,
+      '/agents {"subcommand":"spawn","roleId":"coding","objective":"Implement the task","profile":"coding","toolBundle":"coding-core","worktree":"auto","wait":true}',
+    );
+    const inspectReplies = await dispatchAndCollect(
+      registry,
+      "/agents inspect child-coding-1",
+    );
+    const assignReplies = await dispatchAndCollect(
+      registry,
+      '/agents {"subcommand":"assign","taskId":"1","roleId":"verify","wait":true}',
+    );
+    const stopReplies = await dispatchAndCollect(
+      registry,
+      "/agents stop task-coding-1",
+    );
+
+    expect(spawnReplies[0]).toContain("Coding agent child-coding-1 [completed]");
+    expect(spawnReplies[0]).toContain("Task: task-coding-1");
+    expect(assignReplies[0]).toContain("Verifier agent child-verify-1 [completed]");
+    expect(inspectReplies[0]).toContain("Child agent:");
+    expect(inspectReplies[0]).toContain("Tool bundle: coding-core");
+    expect(stopReplies[0]).toContain("Stopped child agent child-coding-1. Task task-coding-1.");
+    expect(launchShellAgentTask).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        parentSessionId: "session-1",
+        roleId: "coding",
+        objective: "Implement the task",
+        shellProfile: "coding",
+        toolBundle: "coding-core",
+        worktree: "auto",
+        wait: true,
+      }),
+    );
+    expect(baseToolHandler).toHaveBeenCalledWith("task.get", {
+      __agencTaskListId: "session-1",
+      taskId: "1",
+    });
+    expect(launchShellAgentTask).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        parentSessionId: "session-1",
+        taskId: "1",
+        roleId: "verify",
+        objective: "Ship shell",
+        wait: true,
+      }),
+    );
+    expect(inspectShellAgentTask).toHaveBeenCalledWith("session-1", "child-coding-1");
+    expect(stopShellAgentTask).toHaveBeenCalledWith("session-1", "task-coding-1");
+  });
+
   it("shows and updates reasoning effort", async () => {
     const { registry } = makeCommandRegistry();
 
@@ -1005,33 +1169,35 @@ describe("createDaemonCommandRegistry coding shell commands", () => {
   });
 
   it("delegates review through the restricted reviewer child without silently changing the stage", async () => {
-    const { registry, runNamedAgentTask } = makeCommandRegistry();
+    const { registry, launchShellAgentTask } = makeCommandRegistry();
 
     const replies = await dispatchAndCollect(registry, '/review {"delegate":true}');
 
     expect(replies[0]).toContain("Review surface:");
     expect(replies[0]).toContain("Delegated reviewer session: child-review-1 [completed]");
     expect(replies[0]).toContain("review complete");
-    expect(runNamedAgentTask).toHaveBeenCalledWith(
+    expect(launchShellAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentName: "review",
+        roleId: "review",
         parentSessionId: "session-1",
+        wait: true,
       }),
     );
   });
 
   it("delegates verification through the restricted verifier child", async () => {
-    const { registry, runNamedAgentTask } = makeCommandRegistry();
+    const { registry, launchShellAgentTask } = makeCommandRegistry();
 
     const replies = await dispatchAndCollect(registry, '/verify {"delegate":true}');
 
     expect(replies[0]).toContain("Verification surface:");
     expect(replies[0]).toContain("Delegated verifier session: child-verify-1 [completed]");
     expect(replies[0]).toContain("verify complete");
-    expect(runNamedAgentTask).toHaveBeenCalledWith(
+    expect(launchShellAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentName: "verify",
+        roleId: "verify",
         parentSessionId: "session-1",
+        wait: true,
       }),
     );
   });

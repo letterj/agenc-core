@@ -61,6 +61,7 @@ import {
   appendShellProfilePromptSection,
   type SessionShellProfile,
 } from "./shell-profile.js";
+import type { RuntimeExecutionLocation } from "../runtime-contract/types.js";
 
 // ============================================================================
 // Constants
@@ -154,6 +155,10 @@ export interface SubAgentConfig {
   readonly parentSessionId: string;
   readonly shellProfile?: SessionShellProfile;
   readonly task: string;
+  readonly role?: string;
+  readonly roleSource?: string;
+  readonly toolBundle?: string;
+  readonly taskId?: string;
   readonly prompt?: string;
   readonly systemPrompt?: string;
   readonly continuationSessionId?: string;
@@ -162,7 +167,9 @@ export interface SubAgentConfig {
   readonly workingDirectory?: string;
   readonly workingDirectorySource?: "execution_envelope";
   readonly workspace?: string;
+  readonly workspaceRoot?: string;
   readonly tools?: readonly string[];
+  readonly executionLocation?: RuntimeExecutionLocation;
   readonly requiredCapabilities?: readonly string[];
   readonly requireToolCall?: boolean;
   readonly structuredOutput?: ChatExecuteParams["structuredOutput"];
@@ -265,7 +272,15 @@ export interface SubAgentInfo {
   readonly status: SubAgentStatus;
   readonly startedAt: number;
   readonly task: string;
+  readonly role?: string;
+  readonly roleSource?: string;
+  readonly toolBundle?: string;
+  readonly taskId?: string;
   readonly shellProfile?: SessionShellProfile;
+  readonly workspaceRoot?: string;
+  readonly workingDirectory?: string;
+  readonly executionLocation?: RuntimeExecutionLocation["mode"];
+  readonly worktreePath?: string;
 }
 
 // ============================================================================
@@ -553,8 +568,29 @@ export class SubAgentManager {
       status: handle.status,
       startedAt: handle.startedAt,
       task: handle.task,
+      ...(handle.config.role ? { role: handle.config.role } : {}),
+      ...(handle.config.roleSource ? { roleSource: handle.config.roleSource } : {}),
+      ...(handle.config.toolBundle ? { toolBundle: handle.config.toolBundle } : {}),
+      ...(handle.config.taskId ? { taskId: handle.config.taskId } : {}),
       ...(handle.config.shellProfile
         ? { shellProfile: handle.config.shellProfile }
+        : {}),
+      ...(handle.config.workspaceRoot
+        ? { workspaceRoot: handle.config.workspaceRoot }
+        : handle.config.executionLocation?.workspaceRoot
+          ? { workspaceRoot: handle.config.executionLocation.workspaceRoot }
+          : {}),
+      ...(handle.config.workingDirectory
+        ? { workingDirectory: handle.config.workingDirectory }
+        : handle.config.executionLocation?.workingDirectory
+          ? { workingDirectory: handle.config.executionLocation.workingDirectory }
+          : {}),
+      ...(handle.config.executionLocation?.mode
+        ? { executionLocation: handle.config.executionLocation.mode }
+        : {}),
+      ...(handle.config.executionLocation?.mode === "worktree" &&
+        handle.config.executionLocation.worktreePath
+        ? { worktreePath: handle.config.executionLocation.worktreePath }
         : {}),
     };
   }
@@ -621,8 +657,29 @@ export class SubAgentManager {
         status: handle.status,
         startedAt: handle.startedAt,
         task: handle.task,
+        ...(handle.config.role ? { role: handle.config.role } : {}),
+        ...(handle.config.roleSource ? { roleSource: handle.config.roleSource } : {}),
+        ...(handle.config.toolBundle ? { toolBundle: handle.config.toolBundle } : {}),
+        ...(handle.config.taskId ? { taskId: handle.config.taskId } : {}),
         ...(handle.config.shellProfile
           ? { shellProfile: handle.config.shellProfile }
+          : {}),
+        ...(handle.config.workspaceRoot
+          ? { workspaceRoot: handle.config.workspaceRoot }
+          : handle.config.executionLocation?.workspaceRoot
+            ? { workspaceRoot: handle.config.executionLocation.workspaceRoot }
+            : {}),
+        ...(handle.config.workingDirectory
+          ? { workingDirectory: handle.config.workingDirectory }
+          : handle.config.executionLocation?.workingDirectory
+            ? { workingDirectory: handle.config.executionLocation.workingDirectory }
+            : {}),
+        ...(handle.config.executionLocation?.mode
+          ? { executionLocation: handle.config.executionLocation.mode }
+          : {}),
+        ...(handle.config.executionLocation?.mode === "worktree" &&
+          handle.config.executionLocation.worktreePath
+          ? { worktreePath: handle.config.executionLocation.worktreePath }
           : {}),
       });
     }

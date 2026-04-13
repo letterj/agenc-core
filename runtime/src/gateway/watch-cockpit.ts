@@ -39,12 +39,16 @@ export interface VerificationSurfaceState extends ReviewSurfaceState {
 export interface WorkflowOwnershipEntry {
   readonly role: string;
   readonly state: string;
+  readonly roleSource?: string;
+  readonly toolBundle?: string;
   readonly taskId?: string;
   readonly taskSubject?: string;
   readonly childSessionId?: string;
   readonly workerId?: string;
   readonly shellProfile?: string;
   readonly executionLocation?: string;
+  readonly workspaceRoot?: string;
+  readonly workingDirectory?: string;
   readonly worktreePath?: string;
   readonly branch?: string;
   readonly head?: string;

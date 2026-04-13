@@ -14,7 +14,15 @@ export function collectSessionWorkflowOwnership(params: {
     sessionId: string;
     status: string;
     task: string;
+    role?: string;
+    roleSource?: string;
+    toolBundle?: string;
+    taskId?: string;
     shellProfile?: SessionShellProfile;
+    workspaceRoot?: string;
+    workingDirectory?: string;
+    executionLocation?: string;
+    worktreePath?: string;
   }[];
 }): readonly WorkflowOwnershipEntry[] {
   const tasks = Array.isArray(params.taskResult.tasks)
@@ -82,6 +90,12 @@ export function collectSessionWorkflowOwnership(params: {
       ...(executionLocation && typeof executionLocation.mode === "string"
         ? { executionLocation: executionLocation.mode }
         : {}),
+      ...(executionLocation && typeof executionLocation.workspaceRoot === "string"
+        ? { workspaceRoot: executionLocation.workspaceRoot }
+        : {}),
+      ...(executionLocation && typeof executionLocation.workingDirectory === "string"
+        ? { workingDirectory: executionLocation.workingDirectory }
+        : {}),
       ...(worktreePath ? { worktreePath } : {}),
       ...(executionLocation && typeof executionLocation.worktreeRef === "string"
         ? { branch: executionLocation.worktreeRef }
@@ -96,19 +110,27 @@ export function collectSessionWorkflowOwnership(params: {
     if (claimedChildSessions.has(child.sessionId)) continue;
     const normalizedTask = child.task.toLowerCase();
     const role =
-      normalizedTask.includes("review")
+      child.role ??
+      (normalizedTask.includes("review")
         ? "reviewer"
         : normalizedTask.includes("verify")
           ? "verifier"
           : normalizedTask.includes("plan")
             ? "planner"
-            : "child";
+            : "child");
     entries.push({
       role,
       state: child.status,
+      ...(child.roleSource ? { roleSource: child.roleSource } : {}),
+      ...(child.toolBundle ? { toolBundle: child.toolBundle } : {}),
+      ...(child.taskId ? { taskId: child.taskId } : {}),
       childSessionId: child.sessionId,
       shellProfile: child.shellProfile,
       taskSubject: child.task,
+      ...(child.workspaceRoot ? { workspaceRoot: child.workspaceRoot } : {}),
+      ...(child.workingDirectory ? { workingDirectory: child.workingDirectory } : {}),
+      ...(child.executionLocation ? { executionLocation: child.executionLocation } : {}),
+      ...(child.worktreePath ? { worktreePath: child.worktreePath } : {}),
     });
   }
 
@@ -127,12 +149,16 @@ export function formatWorkflowOwnershipReply(
       [
         `  ${entry.role}`,
         `[${entry.state}]`,
+        entry.roleSource ? `source=${entry.roleSource}` : null,
+        entry.toolBundle ? `bundle=${entry.toolBundle}` : null,
         entry.taskId ? `task=${entry.taskId}` : null,
         entry.taskSubject ? `subject=${entry.taskSubject}` : null,
         entry.childSessionId ? `child=${entry.childSessionId}` : null,
         entry.workerId ? `worker=${entry.workerId}` : null,
         entry.shellProfile ? `profile=${entry.shellProfile}` : null,
         entry.executionLocation ? `exec=${entry.executionLocation}` : null,
+        entry.workspaceRoot ? `workspace=${entry.workspaceRoot}` : null,
+        entry.workingDirectory ? `cwd=${entry.workingDirectory}` : null,
         entry.worktreePath ? `worktree=${entry.worktreePath}` : null,
         entry.branch ? `branch=${entry.branch}` : null,
         entry.head ? `head=${entry.head}` : null,

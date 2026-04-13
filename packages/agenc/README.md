@@ -10,6 +10,7 @@ agenc onboard
 agenc start
 agenc shell coding
 agenc plan
+agenc agents roles
 agenc git status
 agenc ui
 ```
@@ -61,6 +62,7 @@ binary remains `agenc`.
 Current coding-shell command surface on the same daemon:
 
 - `agenc plan status|enter|exit|implement|review|verify`
+- `agenc agents roles|list|spawn|assign|inspect|stop`
 - `agenc tasks`
 - `agenc files`
 - `agenc grep`
@@ -69,6 +71,8 @@ Current coding-shell command surface on the same daemon:
 - `agenc worktree`
 - `agenc diff`
 - `agenc review`
+- `agenc agents spawn coding --objective "Implement the task" --worktree auto`
+- `agenc agents assign <taskId> verification --wait`
 - `/verify` inside the shell for verification-stage checks or delegated verifier runs
 - `agenc session`
 - `agenc session list --active-only`

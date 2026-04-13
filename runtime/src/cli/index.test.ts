@@ -256,6 +256,9 @@ describe("runtime root CLI", () => {
     expect(stderr.data()).toBe("");
     expect(stdout.data()).toContain("init [--help] [options]");
     expect(stdout.data()).toContain("shell [profile] [--help] [options]");
+    expect(stdout.data()).toContain(
+      "agents [roles|list|spawn|assign|inspect|stop] [--help] [options]",
+    );
     expect(stdout.data()).toContain("agent [--help] <command> [options]");
     expect(stdout.data()).toContain("market [--help] <domain> <command> [options]");
     expect(stdout.data()).toContain("market inspect <surface> [subject]");
@@ -556,6 +559,60 @@ describe("runtime root CLI", () => {
         profile: "coding",
         quietConnection: true,
         commandText: '/review {"staged":true,"delegate":true}',
+      }),
+    );
+  });
+
+  it("routes agent-role listing through one-shot shell execution", async () => {
+    const stdout = captureStream();
+    const stderr = captureStream();
+
+    const code = await runCli({
+      argv: ["agents", "roles"],
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+    });
+
+    expect(code).toBe(0);
+    expect(runShellExecCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        profile: "coding",
+        quietConnection: true,
+        commandText: "/agents roles",
+      }),
+    );
+  });
+
+  it("routes agent spawning through one-shot shell execution", async () => {
+    const stdout = captureStream();
+    const stderr = captureStream();
+
+    const code = await runCli({
+      argv: [
+        "agents",
+        "spawn",
+        "coding",
+        "--objective",
+        "Implement the task",
+        "--bundle",
+        "coding-core",
+        "--worktree",
+        "auto",
+        "--wait",
+      ],
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+    });
+
+    expect(code).toBe(0);
+    expect(runShellExecCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        profile: "coding",
+        quietConnection: true,
+        commandText:
+          '/agents {"subcommand":"spawn","roleId":"coding","objective":"Implement the task","toolBundle":"coding-core","worktree":"auto","wait":true}',
       }),
     );
   });

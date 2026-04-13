@@ -22,6 +22,7 @@ import { basename, delimiter, dirname, join, resolve as resolvePath } from "node
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 // spawn import moved to ./daemon-command-registry.ts
 import { Gateway } from "./gateway.js";
 import { buildGatewayChannelStatus } from "./channel-status.js";
@@ -305,6 +306,23 @@ import {
   type PersistentWorkerMailboxTraceEvent,
 } from "./persistent-worker-mailbox.js";
 import { WorktreeIsolationManager } from "./worktree-isolation.js";
+import {
+  buildShellAgentRoleCatalog,
+  resolveShellAgentRole,
+  type ShellAgentRoleDescriptor,
+  type ShellAgentRoleSource,
+  type ShellAgentToolBundleName,
+} from "./shell-agent-roles.js";
+import { runCommand } from "../utils/process.js";
+import {
+  buildDelegationExecutionContext,
+  type DelegationExecutionContext,
+} from "../utils/delegation-execution-context.js";
+import {
+  isPathWithinRoot,
+  normalizeWorkspaceRoot,
+} from "../workflow/path-normalization.js";
+import type { RuntimeExecutionLocation } from "../runtime-contract/types.js";
 import { evaluateAutonomyCanaryAdmission } from "./autonomy-rollout.js";
 import {
   formatBackgroundRunAdmissionDenied,
@@ -1033,6 +1051,7 @@ export class DaemonManager {
   private _llmProviderConfigCatalog: LLMProviderConfigCatalogEntry[] = [];
   private _primaryLlmConfig: GatewayLLMConfig | undefined = undefined;
   private _baseToolHandler: ToolHandler | null = null;
+  private _toolRegistry: ToolRegistry | null = null;
   /**
    * Cut 5.6: declarative agent definitions loaded from
    * runtime/src/gateway/agent-definitions/, ~/.agenc/agents/, and
@@ -1802,6 +1821,7 @@ export class DaemonManager {
       config,
       telemetry ?? undefined,
     );
+    this._toolRegistry = registry;
     const environment = config.desktop?.environment ?? "both";
 
     const llmTools = registry.toLLMTools();
@@ -4067,6 +4087,542 @@ export class DaemonManager {
     await hydrateWebSessionRuntimeState(memoryBackend, webSessionId, session);
   }
 
+  private listShellAgentRoles(): readonly ShellAgentRoleDescriptor[] {
+    return buildShellAgentRoleCatalog({
+      definitions: this._agentDefinitions,
+    });
+  }
+
+  private async resolveShellAgentWorkspaceRoot(
+    parentSessionId: string,
+  ): Promise<string> {
+    return (
+      (typeof this._webChatChannel?.loadSessionWorkspaceRoot === "function"
+        ? await this._webChatChannel.loadSessionWorkspaceRoot(parentSessionId)
+        : undefined) ??
+      this._hostWorkspacePath ??
+      process.cwd()
+    );
+  }
+
+  private async resolveGitRootForPath(
+    startPath: string | undefined,
+  ): Promise<string | undefined> {
+    const normalized = normalizeWorkspaceRoot(startPath);
+    if (!normalized) {
+      return undefined;
+    }
+    const result = await runCommand(
+      "git",
+      ["rev-parse", "--show-toplevel"],
+      { cwd: normalized },
+    );
+    if (result.exitCode !== 0) {
+      return undefined;
+    }
+    const gitRoot = result.stdout.trim();
+    return gitRoot.length > 0 ? resolvePath(gitRoot) : undefined;
+  }
+
+  private async resolveExistingWorktreeLocation(params: {
+    readonly worktreePath: string;
+    readonly parentGitRoot?: string;
+  }): Promise<RuntimeExecutionLocation> {
+    const worktreePath = resolvePath(params.worktreePath);
+    const gitRoot = await this.resolveGitRootForPath(worktreePath);
+    if (!gitRoot) {
+      throw new Error(`"${worktreePath}" is not inside a git worktree.`);
+    }
+    if (params.parentGitRoot && gitRoot !== params.parentGitRoot) {
+      throw new Error(
+        `Worktree "${worktreePath}" does not belong to the current session git root.`,
+      );
+    }
+    const headResult = await runCommand(
+      "git",
+      ["rev-parse", "HEAD"],
+      { cwd: worktreePath },
+    );
+    const worktreeRef =
+      headResult.exitCode === 0 && headResult.stdout.trim().length > 0
+        ? headResult.stdout.trim()
+        : undefined;
+    return {
+      mode: "worktree",
+      workspaceRoot: worktreePath,
+      workingDirectory: worktreePath,
+      gitRoot,
+      worktreePath,
+      ...(worktreeRef ? { worktreeRef } : {}),
+      lifecycle: "active",
+    };
+  }
+
+  private async resolveShellAgentScope(params: {
+    readonly parentSessionId: string;
+    readonly allowedTools?: readonly string[];
+    readonly workspaceRoot?: string;
+    readonly workingDirectory?: string;
+    readonly worktree?: "auto" | string;
+    readonly worktreeEligible: boolean;
+    readonly mutating: boolean;
+  }): Promise<{
+    workspaceRoot: string;
+    workingDirectory: string;
+    executionLocation: RuntimeExecutionLocation;
+    executionContext?: DelegationExecutionContext;
+  }> {
+    const parentWorkspaceRoot = resolvePath(
+      await this.resolveShellAgentWorkspaceRoot(params.parentSessionId),
+    );
+    const parentGitRoot = await this.resolveGitRootForPath(parentWorkspaceRoot);
+    const requestedWorkspaceRoot = params.workspaceRoot
+      ? resolvePath(parentWorkspaceRoot, params.workspaceRoot)
+      : parentWorkspaceRoot;
+    if (
+      params.workspaceRoot &&
+      !isPathWithinRoot(requestedWorkspaceRoot, parentWorkspaceRoot)
+    ) {
+      throw new Error("Explicit workspace root must stay inside the parent workspace root.");
+    }
+
+    let executionLocation: RuntimeExecutionLocation = {
+      mode: "local",
+      workspaceRoot: requestedWorkspaceRoot,
+      workingDirectory: requestedWorkspaceRoot,
+    };
+
+    if (params.worktree === "auto" && params.worktreeEligible) {
+      const worktreeManager = new WorktreeIsolationManager({
+        logger: this.logger,
+      });
+      executionLocation = await worktreeManager.prepareWorktree({
+        workerId: `shell-agent-${randomUUID().slice(0, 12)}`,
+        workspaceRoot: requestedWorkspaceRoot,
+        workingDirectory: requestedWorkspaceRoot,
+      });
+    } else if (
+      typeof params.worktree === "string" &&
+      params.worktree.trim().length > 0 &&
+      params.worktree !== "auto"
+    ) {
+      executionLocation = await this.resolveExistingWorktreeLocation({
+        worktreePath: params.worktree,
+        parentGitRoot,
+      });
+    }
+
+    const defaultWorkspaceRoot =
+      executionLocation.workspaceRoot ?? requestedWorkspaceRoot;
+    const defaultWorkingDirectory =
+      executionLocation.workingDirectory ?? defaultWorkspaceRoot;
+    const workingDirectory = params.workingDirectory
+      ? resolvePath(defaultWorkingDirectory, params.workingDirectory)
+      : defaultWorkingDirectory;
+    if (!isPathWithinRoot(workingDirectory, defaultWorkspaceRoot)) {
+      throw new Error("Child working directory must stay inside the resolved workspace scope.");
+    }
+
+    const baseExecutionContext = buildDelegationExecutionContext({
+      workspaceRoot: defaultWorkspaceRoot,
+      allowedReadRoots: [defaultWorkspaceRoot],
+      allowedWriteRoots: params.mutating ? [defaultWorkspaceRoot] : [],
+      allowedTools: params.allowedTools,
+      effectClass: params.mutating ? "filesystem_write" : "read_only",
+      verificationMode: params.mutating ? "conditional_mutation" : "grounded_read",
+      stepKind: params.mutating ? "delegated_write" : "delegated_research",
+      role: params.mutating ? "writer" : "researcher",
+    });
+    const executionContext =
+      executionLocation.mode === "worktree"
+        ? new WorktreeIsolationManager({
+            logger: this.logger,
+          }).translateExecutionContext(baseExecutionContext, executionLocation)
+        : baseExecutionContext;
+    const translatedWorkingDirectory =
+      executionLocation.mode === "worktree"
+        ? new WorktreeIsolationManager({
+            logger: this.logger,
+          }).translatePath(workingDirectory, executionLocation) ?? workingDirectory
+        : workingDirectory;
+
+    return {
+      workspaceRoot:
+        executionLocation.mode === "worktree"
+          ? executionContext?.workspaceRoot ?? defaultWorkspaceRoot
+          : defaultWorkspaceRoot,
+      workingDirectory: translatedWorkingDirectory,
+      executionLocation: {
+        ...executionLocation,
+        workspaceRoot:
+          executionLocation.mode === "worktree"
+            ? executionContext?.workspaceRoot ?? defaultWorkspaceRoot
+            : defaultWorkspaceRoot,
+        workingDirectory: translatedWorkingDirectory,
+      },
+      ...(executionContext ? { executionContext } : {}),
+    };
+  }
+
+  private async monitorShellAgentTask(params: {
+    readonly parentSessionId: string;
+    readonly taskId?: string;
+    readonly childSessionId: string;
+    readonly workingDirectory: string;
+    readonly executionLocation: RuntimeExecutionLocation;
+    readonly roleId: string;
+  }): Promise<{
+    output: string;
+    success: boolean;
+    status: string;
+  }> {
+    const subAgentManager = this._subAgentManager;
+    const taskStore = this._taskTrackerStore;
+    if (!subAgentManager) {
+      throw new Error("Sub-agent runtime is unavailable");
+    }
+    const result = await subAgentManager.waitForResult(params.childSessionId);
+    const output = result?.output ?? "";
+    const success = result?.success === true;
+    const status =
+      success
+        ? "completed"
+        : result?.stopReason ?? result?.completionState ?? "failed";
+    let finalExecutionLocation = params.executionLocation;
+    if (params.executionLocation.mode === "worktree") {
+      finalExecutionLocation =
+        (await new WorktreeIsolationManager({
+          logger: this.logger,
+        }).cleanupLocation(params.executionLocation)) ?? params.executionLocation;
+    }
+    if (taskStore && params.taskId) {
+      await taskStore.finalizeRuntimeTask({
+        listId: params.parentSessionId,
+        taskId: params.taskId,
+        status:
+          status === "cancelled"
+            ? "cancelled"
+            : success
+              ? "completed"
+              : "failed",
+        summary:
+          output.trim().length > 0
+            ? `${params.roleId} agent ${success ? "completed" : "finished with issues"}.`
+            : `${params.roleId} agent ${status}.`,
+        output,
+        usage: result?.tokenUsage as Record<string, unknown> | undefined,
+        workingDirectory:
+          finalExecutionLocation.workingDirectory ?? params.workingDirectory,
+        executionLocation: finalExecutionLocation,
+        externalRef: {
+          kind: "subagent",
+          id: params.childSessionId,
+          sessionId: params.childSessionId,
+          label: params.roleId,
+        },
+        eventData: {
+          childSessionId: params.childSessionId,
+          role: params.roleId,
+          status,
+        },
+      });
+    }
+    return {
+      output,
+      success,
+      status,
+    };
+  }
+
+  private async launchShellAgentTask(params: {
+    readonly parentSessionId: string;
+    readonly roleId: string;
+    readonly objective: string;
+    readonly prompt?: string;
+    readonly taskId?: string;
+    readonly shellProfile?: SessionShellProfile;
+    readonly toolBundle?: ShellAgentToolBundleName;
+    readonly workspaceRoot?: string;
+    readonly workingDirectory?: string;
+    readonly worktree?: "auto" | string;
+    readonly wait?: boolean;
+    readonly timeoutMs?: number;
+  }): Promise<{
+    role: ShellAgentRoleDescriptor;
+    sessionId: string;
+    taskId?: string;
+    output: string;
+    success: boolean;
+    status: string;
+    waited: boolean;
+  }> {
+    const subAgentManager = this._subAgentManager;
+    const toolRegistry = this._toolRegistry;
+    if (!subAgentManager || !toolRegistry) {
+      throw new Error("Sub-agent runtime is unavailable");
+    }
+    const resolvedRole = resolveShellAgentRole({
+      roleId: params.roleId,
+      definitions: this._agentDefinitions,
+      toolCatalog: toolRegistry.listCatalog(),
+      ...(params.toolBundle ? { toolBundleOverride: params.toolBundle } : {}),
+      ...(params.shellProfile ? { shellProfileOverride: params.shellProfile } : {}),
+    });
+    if (!resolvedRole) {
+      throw new Error(`Agent role "${params.roleId}" is unavailable.`);
+    }
+
+    const scope = await this.resolveShellAgentScope({
+      parentSessionId: params.parentSessionId,
+      allowedTools: resolvedRole.toolNames,
+      workspaceRoot: params.workspaceRoot,
+      workingDirectory: params.workingDirectory,
+      worktree: params.worktree,
+      worktreeEligible: resolvedRole.descriptor.worktreeEligible,
+      mutating: resolvedRole.descriptor.mutating,
+    });
+
+    const taskStore = this._taskTrackerStore;
+    let taskId = params.taskId;
+    if (taskStore && taskId) {
+      const existingTask = await taskStore.getTask(params.parentSessionId, taskId);
+      if (!existingTask) {
+        throw new Error(`Task "${taskId}" is unavailable.`);
+      }
+      if (
+        existingTask.status === "completed" ||
+        existingTask.status === "failed" ||
+        existingTask.status === "cancelled" ||
+        existingTask.status === "deleted"
+      ) {
+        throw new Error(`Task "${taskId}" is already terminal.`);
+      }
+      await taskStore.updateTask(params.parentSessionId, taskId, {
+        status: "in_progress",
+        owner: `${resolvedRole.descriptor.displayName} agent`,
+        metadata: {
+          shellAgent: {
+            role: resolvedRole.descriptor.id,
+            roleSource: resolvedRole.descriptor.source,
+            toolBundle: resolvedRole.toolBundle,
+            shellProfile: resolvedRole.shellProfile,
+          },
+        },
+      });
+      await taskStore.recordRuntimeProgress({
+        listId: params.parentSessionId,
+        taskId,
+        status: "in_progress",
+        summary: `${resolvedRole.descriptor.displayName} agent started.`,
+        data: {
+          role: resolvedRole.descriptor.id,
+          toolBundle: resolvedRole.toolBundle,
+        },
+      });
+    } else if (taskStore) {
+      const createdTask = await taskStore.createRuntimeTask({
+        listId: params.parentSessionId,
+        kind: "subagent",
+        subject: params.objective,
+        description: params.prompt ?? params.objective,
+        activeForm: `Running ${resolvedRole.descriptor.displayName} agent`,
+        metadata: {
+          shellAgent: {
+            role: resolvedRole.descriptor.id,
+            roleSource: resolvedRole.descriptor.source,
+            toolBundle: resolvedRole.toolBundle,
+            shellProfile: resolvedRole.shellProfile,
+          },
+        },
+        summary: `${resolvedRole.descriptor.displayName} agent started.`,
+        workingDirectory: scope.workingDirectory,
+        executionLocation: scope.executionLocation,
+      });
+      taskId = createdTask.id;
+    }
+
+    const childSessionId = await subAgentManager.spawn({
+      parentSessionId: params.parentSessionId,
+      shellProfile: resolvedRole.shellProfile,
+      role: resolvedRole.descriptor.id,
+      roleSource: resolvedRole.descriptor.source,
+      toolBundle: resolvedRole.toolBundle,
+      ...(taskId ? { taskId } : {}),
+      task: params.objective,
+      prompt: params.prompt ?? params.objective,
+      ...(resolvedRole.systemPrompt ? { systemPrompt: resolvedRole.systemPrompt } : {}),
+      ...(resolvedRole.toolNames ? { tools: resolvedRole.toolNames } : {}),
+      workingDirectory: scope.workingDirectory,
+      ...(scope.workspaceRoot ? { workspaceRoot: scope.workspaceRoot } : {}),
+      executionLocation: scope.executionLocation,
+      ...(scope.executionContext
+        ? {
+            delegationSpec: {
+              task: params.objective,
+              objective: params.objective,
+              executionContext: scope.executionContext,
+              isolationReason:
+                scope.executionLocation.mode === "worktree"
+                  ? "shell_agent_worktree"
+                  : "shell_agent_scope",
+            },
+          }
+        : {}),
+      ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
+    });
+    if (taskStore && taskId) {
+      await taskStore.attachExternalRef(
+        params.parentSessionId,
+        taskId,
+        {
+          kind: "subagent",
+          id: childSessionId,
+          sessionId: childSessionId,
+          label: resolvedRole.descriptor.id,
+        },
+        `${resolvedRole.descriptor.displayName} agent started.`,
+      );
+    }
+
+    const monitorPromise = this.monitorShellAgentTask({
+      parentSessionId: params.parentSessionId,
+      taskId,
+      childSessionId,
+      workingDirectory: scope.workingDirectory,
+      executionLocation: scope.executionLocation,
+      roleId: resolvedRole.descriptor.id,
+    });
+    if (params.wait === true) {
+      const result = await monitorPromise;
+      return {
+        role: resolvedRole.descriptor,
+        sessionId: childSessionId,
+        ...(taskId ? { taskId } : {}),
+        ...result,
+        waited: true,
+      };
+    }
+
+    void monitorPromise.catch((error) => {
+      this.logger.warn("Shell agent monitor failed", {
+        parentSessionId: params.parentSessionId,
+        childSessionId,
+        error: toErrorMessage(error),
+      });
+    });
+    return {
+      role: resolvedRole.descriptor,
+      sessionId: childSessionId,
+      ...(taskId ? { taskId } : {}),
+      output: "",
+      success: false,
+      status: "running",
+      waited: false,
+    };
+  }
+
+  private async inspectShellAgentTask(
+    parentSessionId: string,
+    target: string,
+  ): Promise<{
+    sessionId?: string;
+    taskId?: string;
+    status: string;
+    task: string;
+    role?: string;
+    roleSource?: ShellAgentRoleSource;
+    toolBundle?: string;
+    shellProfile?: SessionShellProfile;
+    executionLocation?: string;
+    workspaceRoot?: string;
+    workingDirectory?: string;
+    worktreePath?: string;
+    outputPreview?: string;
+  } | undefined> {
+    const childInfo = this._subAgentManager
+      ?.listAll()
+      .find((entry) =>
+        entry.parentSessionId === parentSessionId &&
+        (entry.sessionId === target || entry.taskId === target)
+      );
+    const taskStore = this._taskTrackerStore;
+    const task = taskStore
+      ? (await taskStore.listTasks(parentSessionId)).find((entry) =>
+          entry.id === target ||
+          entry.externalRef?.id === target ||
+          entry.externalRef?.sessionId === target
+        )
+      : undefined;
+    if (!childInfo && !task) {
+      return undefined;
+    }
+    const output = task?.outputReady === true && taskStore
+      ? await taskStore.readTaskOutput(parentSessionId, task.id)
+      : undefined;
+    return {
+      ...(childInfo?.sessionId ? { sessionId: childInfo.sessionId } : {}),
+      ...(task?.id ? { taskId: task.id } : childInfo?.taskId ? { taskId: childInfo.taskId } : {}),
+      status: childInfo?.status ?? task?.status ?? "unknown",
+      task: childInfo?.task ?? task?.subject ?? "unknown",
+      ...(childInfo?.role ? { role: childInfo.role } : {}),
+      ...(childInfo?.roleSource
+        ? { roleSource: childInfo.roleSource as ShellAgentRoleSource }
+        : {}),
+      ...(childInfo?.toolBundle ? { toolBundle: childInfo.toolBundle } : {}),
+      ...(childInfo?.shellProfile ? { shellProfile: childInfo.shellProfile } : {}),
+      ...(childInfo?.executionLocation
+        ? { executionLocation: childInfo.executionLocation }
+        : task?.executionLocation?.mode
+          ? { executionLocation: task.executionLocation.mode }
+          : {}),
+      ...(childInfo?.workspaceRoot
+        ? { workspaceRoot: childInfo.workspaceRoot }
+        : task?.executionLocation?.workspaceRoot
+          ? { workspaceRoot: task.executionLocation.workspaceRoot }
+          : {}),
+      ...(childInfo?.workingDirectory
+        ? { workingDirectory: childInfo.workingDirectory }
+        : task?.workingDirectory
+          ? { workingDirectory: task.workingDirectory }
+          : task?.executionLocation?.workingDirectory
+            ? { workingDirectory: task.executionLocation.workingDirectory }
+            : {}),
+      ...(childInfo?.worktreePath
+        ? { worktreePath: childInfo.worktreePath }
+        : task?.executionLocation?.worktreePath
+          ? { worktreePath: task.executionLocation.worktreePath }
+          : {}),
+      ...(typeof output?.output === "string" && output.output.trim().length > 0
+        ? { outputPreview: output.output.trim() }
+        : typeof task?.summary === "string" && task.summary.trim().length > 0
+          ? { outputPreview: task.summary.trim() }
+          : {}),
+    };
+  }
+
+  private async stopShellAgentTask(
+    parentSessionId: string,
+    target: string,
+  ): Promise<{
+    stopped: boolean;
+    sessionId?: string;
+    taskId?: string;
+  }> {
+    const inspected = await this.inspectShellAgentTask(parentSessionId, target);
+    if (!inspected?.sessionId) {
+      return {
+        stopped: false,
+        ...(inspected?.taskId ? { taskId: inspected.taskId } : {}),
+      };
+    }
+    const stopped = this._subAgentManager?.cancel(inspected.sessionId) === true;
+    return {
+      stopped,
+      sessionId: inspected.sessionId,
+      ...(inspected.taskId ? { taskId: inspected.taskId } : {}),
+    };
+  }
+
   private _buildCommandRegistryContext(): CommandRegistryDaemonContext {
     return {
       logger: this.logger,
@@ -4214,41 +4770,13 @@ export class DaemonManager {
           started: true,
         };
       },
-      runNamedAgentTask: async (params) => {
-        const subAgentManager = this._subAgentManager;
-        if (!subAgentManager) {
-          throw new Error("Sub-agent runtime is unavailable");
-        }
-        const definition = this._agentDefinitions.find(
-          (entry) => entry.name === params.agentName,
-        );
-        if (!definition) {
-          throw new Error(`Agent definition "${params.agentName}" is unavailable`);
-        }
-        const childSessionId = await subAgentManager.spawn({
-          parentSessionId: params.parentSessionId,
-          ...(params.shellProfile ? { shellProfile: params.shellProfile } : {}),
-          task: params.task,
-          prompt: params.prompt,
-          systemPrompt:
-            definition.body.trim().length > 0 ? definition.body.trim() : undefined,
-          ...(definition.tools.length > 0 ? { tools: definition.tools } : {}),
-          ...(params.workingDirectory
-            ? { workingDirectory: params.workingDirectory }
-            : {}),
-          ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
-        });
-        const result = await subAgentManager.waitForResult(childSessionId);
-        return {
-          sessionId: childSessionId,
-          output: result?.output ?? "",
-          success: result?.success ?? false,
-          status:
-            result?.success === true
-              ? "completed"
-              : result?.stopReason ?? result?.completionState ?? "failed",
-        };
-      },
+      listAgentRoles: () => this.listShellAgentRoles(),
+      launchShellAgentTask: async (params) =>
+        this.launchShellAgentTask(params),
+      inspectShellAgentTask: async (parentSessionId, target) =>
+        this.inspectShellAgentTask(parentSessionId, target),
+      stopShellAgentTask: async (parentSessionId, target) =>
+        this.stopShellAgentTask(parentSessionId, target),
       listSubAgentInfo: (parentSessionId) =>
         this._subAgentManager
           ?.listAll()
@@ -4257,7 +4785,19 @@ export class DaemonManager {
             sessionId: entry.sessionId,
             status: entry.status,
             task: entry.task,
+            ...(entry.role ? { role: entry.role } : {}),
+            ...(entry.roleSource ? { roleSource: entry.roleSource } : {}),
+            ...(entry.toolBundle ? { toolBundle: entry.toolBundle } : {}),
+            ...(entry.taskId ? { taskId: entry.taskId } : {}),
             ...(entry.shellProfile ? { shellProfile: entry.shellProfile } : {}),
+            ...(entry.workspaceRoot ? { workspaceRoot: entry.workspaceRoot } : {}),
+            ...(entry.workingDirectory
+              ? { workingDirectory: entry.workingDirectory }
+              : {}),
+            ...(entry.executionLocation
+              ? { executionLocation: entry.executionLocation }
+              : {}),
+            ...(entry.worktreePath ? { worktreePath: entry.worktreePath } : {}),
           })) ?? [],
     };
   }
@@ -6696,6 +7236,7 @@ export class DaemonManager {
       if (this._taskTrackerStore !== null) {
         this._taskTrackerStore = null;
       }
+      this._toolRegistry = null;
       if (this._memoryBackend !== null) {
         await this._memoryBackend.close();
         this._memoryBackend = null;
