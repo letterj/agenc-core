@@ -826,8 +826,8 @@ describe("WebChatChannel", () => {
 
       resumedChannel.handleMessage(
         "client_2",
-        "chat.resume",
-        msg("chat.resume", {
+        "chat.session.resume",
+        msg("chat.session.resume", {
           sessionId,
           ownerToken,
         }),
@@ -836,7 +836,7 @@ describe("WebChatChannel", () => {
       await vi.waitFor(() =>
         expect(resumedSend).toHaveBeenCalledWith(
           expect.objectContaining({
-            type: "chat.resumed",
+            type: "chat.session.resumed",
             payload: expect.objectContaining({ sessionId }),
           }),
         ),
@@ -1372,14 +1372,14 @@ describe("WebChatChannel", () => {
   // Chat resume
   // --------------------------------------------------------------------------
 
-  describe("chat.resume", () => {
+  describe("chat.session.resume", () => {
     it("should reject missing sessionId", () => {
       const send = vi.fn<(response: ControlResponse) => void>();
 
       channel.handleMessage(
         "client_1",
-        "chat.resume",
-        msg("chat.resume", {}),
+        "chat.session.resume",
+        msg("chat.session.resume", {}),
         send,
       );
 
@@ -1393,8 +1393,8 @@ describe("WebChatChannel", () => {
 
       channel.handleMessage(
         "client_1",
-        "chat.resume",
-        msg("chat.resume", { sessionId: "nonexistent" }),
+        "chat.session.resume",
+        msg("chat.session.resume", { sessionId: "nonexistent" }),
         send,
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1422,15 +1422,15 @@ describe("WebChatChannel", () => {
       const send2 = vi.fn<(response: ControlResponse) => void>();
       channel.handleMessage(
         "client_1",
-        "chat.resume",
-        msg("chat.resume", { sessionId }, "req-3"),
+        "chat.session.resume",
+        msg("chat.session.resume", { sessionId }, "req-3"),
         send2,
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       const resumeCall = send2.mock.calls.find(
         (call) =>
-          (call[0] as ControlResponse).type === ("chat.resumed" as string),
+          (call[0] as ControlResponse).type === ("chat.session.resumed" as string),
       );
       expect(resumeCall).toBeDefined();
       const response = resumeCall![0] as ControlResponse;
@@ -1484,8 +1484,8 @@ describe("WebChatChannel", () => {
       const send2 = vi.fn<(response: ControlResponse) => void>();
       channel.handleMessage(
         "client_2",
-        "chat.resume",
-        msg("chat.resume", { sessionId }, "req-3"),
+        "chat.session.resume",
+        msg("chat.session.resume", { sessionId }, "req-3"),
         send2,
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1541,19 +1541,19 @@ describe("WebChatChannel", () => {
 
       channel2.handleMessage(
         "client_2",
-        "chat.sessions",
-        msg("chat.sessions", { clientKey: "browser-1" }, "req-sessions"),
+        "chat.session.list",
+        msg("chat.session.list", { clientKey: "browser-1" }, "req-sessions"),
         send2,
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(findResponse(send2, "chat.sessions", "req-sessions")?.payload).toEqual([]);
+      expect(findResponse(send2, "chat.session.list", "req-sessions")?.payload).toEqual([]);
 
       channel2.handleMessage(
         "client_2",
-        "chat.resume",
+        "chat.session.resume",
         msg(
-          "chat.resume",
+          "chat.session.resume",
           { sessionId, clientKey: "browser-1" },
           "req-resume-replay",
         ),
@@ -1568,13 +1568,13 @@ describe("WebChatChannel", () => {
 
       channel2.handleMessage(
         "client_2",
-        "chat.sessions",
-        msg("chat.sessions", { ownerToken }, "req-sessions"),
+        "chat.session.list",
+        msg("chat.session.list", { ownerToken }, "req-sessions"),
         send2,
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const sessionsCall = findResponse(send2, "chat.sessions", "req-sessions");
+      const sessionsCall = findResponse(send2, "chat.session.list", "req-sessions");
       expect(sessionsCall).toBeDefined();
       expect(sessionsCall?.payload).toEqual(
         expect.arrayContaining([
@@ -1584,9 +1584,9 @@ describe("WebChatChannel", () => {
 
       channel2.handleMessage(
         "client_2",
-        "chat.resume",
+        "chat.session.resume",
         msg(
-          "chat.resume",
+          "chat.session.resume",
           { sessionId, ownerToken },
           "req-resume",
         ),
@@ -1595,7 +1595,7 @@ describe("WebChatChannel", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(hydrateSessionContext).toHaveBeenCalledWith(sessionId);
-      const resumedCall = findResponse(send2, "chat.resumed", "req-resume");
+      const resumedCall = findResponse(send2, "chat.session.resumed", "req-resume");
       expect(resumedCall).toBeDefined();
 
       channel2.handleMessage(
@@ -1669,37 +1669,39 @@ describe("WebChatChannel", () => {
 
         channel2.handleMessage(
           "client_2",
-          "chat.sessions",
-          msg("chat.sessions", { ownerToken }, "req-sessions"),
+          "chat.session.list",
+          msg("chat.session.list", { ownerToken }, "req-sessions"),
           send2,
         );
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(findResponse(send2, "chat.sessions", "req-sessions")?.payload).toEqual(
-          expect.arrayContaining([
+        await expect(
+          waitForResponse(send2, "chat.session.list", "req-sessions"),
+        ).resolves.toMatchObject({
+          payload: expect.arrayContaining([
             expect.objectContaining({
               sessionId,
               workspaceRoot: workspaceRootA,
             }),
           ]),
-        );
+        });
 
         channel2.handleMessage(
           "client_2",
-          "chat.resume",
+          "chat.session.resume",
           msg(
-            "chat.resume",
+            "chat.session.resume",
             { sessionId, ownerToken, workspaceRoot: workspaceRootB },
             "req-resume",
           ),
           send2,
         );
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(findResponse(send2, "chat.resumed", "req-resume")?.payload).toEqual(
-          expect.objectContaining({
+        await expect(
+          waitForResponse(send2, "chat.session.resumed", "req-resume"),
+        ).resolves.toMatchObject({
+          payload: expect.objectContaining({
             sessionId,
             workspaceRoot: workspaceRootA,
           }),
-        );
+        });
 
         channel2.handleMessage(
           "client_2",
@@ -1942,9 +1944,9 @@ describe("WebChatChannel", () => {
 
         forkChannel.handleMessage(
           "client_2",
-          "chat.resume",
+          "chat.session.resume",
           msg(
-            "chat.resume",
+            "chat.session.resume",
             { ownerToken: issued.ownerToken, sessionId: "session-source" },
             "req-resume-source",
           ),
@@ -2027,9 +2029,9 @@ describe("WebChatChannel", () => {
 
         resumedChannel.handleMessage(
           "client_2",
-          "chat.resume",
+          "chat.session.resume",
           msg(
-            "chat.resume",
+            "chat.session.resume",
             {
               sessionId: "session-backfill",
               ownerToken: issued.ownerToken,
@@ -2039,14 +2041,14 @@ describe("WebChatChannel", () => {
           ),
           send,
         );
-        await new Promise((resolve) => setTimeout(resolve, 0));
-
-        expect(findResponse(send, "chat.resumed", "req-resume")?.payload).toEqual(
-          expect.objectContaining({
+        await expect(
+          waitForResponse(send, "chat.session.resumed", "req-resume"),
+        ).resolves.toMatchObject({
+          payload: expect.objectContaining({
             sessionId: "session-backfill",
             workspaceRoot,
           }),
-        );
+        });
         await vi.waitFor(async () => {
           expect(await store.loadSession("session-backfill")).toMatchObject({
             metadata: {

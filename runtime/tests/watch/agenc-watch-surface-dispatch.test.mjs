@@ -140,7 +140,7 @@ test("dispatchOperatorSurfaceEvent resumes sessions by restoring history and ins
   dispatchOperatorSurfaceEvent(
     {
       family: "session",
-      type: "chat.resumed",
+      type: "chat.session.resumed",
       payload: { sessionId: "session-2" },
       payloadRecord: { sessionId: "session-2" },
       payloadList: null,
@@ -161,8 +161,8 @@ test("dispatchOperatorSurfaceEvent resumes sessions by restoring history and ins
     ["send", "session.command.catalog.get", { auth: true, client: "console", sessionId: "session-2" }],
     ["send", "chat.history", { auth: true, limit: 50 }],
     ["requestRunInspect", "resume", { force: true }],
-    ["requestCockpit", "resume"],
     ["markBootstrapReady", "session resumed: session-2; restoring history"],
+    ["requestCockpit", "resume"],
   ]);
 });
 
@@ -240,7 +240,7 @@ test("dispatchOperatorSurfaceEvent filters manual session lists with the active 
   dispatchOperatorSurfaceEvent(
     {
       family: "session",
-      type: "chat.sessions",
+      type: "chat.session.list",
       payload: sessions,
       payloadRecord: {},
       payloadList: sessions,
@@ -377,8 +377,8 @@ test("dispatchOperatorSurfaceEvent handles canonical session resume results", ()
     ["send", "session.command.catalog.get", { auth: true, client: "console", sessionId: "session-5" }],
     ["send", "chat.history", { auth: true, limit: 50 }],
     ["requestRunInspect", "resume", { force: true }],
-    ["requestCockpit", "resume"],
     ["markBootstrapReady", "session resumed: session-5; restoring history"],
+    ["requestCockpit", "resume"],
   ]);
 });
 
@@ -691,7 +691,7 @@ test("dispatchOperatorSurfaceEvent filters manual session lists using local sess
   dispatchOperatorSurfaceEvent(
     {
       family: "session",
-      type: "chat.sessions",
+      type: "chat.session.list",
       payload: sessions,
       payloadRecord: {},
       payloadList: sessions,

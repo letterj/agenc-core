@@ -7061,14 +7061,6 @@
       "kind": "const"
     },
     {
-      "name": "WS_CHAT_RESUME",
-      "kind": "const"
-    },
-    {
-      "name": "WS_CHAT_RESUMED",
-      "kind": "const"
-    },
-    {
       "name": "WS_CHAT_SESSION",
       "kind": "const"
     },
