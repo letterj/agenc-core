@@ -40,6 +40,8 @@ import type {
   WebChatHandler,
   WebChatDeps,
   WebChatChannelConfig,
+  SessionContinuityRecord,
+  SessionResumabilityState,
 } from "./types.js";
 import { HANDLER_MAP } from "./handlers.js";
 import type { SendFn } from "./handlers.js";
@@ -62,45 +64,11 @@ const MAX_TRACKED_MESSAGE_IDS = 5_000;
 const WS_TRACE_PAYLOAD_MAX_CHARS = 2_000;
 const execFileAsync = promisify(execFile);
 
-type SessionResumabilityState =
-  | "active"
-  | "disconnected-resumable"
-  | "missing-workspace"
-  | "non-resumable";
-
 interface SessionHistoryItem {
   readonly content: string;
   readonly sender: "user" | "agent" | "tool";
   readonly timestamp: number;
   readonly toolName?: string;
-}
-
-interface SessionContinuityRecord {
-  readonly sessionId: string;
-  readonly label: string;
-  readonly preview: string;
-  readonly messageCount: number;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-  readonly lastActiveAt: number;
-  readonly connected: boolean;
-  readonly resumabilityState: SessionResumabilityState;
-  readonly shellProfile: SessionShellProfile;
-  readonly workflowStage: string;
-  readonly workspaceRoot?: string;
-  readonly repoRoot?: string;
-  readonly branch?: string;
-  readonly head?: string;
-  readonly activeTaskSummary?: string;
-  readonly childSessionCount: number;
-  readonly worktreeCount: number;
-  readonly pendingApprovalCount: number;
-  readonly lastAssistantOutputPreview?: string;
-  readonly forkLineage?: {
-    readonly parentSessionId: string;
-    readonly source: PersistedWebChatForkSource;
-    readonly forkedAt: number;
-  };
 }
 
 function compactPreview(content: string, maxChars = 140): string | undefined {
@@ -472,6 +440,11 @@ export class WebChatChannel
 
     if (type === "chat.fork") {
       this.handleChatFork(clientId, payload, id, tracedSend);
+      return;
+    }
+
+    if (type === "watch.cockpit.get") {
+      this.handleWatchCockpitGet(clientId, payload, id, tracedSend);
       return;
     }
 
@@ -949,6 +922,23 @@ export class WebChatChannel
     });
   }
 
+  private handleWatchCockpitGet(
+    clientId: string,
+    payload: Record<string, unknown> | undefined,
+    id: string | undefined,
+    send: SendFn,
+  ): void {
+    void this.handleWatchCockpitGetAsync(clientId, payload, id, send).catch(
+      (error) => {
+        send({
+          type: "error",
+          error: `Failed to inspect watch cockpit: ${(error as Error).message}`,
+          id,
+        });
+      },
+    );
+  }
+
   private async handleChatHistoryAsync(
     clientId: string,
     payload: Record<string, unknown> | undefined,
@@ -1173,6 +1163,81 @@ export class WebChatChannel
           : undefined,
     });
     send({ type: "chat.fork", payload: forked, id });
+  }
+
+  private async handleWatchCockpitGetAsync(
+    clientId: string,
+    payload: Record<string, unknown> | undefined,
+    id: string | undefined,
+    send: SendFn,
+  ): Promise<void> {
+    const targetSessionId =
+      typeof payload?.sessionId === "string" && payload.sessionId.trim().length > 0
+        ? payload.sessionId.trim()
+        : this.clientSessions.get(clientId);
+    if (!targetSessionId) {
+      send({ type: "error", error: "Missing sessionId in watch.cockpit.get", id });
+      return;
+    }
+    const ownerKey = await this.resolveDurableOwner(clientId, payload, send);
+    const authorized = await this.isAuthorizedSession(
+      targetSessionId,
+      ownerKey,
+      clientId,
+    );
+    if (!authorized) {
+      send({ type: "error", error: "Not authorized to access this session", id });
+      return;
+    }
+    const continuity = await this.inspectContinuitySession(targetSessionId, ownerKey);
+    if (!continuity) {
+      send({ type: "error", error: "Session not found", id });
+      return;
+    }
+    const sessionRecord =
+      continuity.session &&
+      typeof continuity.session === "object" &&
+      !Array.isArray(continuity.session)
+        ? (continuity.session as SessionContinuityRecord)
+        : undefined;
+    if (!sessionRecord) {
+      send({ type: "error", error: "Session continuity unavailable", id });
+      return;
+    }
+    if (!this.deps.getWatchCockpitSnapshot) {
+      send({
+        type: "watch.cockpit",
+        payload: {
+          session: sessionRecord,
+          repo: { available: false, unavailableReason: "cockpit unavailable" },
+          worktrees: { available: false, entries: [], unavailableReason: "cockpit unavailable" },
+          review: { status: "idle", source: "local", startedAt: Date.now(), updatedAt: Date.now() },
+          verification: {
+            status: "idle",
+            source: "local",
+            verdict: "unknown",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+          approvals: { count: sessionRecord.pendingApprovalCount ?? 0, entries: [] },
+          ownership: [],
+        },
+        id,
+      });
+      return;
+    }
+    const snapshot = await this.deps.getWatchCockpitSnapshot({
+      sessionId: targetSessionId,
+      actorId: this.currentActorId(clientId),
+      channel: "webchat",
+      continuity: sessionRecord,
+      redactionProfile: "watch_cockpit",
+    });
+    send({
+      type: "watch.cockpit",
+      payload: snapshot,
+      id,
+    });
   }
 
   async listContinuitySessionsForSession(
@@ -2000,7 +2065,7 @@ export class WebChatChannel
         ? { forkLineage: session.metadata.forkLineage }
         : {}),
     };
-  }
+}
 
   private resolveResumabilityState(params: {
     connected: boolean;

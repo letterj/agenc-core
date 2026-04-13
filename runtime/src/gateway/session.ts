@@ -33,6 +33,16 @@ import {
   type SessionWorkflowStage,
   type SessionWorkflowUpdate,
 } from "./workflow-state.js";
+import {
+  SESSION_REVIEW_SURFACE_STATE_METADATA_KEY,
+  SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY,
+  coerceReviewSurfaceState,
+  coerceVerificationSurfaceState,
+  createIdleReviewSurfaceState,
+  createIdleVerificationSurfaceState,
+  type ReviewSurfaceState,
+  type VerificationSurfaceState,
+} from "./watch-cockpit.js";
 
 export const SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY =
   "statefulResumeAnchor";
@@ -59,6 +69,8 @@ export function clearStatefulContinuationMetadata(
   delete metadata[SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY];
   delete metadata[SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY];
   delete metadata[SESSION_RUNTIME_CONTRACT_STATUS_SNAPSHOT_METADATA_KEY];
+  delete metadata[SESSION_REVIEW_SURFACE_STATE_METADATA_KEY];
+  delete metadata[SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY];
 }
 
 export function buildSessionRuntimeContractSnapshot(
@@ -98,6 +110,15 @@ export {
   resolveSessionWorkflowState,
 };
 export type { SessionWorkflowStage, SessionWorkflowUpdate };
+export {
+  SESSION_REVIEW_SURFACE_STATE_METADATA_KEY,
+  SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY,
+  coerceReviewSurfaceState,
+  coerceVerificationSurfaceState,
+  createIdleReviewSurfaceState,
+  createIdleVerificationSurfaceState,
+};
+export type { ReviewSurfaceState, VerificationSurfaceState };
 
 // ---------------------------------------------------------------------------
 // Types

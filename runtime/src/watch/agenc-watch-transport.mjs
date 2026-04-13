@@ -95,6 +95,14 @@ export function createWatchTransportController(dependencies = {}) {
     transportState.ws?.send(frame);
   }
 
+  function requestCockpit(reason = "refresh") {
+    if (!transportState.isOpen || !watchState.sessionId) {
+      return;
+    }
+    send("watch.cockpit.get", authPayload({ sessionId: watchState.sessionId }));
+    setTransientStatus(`refreshing cockpit (${reason})`);
+  }
+
   function ensureStatusPollTimer() {
     clearStatusPollTimer();
     transportState.statusPollTimer = setIntervalFn(() => {
@@ -292,6 +300,7 @@ export function createWatchTransportController(dependencies = {}) {
     bootstrapPending,
     markBootstrapReady,
     sendBootstrapProbe,
+    requestCockpit,
     scheduleBootstrap,
     scheduleReconnect,
   };

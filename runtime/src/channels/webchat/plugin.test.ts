@@ -1543,6 +1543,61 @@ describe("WebChatChannel", () => {
             objective: "Investigate the regression",
           }),
         );
+
+        const cockpitDeps = createDeps({
+          memoryBackend,
+          getWatchCockpitSnapshot: vi.fn(async ({ continuity }) => ({
+            session: {
+              sessionId: continuity.sessionId,
+              shellProfile: continuity.shellProfile,
+              workflowStage: continuity.workflowStage,
+              resumabilityState: continuity.resumabilityState,
+              messageCount: continuity.messageCount,
+              lastActiveAt: continuity.lastActiveAt,
+            },
+            repo: { available: false, unavailableReason: "test" },
+            worktrees: { available: false, entries: [], unavailableReason: "test" },
+            review: {
+              status: "idle",
+              source: "local",
+              startedAt: 1,
+              updatedAt: 1,
+            },
+            verification: {
+              status: "idle",
+              source: "local",
+              startedAt: 1,
+              updatedAt: 1,
+              verdict: "unknown",
+            },
+            approvals: { count: 0, entries: [] },
+            ownership: [],
+          })),
+        });
+        const cockpitChannel = new WebChatChannel(cockpitDeps);
+        const cockpitContext = createContext();
+        await cockpitChannel.initialize(cockpitContext);
+        await cockpitChannel.start();
+        cockpitChannel.handleMessage(
+          "client_3",
+          "watch.cockpit.get",
+          msg(
+            "watch.cockpit.get",
+            { ownerToken: issued.ownerToken, sessionId: "session-continuity" },
+            "req-watch-cockpit",
+          ),
+          send,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(findResponse(send, "watch.cockpit", "req-watch-cockpit")?.payload).toEqual(
+          expect.objectContaining({
+            session: expect.objectContaining({
+              sessionId: "session-continuity",
+              workflowStage: "review",
+            }),
+            approvals: { count: 0, entries: [] },
+          }),
+        );
       } finally {
         rmSync(workspaceRoot, { recursive: true, force: true });
       }

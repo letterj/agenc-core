@@ -24,6 +24,67 @@ function sanitizeBundleText(value, fallback = null) {
   return text.length > 0 ? text : fallback;
 }
 
+function redactAbsolutePaths(value, workspaceRoot) {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const root = sanitizeBundleText(workspaceRoot, null);
+  if (root && value.startsWith(root)) {
+    const relative = value.slice(root.length).replace(/^\/+/, "");
+    return relative.length > 0 ? relative : ".";
+  }
+  if (value.startsWith("/")) {
+    return path.basename(value);
+  }
+  return value;
+}
+
+function sanitizeBundleValue(value, { workspaceRoot, depth = 0 } = {}) {
+  if (depth > 6) {
+    return "[truncated]";
+  }
+  if (value == null) {
+    return value ?? null;
+  }
+  if (typeof value === "string") {
+    const normalized = redactAbsolutePaths(value, workspaceRoot);
+    if (/authorization|api[_-]?key|token|secret/i.test(normalized)) {
+      return "[redacted]";
+    }
+    if (normalized.length > 400) {
+      return `${normalized.slice(0, 397)}...`;
+    }
+    if (/^diff --git /m.test(normalized) || /^\@\@/m.test(normalized)) {
+      return "[diff redacted]";
+    }
+    return normalized;
+  }
+  if (typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 50).map((entry) =>
+      sanitizeBundleValue(entry, { workspaceRoot, depth: depth + 1 }),
+    );
+  }
+  const output = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (/authorization|api[_-]?key|token|secret|password|credential/i.test(key)) {
+      output[key] = "[redacted]";
+      continue;
+    }
+    if (/args|payload/i.test(key) && depth > 1) {
+      output[key] = "[redacted]";
+      continue;
+    }
+    output[key] = sanitizeBundleValue(entry, {
+      workspaceRoot,
+      depth: depth + 1,
+    });
+  }
+  return output;
+}
+
 export function buildWatchExportBundle({
   projectRoot = process.cwd(),
   watchState,
@@ -38,7 +99,7 @@ export function buildWatchExportBundle({
     ? Number(exportedAtMs)
     : Date.now();
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAtMs: exportedAt,
     exportedAtIso: new Date(exportedAt).toISOString(),
     workspaceRoot: sanitizeBundleText(projectRoot, process.cwd()),
@@ -62,13 +123,14 @@ export function buildWatchExportBundle({
       liveSessionModelRoute: cloneBundleValue(watchState.liveSessionModelRoute),
       activeCheckpointId: sanitizeBundleText(watchState.activeCheckpointId),
     },
-    summary: cloneBundleValue(surfaceSummary),
-    pendingAttachments: cloneBundleValue(watchState.pendingAttachments ?? []),
+    summary: sanitizeBundleValue(cloneBundleValue(surfaceSummary), { workspaceRoot: projectRoot }),
+    pendingAttachments: sanitizeBundleValue(cloneBundleValue(watchState.pendingAttachments ?? []), { workspaceRoot: projectRoot }),
     sessionLabels: serializeWatchSessionLabels(watchState.sessionLabels),
-    checkpoints: cloneBundleValue(watchState.checkpoints ?? []),
-    queuedOperatorInputs: cloneBundleValue(watchState.queuedOperatorInputs ?? []),
-    events: cloneBundleValue(watchState.events ?? []),
-    detailSnapshot: cloneBundleValue(frameSnapshot),
+    checkpoints: sanitizeBundleValue(cloneBundleValue(watchState.checkpoints ?? []), { workspaceRoot: projectRoot }),
+    queuedOperatorInputs: sanitizeBundleValue(cloneBundleValue(watchState.queuedOperatorInputs ?? []), { workspaceRoot: projectRoot }),
+    events: sanitizeBundleValue(cloneBundleValue((watchState.events ?? []).slice(-200)), { workspaceRoot: projectRoot }),
+    detailSnapshot: sanitizeBundleValue(cloneBundleValue(frameSnapshot), { workspaceRoot: projectRoot }),
+    cockpit: sanitizeBundleValue(cloneBundleValue(watchState.cockpit ?? null), { workspaceRoot: projectRoot }),
     planner: {
       status: sanitizeBundleText(watchState.plannerDagStatus, "idle"),
       note: sanitizeBundleText(watchState.plannerDagNote),
@@ -76,29 +138,29 @@ export function buildWatchExportBundle({
         ? Number(watchState.plannerDagUpdatedAt)
         : 0,
       pipelineId: sanitizeBundleText(watchState.plannerDagPipelineId),
-      nodes: cloneBundleValue(
+      nodes: sanitizeBundleValue(cloneBundleValue(
         watchState.plannerDagNodes instanceof Map
           ? [...watchState.plannerDagNodes.values()]
           : [],
-      ),
-      edges: cloneBundleValue(watchState.plannerDagEdges ?? []),
+      ), { workspaceRoot: projectRoot }),
+      edges: sanitizeBundleValue(cloneBundleValue(watchState.plannerDagEdges ?? []), { workspaceRoot: projectRoot }),
     },
     subagents: {
-      planSteps: cloneBundleValue(
+      planSteps: sanitizeBundleValue(cloneBundleValue(
         watchState.subagentPlanSteps instanceof Map
           ? [...watchState.subagentPlanSteps.values()]
           : [],
-      ),
-      liveActivity: cloneBundleValue(
+      ), { workspaceRoot: projectRoot }),
+      liveActivity: sanitizeBundleValue(cloneBundleValue(
         watchState.subagentLiveActivity instanceof Map
           ? [...watchState.subagentLiveActivity.entries()].map(([sessionId, activity]) => ({
             sessionId,
             activity,
           }))
           : [],
-      ),
+      ), { workspaceRoot: projectRoot }),
     },
-    status: cloneBundleValue(watchState.lastStatus),
+    status: sanitizeBundleValue(cloneBundleValue(watchState.lastStatus), { workspaceRoot: projectRoot }),
   };
 }
 

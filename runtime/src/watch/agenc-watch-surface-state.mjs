@@ -229,6 +229,8 @@ export function createWatchSurfaceStateController(dependencies = {}) {
       plannerNote: watchState.plannerDagNote,
       workflowStage: watchState.workflowStage,
       workflowOwnershipSummary: watchState.workflowOwnershipSummary,
+      cockpitFingerprint: watchState.cockpitFingerprint,
+      eventCategoryFilter: watchState.eventCategoryFilter,
       sessionId: watchState.sessionId,
       sessionLabel: currentSessionLabel(),
       following: isTranscriptFollowing(),

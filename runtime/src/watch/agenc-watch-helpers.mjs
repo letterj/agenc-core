@@ -142,6 +142,11 @@ const CORE_WATCH_COMMANDS = Object.freeze([
     description: "Clear the local transcript surface.",
   }),
   Object.freeze({
+    name: "/events",
+    usage: "/events [all|shell|tool|approval|run|agent|system]",
+    description: "Filter visible transcript events by category.",
+  }),
+  Object.freeze({
     name: "/export",
     aliases: ["/copy"],
     usage: "/export",

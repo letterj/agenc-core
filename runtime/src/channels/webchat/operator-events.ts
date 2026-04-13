@@ -72,6 +72,7 @@ const SESSION_SCOPED_TYPES = new Set([
   "chat.cancelled",
   "run.inspect",
   "run.updated",
+  "watch.cockpit",
   "agent.status",
   "tools.executing",
   "tools.result",
@@ -135,6 +136,7 @@ function classifyOperatorMessageKind(type: string): NormalizedOperatorMessageKin
   if (type.startsWith("chat.")) return "chat";
   if (type.startsWith("market.") || type.startsWith("tasks.") || type.startsWith("task.")) return "market";
   if (type === "runs.list" || type.startsWith("run.")) return "run";
+  if (type === "watch.cockpit") return "status";
   if (type.startsWith("approval.")) return "approval";
   if (type.startsWith("observability.")) return "observability";
   if (type === "status.update") return "status";
@@ -173,6 +175,7 @@ function classifyOperatorSurfaceEventFamily(type: string): OperatorSurfaceEventF
     return "market";
   }
   if (type === "runs.list" || type.startsWith("run.")) return "run";
+  if (type === "watch.cockpit") return "status";
   if (type.startsWith("observability.")) return "observability";
   if (type === "status.update") return "status";
   if (type === "agent.status") return "agent";

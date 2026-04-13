@@ -30,8 +30,10 @@ import {
   ensureSessionShellProfile,
   resolveSessionShellProfile,
   SessionManager,
+  SESSION_REVIEW_SURFACE_STATE_METADATA_KEY,
   SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY,
   SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY,
+  SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY,
   type Session,
   type SessionShellProfile,
 } from "./session.js";
@@ -47,6 +49,17 @@ import type { DiscoveryPaths } from "../skills/markdown/discovery.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { HookDispatcher } from "./hooks.js";
 import { ApprovalEngine } from "./approvals.js";
+import {
+  coerceReviewSurfaceState,
+  coerceVerificationSurfaceState,
+  type ReviewSurfaceState,
+  type VerificationSurfaceState,
+  type WorkflowOwnershipEntry,
+} from "./watch-cockpit.js";
+import {
+  collectSessionWorkflowOwnership,
+  formatWorkflowOwnershipReply,
+} from "./workflow-ownership.js";
 import { ProgressTracker } from "./progress.js";
 import {
   PipelineExecutor,
@@ -797,152 +810,6 @@ function formatTaskDetailReply(result: Record<string, unknown>): string {
   ].join("\n");
 }
 
-interface WorkflowOwnershipEntry {
-  readonly role: string;
-  readonly state: string;
-  readonly taskId?: string;
-  readonly taskSubject?: string;
-  readonly childSessionId?: string;
-  readonly workerId?: string;
-  readonly shellProfile?: string;
-  readonly worktreePath?: string;
-  readonly worktreeRef?: string;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function collectSessionWorkflowOwnership(params: {
-  readonly runtimeStatusSnapshot?: Record<string, unknown>;
-  readonly taskResult: Record<string, unknown>;
-  readonly childInfos: readonly {
-    sessionId: string;
-    status: string;
-    task: string;
-    shellProfile?: SessionShellProfile;
-  }[];
-}): readonly WorkflowOwnershipEntry[] {
-  const tasks = Array.isArray(params.taskResult.tasks)
-    ? params.taskResult.tasks
-        .map((entry) => asRecord(entry))
-        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-    : [];
-  const taskSubjects = new Map<string, string>();
-  for (const task of tasks) {
-    if (typeof task.id === "string" && typeof task.subject === "string") {
-      taskSubjects.set(task.id, task.subject);
-    }
-  }
-
-  const workers = Array.isArray(params.runtimeStatusSnapshot?.openWorkers)
-    ? params.runtimeStatusSnapshot!.openWorkers
-        .map((entry) => asRecord(entry))
-        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-    : [];
-  const childInfos = params.childInfos;
-  const childIndex = new Map(childInfos.map((entry) => [entry.sessionId, entry]));
-  const entries: WorkflowOwnershipEntry[] = [];
-  const claimedChildSessions = new Set<string>();
-
-  for (const worker of workers) {
-    const childSessionId =
-      typeof worker.continuationSessionId === "string"
-        ? worker.continuationSessionId
-        : undefined;
-    if (childSessionId) {
-      claimedChildSessions.add(childSessionId);
-    }
-    const executionLocation = asRecord(worker.executionLocation);
-    const worktreePath =
-      executionLocation?.mode === "worktree" &&
-      typeof executionLocation.worktreePath === "string"
-        ? executionLocation.worktreePath
-        : undefined;
-    const taskId =
-      typeof worker.currentTaskId === "string"
-        ? worker.currentTaskId
-        : typeof worker.taskId === "string"
-          ? worker.taskId
-          : typeof worker.lastTaskId === "string"
-            ? worker.lastTaskId
-            : undefined;
-    entries.push({
-      role:
-        typeof worker.state === "string" && worker.state === "verifying"
-          ? "verifier-worker"
-          : "worker",
-      state: typeof worker.state === "string" ? worker.state : "unknown",
-      ...(taskId ? { taskId } : {}),
-      ...(taskId && taskSubjects.get(taskId)
-        ? { taskSubject: taskSubjects.get(taskId) }
-        : {}),
-      ...(childSessionId ? { childSessionId } : {}),
-      ...(typeof worker.workerId === "string" ? { workerId: worker.workerId } : {}),
-      ...(typeof worker.shellProfile === "string"
-        ? { shellProfile: worker.shellProfile }
-        : childSessionId && childIndex.get(childSessionId)?.shellProfile
-          ? { shellProfile: childIndex.get(childSessionId)!.shellProfile }
-          : {}),
-      ...(worktreePath ? { worktreePath } : {}),
-      ...(executionLocation &&
-      typeof executionLocation.worktreeRef === "string"
-        ? { worktreeRef: executionLocation.worktreeRef }
-        : {}),
-    });
-  }
-
-  for (const child of childInfos) {
-    if (claimedChildSessions.has(child.sessionId)) continue;
-    const normalizedTask = child.task.toLowerCase();
-    const role =
-      normalizedTask.includes("review")
-        ? "reviewer"
-        : normalizedTask.includes("verify")
-          ? "verifier"
-          : normalizedTask.includes("plan")
-            ? "planner"
-            : "child";
-    entries.push({
-      role,
-      state: child.status,
-      childSessionId: child.sessionId,
-      shellProfile: child.shellProfile,
-      taskSubject: child.task,
-    });
-  }
-
-  return entries;
-}
-
-function formatWorkflowOwnershipReply(
-  entries: readonly WorkflowOwnershipEntry[],
-): string {
-  if (entries.length === 0) {
-    return "Workflow ownership: none";
-  }
-  return [
-    `Workflow ownership (${entries.length}):`,
-    ...entries.map((entry) =>
-      [
-        `  ${entry.role}`,
-        `[${entry.state}]`,
-        entry.taskId ? `task=${entry.taskId}` : null,
-        entry.taskSubject ? `subject=${entry.taskSubject}` : null,
-        entry.childSessionId ? `child=${entry.childSessionId}` : null,
-        entry.workerId ? `worker=${entry.workerId}` : null,
-        entry.shellProfile ? `profile=${entry.shellProfile}` : null,
-        entry.worktreePath ? `worktree=${entry.worktreePath}` : null,
-        entry.worktreeRef ? `ref=${entry.worktreeRef}` : null,
-      ]
-        .filter((value): value is string => Boolean(value))
-        .join(" "),
-    ),
-  ].join("\n");
-}
-
 function formatContinuitySessionList(
   sessions: readonly Record<string, unknown>[],
 ): string {
@@ -977,6 +844,82 @@ function formatContinuitySessionList(
       return `  ${sessionId}${profile}${stage}${state}${branch}${messages} :: ${preview}`;
     }),
   ].join("\n");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function compactSurfacePreview(value: string, maxChars = 220): string | undefined {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length === 0) {
+    return undefined;
+  }
+  return compact.length <= maxChars ? compact : `${compact.slice(0, maxChars - 3)}...`;
+}
+
+function updateReviewSurfaceState(
+  session: Session,
+  state: Partial<ReviewSurfaceState> & Pick<ReviewSurfaceState, "status" | "source">,
+): ReviewSurfaceState {
+  const prior = coerceReviewSurfaceState(
+    session.metadata[SESSION_REVIEW_SURFACE_STATE_METADATA_KEY],
+  );
+  const now = Date.now();
+  const next: ReviewSurfaceState = {
+    status: state.status,
+    source: state.source,
+    startedAt:
+      state.startedAt ??
+      (state.status === "running" ? now : prior?.startedAt ?? now),
+    updatedAt: state.updatedAt ?? now,
+    ...(state.completedAt !== undefined
+      ? { completedAt: state.completedAt }
+      : state.status === "completed" || state.status === "failed" || state.status === "stale"
+        ? { completedAt: now }
+        : {}),
+    ...(state.delegatedSessionId ? { delegatedSessionId: state.delegatedSessionId } : {}),
+    ...(state.backgroundRunId ? { backgroundRunId: state.backgroundRunId } : {}),
+    ...(state.summaryPreview
+      ? { summaryPreview: compactSurfacePreview(state.summaryPreview) }
+      : {}),
+  };
+  session.metadata[SESSION_REVIEW_SURFACE_STATE_METADATA_KEY] = next;
+  return next;
+}
+
+function updateVerificationSurfaceState(
+  session: Session,
+  state: Partial<VerificationSurfaceState> &
+    Pick<VerificationSurfaceState, "status" | "source">,
+): VerificationSurfaceState {
+  const prior = coerceVerificationSurfaceState(
+    session.metadata[SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY],
+  );
+  const now = Date.now();
+  const next: VerificationSurfaceState = {
+    status: state.status,
+    source: state.source,
+    startedAt:
+      state.startedAt ??
+      (state.status === "running" ? now : prior?.startedAt ?? now),
+    updatedAt: state.updatedAt ?? now,
+    ...(state.completedAt !== undefined
+      ? { completedAt: state.completedAt }
+      : state.status === "completed" || state.status === "failed" || state.status === "stale"
+        ? { completedAt: now }
+        : {}),
+    ...(state.delegatedSessionId ? { delegatedSessionId: state.delegatedSessionId } : {}),
+    ...(state.backgroundRunId ? { backgroundRunId: state.backgroundRunId } : {}),
+    ...(state.summaryPreview
+      ? { summaryPreview: compactSurfacePreview(state.summaryPreview) }
+      : {}),
+    ...(state.verdict ?? prior?.verdict ? { verdict: state.verdict ?? prior?.verdict } : {}),
+  };
+  session.metadata[SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY] = next;
+  return next;
 }
 
 function formatContinuitySessionInspect(
@@ -2229,12 +2172,27 @@ export function createDaemonCommandRegistry(
           ? formatGitDiffReply(diff)
           : "No diff content to review.",
       ].join("\n");
+      const resolvedSessionId = resolveSessionId(cmdCtx.sessionId);
+      const session = sessionMgr.get(resolvedSessionId);
       if (!wantsDelegate) {
+        if (session) {
+          updateReviewSurfaceState(session, {
+            status: "completed",
+            source: "local",
+            summaryPreview: reviewSurface,
+          });
+          await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
+        }
         await cmdCtx.reply(reviewSurface);
         return;
       }
-      const resolvedSessionId = resolveSessionId(cmdCtx.sessionId);
-      const session = sessionMgr.get(resolvedSessionId);
+      if (session) {
+        updateReviewSurfaceState(session, {
+          status: "running",
+          source: "delegated",
+        });
+        await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
+      }
       const delegated = await ctx.runNamedAgentTask({
         parentSessionId: resolvedSessionId,
         agentName: "review",
@@ -2253,6 +2211,15 @@ export function createDaemonCommandRegistry(
           ctx.getHostWorkspacePath() ??
           process.cwd(),
       });
+      if (session) {
+        updateReviewSurfaceState(session, {
+          status: delegated.success === true ? "completed" : "failed",
+          source: "delegated",
+          delegatedSessionId: delegated.sessionId,
+          summaryPreview: delegated.output,
+        });
+        await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
+      }
       await cmdCtx.reply(
         [
           reviewSurface,
@@ -2411,6 +2378,12 @@ export function createDaemonCommandRegistry(
         "system.gitChangeSummary",
         {},
       );
+      const hasChanges =
+        typeof summary.summary === "object" &&
+        summary.summary !== null &&
+        Object.values(summary.summary as Record<string, unknown>).some(
+          (value) => typeof value === "number" && value > 0,
+        );
       const tasks = await executeStructuredTool(
         baseToolHandler,
         "task.list",
@@ -2427,12 +2400,6 @@ export function createDaemonCommandRegistry(
         taskResult: tasks,
         childInfos: ctx.listSubAgentInfo(sessionId),
       });
-      const hasChanges =
-        typeof summary.summary === "object" &&
-        summary.summary !== null &&
-        Object.values(summary.summary as Record<string, unknown>).some(
-          (value) => typeof value === "number" && value > 0,
-        );
       const formatPlanSurface = (
         workflowState = resolveSessionWorkflowState(session.metadata),
       ): string => {
@@ -2528,6 +2495,11 @@ export function createDaemonCommandRegistry(
         const workflowState = updateSessionWorkflowState(session.metadata, {
           stage: "review",
         });
+        updateReviewSurfaceState(session, {
+          status: wantsDelegate ? "running" : "idle",
+          source: wantsDelegate ? "delegated" : "local",
+          ...(wantsDelegate ? {} : { summaryPreview: "Review stage entered." }),
+        });
         await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
         if (!wantsDelegate) {
           await cmdCtx.reply(
@@ -2558,6 +2530,13 @@ export function createDaemonCommandRegistry(
             ctx.getHostWorkspacePath() ??
             process.cwd(),
         });
+        updateReviewSurfaceState(session, {
+          status: delegated.success === true ? "completed" : "failed",
+          source: "delegated",
+          delegatedSessionId: delegated.sessionId,
+          summaryPreview: delegated.output,
+        });
+        await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
         await cmdCtx.reply(
           [
             `Workflow stage set to ${formatSessionWorkflowStage(workflowState.stage)}.`,
@@ -2575,6 +2554,12 @@ export function createDaemonCommandRegistry(
       if (subcommand === "verify") {
         const workflowState = updateSessionWorkflowState(session.metadata, {
           stage: "verify",
+        });
+        updateVerificationSurfaceState(session, {
+          status: wantsDelegate ? "running" : "idle",
+          source: wantsDelegate ? "delegated" : "local",
+          verdict: "unknown",
+          ...(wantsDelegate ? {} : { summaryPreview: "Verification stage entered." }),
         });
         await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
         if (!wantsDelegate) {
@@ -2599,6 +2584,14 @@ export function createDaemonCommandRegistry(
             ctx.getHostWorkspacePath() ??
             process.cwd(),
         });
+        updateVerificationSurfaceState(session, {
+          status: delegated.success === true ? "completed" : "failed",
+          source: "delegated",
+          delegatedSessionId: delegated.sessionId,
+          summaryPreview: delegated.output,
+          verdict: delegated.success === true ? "pass" : "fail",
+        });
+        await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
         await cmdCtx.reply(
           [
             `Workflow stage set to ${formatSessionWorkflowStage(workflowState.stage)}.`,
@@ -2649,6 +2642,12 @@ export function createDaemonCommandRegistry(
         "system.gitChangeSummary",
         {},
       );
+      const hasChanges =
+        typeof summary.summary === "object" &&
+        summary.summary !== null &&
+        Object.values(summary.summary as Record<string, unknown>).some(
+          (value) => typeof value === "number" && value > 0,
+        );
       const tasks = await executeStructuredTool(
         baseToolHandler,
         "task.list",
@@ -2674,9 +2673,22 @@ export function createDaemonCommandRegistry(
         verifierSnapshot,
       ].join("\n");
       if (!wantsDelegate) {
+        updateVerificationSurfaceState(session, {
+          status: "completed",
+          source: "local",
+          summaryPreview: verificationSurface,
+          verdict: hasChanges ? "mixed" : "pass",
+        });
+        await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
         await cmdCtx.reply(verificationSurface);
         return;
       }
+      updateVerificationSurfaceState(session, {
+        status: "running",
+        source: "delegated",
+        verdict: "unknown",
+      });
+      await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
       const delegated = await ctx.runNamedAgentTask({
         parentSessionId: resolvedSessionId,
         agentName: "verify",
@@ -2693,6 +2705,14 @@ export function createDaemonCommandRegistry(
           ctx.getHostWorkspacePath() ??
           process.cwd(),
       });
+      updateVerificationSurfaceState(session, {
+        status: delegated.success === true ? "completed" : "failed",
+        source: "delegated",
+        delegatedSessionId: delegated.sessionId,
+        summaryPreview: delegated.output,
+        verdict: delegated.success === true ? "pass" : "fail",
+      });
+      await persistWebSessionRuntimeState(memoryBackend, cmdCtx.sessionId, session);
       await cmdCtx.reply(
         [
           verificationSurface,

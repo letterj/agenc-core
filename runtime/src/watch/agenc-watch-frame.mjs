@@ -845,7 +845,42 @@ export function createWatchFrameController(dependencies = {}) {
   }
 
   function visibleTranscriptEvents() {
-    return events.filter((event) => event && !hiddenTranscriptKinds.has(event.kind));
+    const filter = String(watchState.eventCategoryFilter ?? "all").trim().toLowerCase();
+    const categoryForKind = (kind) => {
+      switch (kind) {
+        case "approval":
+          return "approval";
+        case "tool":
+        case "tool result":
+        case "tool error":
+          return "tool";
+        case "run":
+        case "inspect":
+          return "run";
+        case "subagent":
+        case "subagent tool":
+        case "subagent tool result":
+        case "subagent error":
+          return "agent";
+        case "status":
+        case "session":
+        case "operator":
+        case "checkpoint":
+          return "system";
+        case "agent":
+        case "you":
+        case "queued":
+        case "history":
+          return "shell";
+        default:
+          return "system";
+      }
+    };
+    return events.filter((event) =>
+      event &&
+      !hiddenTranscriptKinds.has(event.kind) &&
+      (filter === "all" || categoryForKind(event.kind) === filter)
+    );
   }
 
   function shouldShowIdleTranscript() {
@@ -2367,6 +2402,101 @@ export function createWatchFrameController(dependencies = {}) {
     });
   }
 
+  function cockpitPanelLines(width) {
+    const inner = width - 2;
+    const cockpit = watchState.cockpit;
+    const lines = [];
+    if (!cockpit || typeof cockpit !== "object") {
+      lines.push(row(`${color.softInk}Cockpit data pending.${color.reset}`, color.panelBg));
+    } else {
+      const dirtyCounts = cockpit.repo?.dirtyCounts ?? {};
+      const dirtyTotal =
+        Number(dirtyCounts.staged ?? 0) +
+        Number(dirtyCounts.unstaged ?? 0) +
+        Number(dirtyCounts.untracked ?? 0);
+      lines.push(
+        row(
+          flexBetween(
+            `${chip("GIT", cockpit.repo?.branch ?? "n/a", cockpit.repo?.branch ? "teal" : "slate")}`,
+            `${chip("DIRTY", dirtyTotal, dirtyTotal > 0 ? "amber" : "green")}`,
+            inner,
+          ),
+          color.panelBg,
+        ),
+      );
+      lines.push(
+        row(
+          flexBetween(
+            `${chip("REVIEW", cockpit.review?.status ?? "idle", stateTone(cockpit.review?.status ?? "idle"))}`,
+            `${chip("VERIFY", cockpit.verification?.verdict ?? cockpit.verification?.status ?? "idle", stateTone(cockpit.verification?.verdict ?? cockpit.verification?.status ?? "idle"))}`,
+            inner,
+          ),
+          color.panelAltBg,
+        ),
+      );
+      lines.push(
+        row(
+          flexBetween(
+            `${chip("APPROVALS", cockpit.approvals?.count ?? 0, Number(cockpit.approvals?.count ?? 0) > 0 ? "red" : "green")}`,
+            `${chip("OWNERS", Array.isArray(cockpit.ownership) ? cockpit.ownership.length : 0, Array.isArray(cockpit.ownership) && cockpit.ownership.length > 0 ? "cyan" : "slate")}`,
+            inner,
+          ),
+          color.panelBg,
+        ),
+      );
+      lines.push(
+        row(
+          `${color.softInk}${truncate(`worktrees: ${Array.isArray(cockpit.worktrees?.entries) ? cockpit.worktrees.entries.length : 0}`, inner)}${color.reset}`,
+          color.panelAltBg,
+        ),
+      );
+      const changedFiles = Array.isArray(cockpit.repo?.changedFiles)
+        ? cockpit.repo.changedFiles
+        : [];
+      if (changedFiles.length > 0) {
+        lines.push(row(`${color.fog}${color.bold}CHANGES${color.reset}`, color.panelHiBg));
+        for (const [index, file] of changedFiles.slice(0, 4).entries()) {
+          lines.push(
+            row(
+              `${color.softInk}${truncate(file, inner)}${color.reset}`,
+              index % 2 === 0 ? color.panelBg : color.panelAltBg,
+            ),
+          );
+        }
+      }
+      const ownership = Array.isArray(cockpit.ownership) ? cockpit.ownership : [];
+      if (ownership.length > 0) {
+        lines.push(row(`${color.fog}${color.bold}OWNERSHIP${color.reset}`, color.panelHiBg));
+        for (const [index, entry] of ownership.slice(0, 4).entries()) {
+          const bg = index % 2 === 0 ? color.panelBg : color.panelAltBg;
+          lines.push(
+            row(
+              `${toneColor(stateTone(entry.state))}${truncate(`${entry.role} ${entry.state}`, inner)}${color.reset}`,
+              bg,
+            ),
+          );
+          const detail = entry.worktreePath ?? entry.childSessionId ?? entry.taskSubject;
+          if (detail) {
+            lines.push(
+              row(
+                `${color.fog}${truncate(detail, inner)}${color.reset}`,
+                bg,
+              ),
+            );
+          }
+        }
+      }
+    }
+    return renderPanel({
+      title: "COCKPIT",
+      subtitle: watchState.cockpitUpdatedAt ? `${currentSessionElapsedLabel()} attached` : "waiting",
+      tone: watchState.cockpit ? "teal" : "slate",
+      width,
+      bg: color.panelBg,
+      lines,
+    });
+  }
+
   function sidebarObjectiveHeader(width) {
     const inner = width - 2;
     const summary = currentSurfaceSummary();
@@ -2403,6 +2533,7 @@ export function createWatchFrameController(dependencies = {}) {
     // Always show tools panel — it's the primary sidebar content for direct tool paths
     const toolsSection = toolTimelinePanelLines(width, hasDagNodes ? policy.toolLimit : policy.toolLimit + 3);
     const guardSection = policy.showGuard ? contextPanelLines(width) : null;
+    const cockpitSection = cockpitPanelLines(width);
     const agentsSection = policy.showAgents
       ? agentsPanelLines(width, policy.compactAgentLimit, policy.showSessionTokens)
       : null;
@@ -2419,7 +2550,7 @@ export function createWatchFrameController(dependencies = {}) {
       optionalSections.push(dagWidgetLines(width, dagDesiredRows));
     }
 
-    for (const candidate of [toolsSection, guardSection, agentsSection]) {
+    for (const candidate of [toolsSection, guardSection, cockpitSection, agentsSection]) {
       if (!candidate) {
         continue;
       }

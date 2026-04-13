@@ -32,6 +32,7 @@ import type {
   ObservabilityTraceQuery,
   ObservabilityTraceSummary,
 } from "../../observability/types.js";
+import type { WatchCockpitSnapshot } from "../../gateway/watch-cockpit.js";
 
 // ============================================================================
 // WebChatDeps (dependency injection)
@@ -62,6 +63,40 @@ export interface WebChatHookListEntry {
   handlerType: HookHandlerType;
   target?: string;
   supported: boolean;
+}
+
+export type SessionResumabilityState =
+  | "active"
+  | "disconnected-resumable"
+  | "missing-workspace"
+  | "non-resumable";
+
+export interface SessionContinuityRecord {
+  readonly sessionId: string;
+  readonly label: string;
+  readonly preview: string;
+  readonly messageCount: number;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly lastActiveAt: number;
+  readonly connected: boolean;
+  readonly resumabilityState: SessionResumabilityState;
+  readonly shellProfile: string;
+  readonly workflowStage: string;
+  readonly workspaceRoot?: string;
+  readonly repoRoot?: string;
+  readonly branch?: string;
+  readonly head?: string;
+  readonly activeTaskSummary?: string;
+  readonly childSessionCount: number;
+  readonly worktreeCount: number;
+  readonly pendingApprovalCount: number;
+  readonly lastAssistantOutputPreview?: string;
+  readonly forkLineage?: {
+    readonly parentSessionId: string;
+    readonly source: string;
+    readonly forkedAt: number;
+  };
 }
 
 export interface WebChatDeps {
@@ -188,6 +223,14 @@ export interface WebChatDeps {
     readonly lines?: number;
     readonly traceId?: string;
   }) => Promise<ObservabilityLogResponse | undefined>;
+  /** Optional session-authorized watch cockpit snapshot builder. */
+  getWatchCockpitSnapshot?: (params: {
+    readonly sessionId: string;
+    readonly actorId: string;
+    readonly channel: "webchat";
+    readonly continuity: SessionContinuityRecord;
+    readonly redactionProfile: "watch_cockpit";
+  }) => Promise<WatchCockpitSnapshot | undefined>;
 }
 
 // ============================================================================

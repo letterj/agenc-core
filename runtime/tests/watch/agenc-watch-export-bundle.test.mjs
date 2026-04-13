@@ -35,6 +35,10 @@ test("buildWatchExportBundle captures watch state, summary, and frame snapshot",
       checkpoints: [{ id: "cp-2", label: "Checkpoint 2" }],
       queuedOperatorInputs: ["later"],
       events: [{ id: "evt-1", title: "Prompt" }],
+      cockpit: {
+        repo: { branch: "feature/test", changedFiles: ["/workspace/agenc-core/src/index.ts"] },
+        approvals: { count: 1, entries: [{ requestId: "req-1", toolName: "system.applyPatch" }] },
+      },
       plannerDagStatus: "running",
       plannerDagNote: "waiting on validation",
       plannerDagUpdatedAt: 789,
@@ -48,6 +52,7 @@ test("buildWatchExportBundle captures watch state, summary, and frame snapshot",
   });
 
   assert.equal(bundle.workspaceRoot, "/workspace/agenc-core");
+  assert.equal(bundle.schemaVersion, 2);
   assert.equal(bundle.session.sessionId, "session-1");
   assert.equal(bundle.session.sessionLabel, "Roadmap branch");
   assert.equal(bundle.sessionLabels["session-1"], "Roadmap branch");
@@ -55,6 +60,7 @@ test("buildWatchExportBundle captures watch state, summary, and frame snapshot",
   assert.equal(bundle.pendingAttachments.length, 1);
   assert.equal(bundle.checkpoints.length, 1);
   assert.equal(bundle.events.length, 1);
+  assert.equal(bundle.cockpit.repo.changedFiles[0], "src/index.ts");
   assert.equal(bundle.planner.nodes.length, 1);
   assert.equal(bundle.subagents.liveActivity.length, 1);
 });
@@ -69,7 +75,7 @@ test("writeWatchExportBundle writes a stable json artifact path", () => {
 
   const exportPath = writeWatchExportBundle({
     fs,
-    bundle: { schemaVersion: 1 },
+    bundle: { schemaVersion: 2 },
     outputDir: "/tmp",
     nowMs: () => 4242,
     pathModule: {
@@ -79,5 +85,5 @@ test("writeWatchExportBundle writes a stable json artifact path", () => {
 
   assert.equal(exportPath, "/tmp/agenc-watch-bundle-4242.json");
   assert.equal(writes.length, 1);
-  assert.match(writes[0][1], /"schemaVersion": 1/);
+  assert.match(writes[0][1], /"schemaVersion": 2/);
 });

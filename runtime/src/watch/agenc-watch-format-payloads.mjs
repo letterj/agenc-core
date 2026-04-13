@@ -179,6 +179,47 @@ export function statusFeedFingerprint(payload) {
   });
 }
 
+export function cockpitFeedFingerprint(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "none";
+  }
+  return JSON.stringify({
+    sessionId:
+      typeof payload.session?.sessionId === "string"
+        ? payload.session.sessionId
+        : null,
+    workflowStage:
+      typeof payload.session?.workflowStage === "string"
+        ? payload.session.workflowStage
+        : null,
+    repoBranch:
+      typeof payload.repo?.branch === "string" ? payload.repo.branch : null,
+    repoHead:
+      typeof payload.repo?.head === "string" ? payload.repo.head : null,
+    dirtyCounts:
+      payload.repo?.dirtyCounts && typeof payload.repo.dirtyCounts === "object"
+        ? payload.repo.dirtyCounts
+        : null,
+    worktreeCount: Array.isArray(payload.worktrees?.entries)
+      ? payload.worktrees.entries.length
+      : 0,
+    reviewStatus:
+      typeof payload.review?.status === "string" ? payload.review.status : null,
+    verificationStatus:
+      typeof payload.verification?.status === "string"
+        ? payload.verification.status
+        : null,
+    verificationVerdict:
+      typeof payload.verification?.verdict === "string"
+        ? payload.verification.verdict
+        : null,
+    approvalCount: Number.isFinite(Number(payload.approvals?.count))
+      ? Number(payload.approvals.count)
+      : 0,
+    ownershipCount: Array.isArray(payload.ownership) ? payload.ownership.length : 0,
+  });
+}
+
 export function formatLogPayload(payload) {
   if (!payload || typeof payload !== "object") {
     return tryPrettyJson(payload ?? {});

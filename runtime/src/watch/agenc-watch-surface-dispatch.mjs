@@ -106,11 +106,15 @@ function handleSessionSurfaceEvent(surfaceEvent, state, api) {
       api.persistSessionId(state.sessionId);
       state.sessionAttachedAtMs = api.now();
       state.pendingResumeHistoryRestore = false;
+      state.cockpit = null;
+      state.cockpitUpdatedAt = 0;
+      state.cockpitFingerprint = null;
       api.resetLiveRunSurface();
       state.runDetail = null;
       state.runState = "idle";
       state.runPhase = null;
       api.markBootstrapReady(`session ready: ${state.sessionId}`);
+      api.requestCockpit("session ready");
       return true;
     case "chat.owner":
       if (typeof payload.ownerToken === "string" && payload.ownerToken.trim()) {
@@ -128,6 +132,7 @@ function handleSessionSurfaceEvent(surfaceEvent, state, api) {
       api.resetLiveRunSurface();
       api.send("chat.history", api.authPayload({ limit: 50 }));
       api.requestRunInspect("resume", { force: true });
+      api.requestCockpit("resume");
       api.markBootstrapReady(`session resumed: ${state.sessionId}; restoring history`);
       return true;
     case "chat.sessions": {
@@ -194,6 +199,7 @@ function handleSessionSurfaceEvent(surfaceEvent, state, api) {
         api.eventStore.restoreTranscriptFromHistory(history);
         api.markBootstrapReady(`history restored: ${history.length} item(s)`);
         api.requestRunInspect("history restore", { force: true });
+        api.requestCockpit("history restore");
       } else {
         api.setTransientStatus(`history restored: ${history.length} item(s)`);
       }
@@ -211,6 +217,7 @@ function handleChatSurfaceEvent(surfaceEvent, state, api) {
       state.latestAgentSummary = api.sanitizeInlineText(payload.content ?? "") || null;
       api.setTransientStatus("agent reply received");
       api.eventStore.commitAgentMessage(payload.content ?? "");
+      api.requestCockpit("agent reply");
       if (state.currentObjective && api.shouldAutoInspectRun(state.runDetail, state.runState)) {
         api.requestRunInspect("agent reply");
       }
@@ -778,6 +785,7 @@ function handleRunSurfaceEvent(surfaceEvent, state, api) {
         api.setTransientStatus(
           `run inspect loaded: ${String(state.runState ?? "unknown").replace(/_/g, " ")}`,
         );
+        api.requestCockpit("run inspect");
       }
       return true;
     case "run.updated":
@@ -819,6 +827,7 @@ function handleRunSurfaceEvent(surfaceEvent, state, api) {
         );
       }
       api.requestRunInspect("run update");
+      api.requestCockpit("run update");
       return true;
     default:
       return false;
@@ -852,6 +861,21 @@ function handleObservabilitySurfaceEvent(surfaceEvent, api) {
 
 function handleStatusSurfaceEvent(surfaceEvent, state, api) {
   const payload = surfaceEvent.payloadRecord;
+  if (surfaceEvent.type === "watch.cockpit") {
+    state.cockpit = payload;
+    state.cockpitUpdatedAt = api.now();
+    state.cockpitFingerprint = api.cockpitFeedFingerprint(payload);
+    if (typeof payload?.session?.workflowStage === "string") {
+      state.workflowStage = payload.session.workflowStage;
+      state.workflowStageUpdatedAt = api.now();
+    }
+    const ownershipCount = Array.isArray(payload?.ownership) ? payload.ownership.length : 0;
+    state.workflowOwnershipSummary =
+      ownershipCount > 0 ? `${ownershipCount} ownership entr${ownershipCount === 1 ? "y" : "ies"}` : "";
+    state.workflowOwnershipUpdatedAt = api.now();
+    api.setTransientStatus("cockpit updated");
+    return true;
+  }
   if (surfaceEvent.type !== "status.update") {
     return false;
   }
@@ -890,6 +914,7 @@ function handleStatusSurfaceEvent(surfaceEvent, state, api) {
     fingerprint !== state.lastStatusFeedFingerprint;
   state.manualStatusRequestPending = false;
   state.lastStatusFeedFingerprint = fingerprint;
+  api.requestCockpit("status poll");
   if (shouldEmit) {
     api.eventStore.pushEvent("status", "Gateway Status", api.formatStatusPayload(payload), "blue");
   }
@@ -922,6 +947,7 @@ function handleAgentSurfaceEvent(surfaceEvent, state, api) {
   if (payload.phase !== "idle") {
     api.requestRunInspect("agent status");
   }
+  api.requestCockpit("agent status");
   return true;
 }
 
@@ -930,9 +956,11 @@ function handleApprovalSurfaceEvent(surfaceEvent, api) {
   switch (surfaceEvent.type) {
     case "approval.request":
       api.eventStore.pushEvent("approval", "Approval Request", api.tryPrettyJson(payload), "red");
+      api.requestCockpit("approval request");
       return true;
     case "approval.escalated":
       api.eventStore.pushEvent("approval", "Approval Escalated", api.tryPrettyJson(payload), "amber");
+      api.requestCockpit("approval escalated");
       return true;
     default:
       return false;

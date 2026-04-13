@@ -1704,6 +1704,29 @@ export function createWatchCommandController(dependencies = {}) {
         return true;
       }
 
+      if (canonicalName === "/events") {
+        const nextFilter = String(firstArg ?? "all").trim().toLowerCase() || "all";
+        const allowed = new Set(["all", "shell", "tool", "approval", "run", "agent", "system"]);
+        if (!allowed.has(nextFilter)) {
+          pushEvent(
+            "error",
+            "Usage Error",
+            "Usage: /events [all|shell|tool|approval|run|agent|system]",
+            "red",
+          );
+          return true;
+        }
+        watchState.eventCategoryFilter = nextFilter;
+        setTransientStatus(`event filter: ${nextFilter}`);
+        pushEvent(
+          "operator",
+          "Event Filter",
+          `Visible transcript category set to ${nextFilter}.`,
+          "teal",
+        );
+        return true;
+      }
+
       if (canonicalName === "/export") {
         exportCurrentView({ announce: true });
         return true;

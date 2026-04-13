@@ -234,6 +234,20 @@ describe("operator event normalization", () => {
 
     expect(
       projectOperatorSurfaceEvent({
+        type: "watch.cockpit",
+        payload: {
+          session: { sessionId: "session:1" },
+          approvals: { count: 1, entries: [] },
+        },
+      }),
+    ).toMatchObject({
+      family: "status",
+      type: "watch.cockpit",
+      isSessionScoped: true,
+    });
+
+    expect(
+      projectOperatorSurfaceEvent({
         type: "chat.sessions",
         payload: [{ sessionId: "session:1" }],
       }),

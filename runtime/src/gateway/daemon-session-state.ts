@@ -28,28 +28,40 @@ import {
   DEFAULT_SESSION_SHELL_PROFILE,
   SESSION_SHELL_PROFILE_METADATA_KEY,
   SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY,
+  SESSION_REVIEW_SURFACE_STATE_METADATA_KEY,
   SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY,
   SESSION_RUNTIME_CONTRACT_STATUS_SNAPSHOT_METADATA_KEY,
   SESSION_STATEFUL_ARTIFACT_CONTEXT_METADATA_KEY,
   SESSION_STATEFUL_ARTIFACT_RECORDS_METADATA_KEY,
   SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY,
   SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY,
+  SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY,
   SESSION_WORKFLOW_STATE_METADATA_KEY,
   coerceSessionShellProfile,
   resolveSessionShellProfile,
   type Session,
+  type ReviewSurfaceState,
   type SessionShellProfile,
+  type VerificationSurfaceState,
 } from "./session.js";
 import {
   coerceSessionWorkflowState,
   resolveSessionWorkflowState,
   type SessionWorkflowState,
 } from "./workflow-state.js";
+import {
+  clearForkedReviewSurfaceState,
+  clearForkedVerificationSurfaceState,
+  coerceReviewSurfaceState,
+  coerceVerificationSurfaceState,
+  reconcileReviewSurfaceState,
+  reconcileVerificationSurfaceState,
+} from "./watch-cockpit.js";
 
 const WEB_SESSION_RUNTIME_STATE_KEY_PREFIX = "webchat:runtime-state:";
 
 export interface PersistedWebSessionRuntimeState {
-  readonly version: 5;
+  readonly version: 6;
   readonly shellProfile?: SessionShellProfile;
   readonly workflowState?: SessionWorkflowState;
   readonly statefulResumeAnchor?: LLMStatefulResumeAnchor;
@@ -58,6 +70,8 @@ export interface PersistedWebSessionRuntimeState {
   readonly artifactSessionId?: string;
   readonly runtimeContractSnapshot?: RuntimeContractSnapshot;
   readonly runtimeContractStatusSnapshot?: RuntimeContractStatusSnapshot;
+  readonly reviewSurfaceState?: ReviewSurfaceState;
+  readonly verificationSurfaceState?: VerificationSurfaceState;
   /**
    * Active task carryover for the next compatible turn. Round-trips through
    * web-session resume so a paused implementation/artifact-update task can
@@ -236,6 +250,16 @@ function buildPersistedWebSessionRuntimeState(
           session.metadata[SESSION_RUNTIME_CONTRACT_STATUS_SNAPSHOT_METADATA_KEY],
         )
       : undefined;
+  const reviewSurfaceState = reconcileReviewSurfaceState(
+    coerceReviewSurfaceState(
+      session.metadata[SESSION_REVIEW_SURFACE_STATE_METADATA_KEY],
+    ),
+  );
+  const verificationSurfaceState = reconcileVerificationSurfaceState(
+    coerceVerificationSurfaceState(
+      session.metadata[SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY],
+    ),
+  );
   const shellProfile = resolveSessionShellProfile(session.metadata);
   const hasPersistedShellProfile =
     shellProfile !== DEFAULT_SESSION_SHELL_PROFILE;
@@ -252,12 +276,14 @@ function buildPersistedWebSessionRuntimeState(
     !artifactSnapshotId &&
     !runtimeContractSnapshot &&
     !runtimeContractStatusSnapshot &&
+    !reviewSurfaceState &&
+    !verificationSurfaceState &&
     !hasActiveTaskContext
   ) {
     return undefined;
   }
   return {
-    version: 5,
+    version: 6,
     ...(hasPersistedShellProfile ? { shellProfile } : {}),
     ...(hasPersistedWorkflowState ? { workflowState } : {}),
     ...(resumeAnchor ? { statefulResumeAnchor: resumeAnchor } : {}),
@@ -266,6 +292,8 @@ function buildPersistedWebSessionRuntimeState(
     ...(artifactSnapshotId ? { artifactSessionId: session.id } : {}),
     ...(runtimeContractSnapshot ? { runtimeContractSnapshot } : {}),
     ...(runtimeContractStatusSnapshot ? { runtimeContractStatusSnapshot } : {}),
+    ...(reviewSurfaceState ? { reviewSurfaceState } : {}),
+    ...(verificationSurfaceState ? { verificationSurfaceState } : {}),
     ...(hasActiveTaskContext ? { activeTaskContext } : {}),
   };
 }
@@ -280,7 +308,8 @@ function coercePersistedWebSessionRuntimeState(
     candidate.version !== 2 &&
     candidate.version !== 3 &&
     candidate.version !== 4 &&
-    candidate.version !== 5
+    candidate.version !== 5 &&
+    candidate.version !== 6
   ) {
     return undefined;
   }
@@ -312,6 +341,12 @@ function coercePersistedWebSessionRuntimeState(
       : undefined;
   const runtimeContractStatusSnapshot =
     normalizeRuntimeContractStatusSnapshot(candidate.runtimeContractStatusSnapshot);
+  const reviewSurfaceState = reconcileReviewSurfaceState(
+    coerceReviewSurfaceState(candidate.reviewSurfaceState),
+  );
+  const verificationSurfaceState = reconcileVerificationSurfaceState(
+    coerceVerificationSurfaceState(candidate.verificationSurfaceState),
+  );
   if (
     !shellProfile &&
     !workflowState &&
@@ -320,12 +355,14 @@ function coercePersistedWebSessionRuntimeState(
     !artifactSnapshotId &&
     !runtimeContractSnapshot &&
     !runtimeContractStatusSnapshot &&
+    !reviewSurfaceState &&
+    !verificationSurfaceState &&
     !activeTaskContext
   ) {
     return undefined;
   }
   return {
-    version: 5,
+    version: 6,
     ...(shellProfile ? { shellProfile } : {}),
     ...(workflowState ? { workflowState } : {}),
     ...(resumeAnchor ? { statefulResumeAnchor: resumeAnchor } : {}),
@@ -334,6 +371,8 @@ function coercePersistedWebSessionRuntimeState(
     ...(artifactSessionId ? { artifactSessionId } : {}),
     ...(runtimeContractSnapshot ? { runtimeContractSnapshot } : {}),
     ...(runtimeContractStatusSnapshot ? { runtimeContractStatusSnapshot } : {}),
+    ...(reviewSurfaceState ? { reviewSurfaceState } : {}),
+    ...(verificationSurfaceState ? { verificationSurfaceState } : {}),
     ...(activeTaskContext ? { activeTaskContext } : {}),
   };
 }
@@ -460,6 +499,14 @@ export async function hydrateWebSessionRuntimeState(
     session.metadata[SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY] =
       persisted.activeTaskContext;
   }
+  if (persisted.reviewSurfaceState) {
+    session.metadata[SESSION_REVIEW_SURFACE_STATE_METADATA_KEY] =
+      persisted.reviewSurfaceState;
+  }
+  if (persisted.verificationSurfaceState) {
+    session.metadata[SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY] =
+      persisted.verificationSurfaceState;
+  }
   if (persisted.runtimeContractSnapshot) {
     session.metadata[SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY] =
       persisted.runtimeContractSnapshot;
@@ -491,7 +538,7 @@ export async function forkWebSessionRuntimeState(
   const next = {
     ...clonePersistedWebSessionRuntimeState(persisted),
   } as {
-    version: 5;
+    version: 6;
     shellProfile?: SessionShellProfile;
     workflowState?: SessionWorkflowState;
     statefulResumeAnchor?: LLMStatefulResumeAnchor;
@@ -500,6 +547,8 @@ export async function forkWebSessionRuntimeState(
     artifactSessionId?: string;
     runtimeContractSnapshot?: RuntimeContractSnapshot;
     runtimeContractStatusSnapshot?: RuntimeContractStatusSnapshot;
+    reviewSurfaceState?: ReviewSurfaceState;
+    verificationSurfaceState?: VerificationSurfaceState;
     activeTaskContext?: unknown;
   };
   const mergedWorkflowState = (() => {
@@ -536,6 +585,12 @@ export async function forkWebSessionRuntimeState(
   delete next.activeTaskContext;
   delete next.runtimeContractSnapshot;
   delete next.runtimeContractStatusSnapshot;
+  next.reviewSurfaceState = clearForkedReviewSurfaceState(
+    persisted.reviewSurfaceState,
+  );
+  next.verificationSurfaceState = clearForkedVerificationSurfaceState(
+    persisted.verificationSurfaceState,
+  );
 
   if (params.shellProfile) {
     next.shellProfile = params.shellProfile;

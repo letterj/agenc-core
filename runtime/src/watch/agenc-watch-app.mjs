@@ -250,6 +250,7 @@ import {
   formatSessionSummaries,
   formatHistoryPayload,
   formatStatusPayload,
+  cockpitFeedFingerprint,
   statusFeedFingerprint,
   formatLogPayload,
   summarizeUsage,
@@ -1650,6 +1651,10 @@ function sendBootstrapProbe() {
   return watchTransportController.sendBootstrapProbe();
 }
 
+function requestCockpit(reason = "refresh") {
+  return watchTransportController.requestCockpit(reason);
+}
+
 function scheduleBootstrap(reason = "restoring session") {
   return watchTransportController.scheduleBootstrap(reason);
 }
@@ -2438,6 +2443,7 @@ watchTransportController = createWatchTransportController({
     clearBootstrapTimer,
     send,
     authPayload,
+    requestCockpit,
     requestRunInspect,
     eventStore,
     formatSessionSummaries: (payload) =>

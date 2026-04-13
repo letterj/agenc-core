@@ -20,6 +20,8 @@ import {
 import { constants } from "node:fs";
 import { basename, delimiter, dirname, join, resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 // spawn import moved to ./daemon-command-registry.ts
 import { Gateway } from "./gateway.js";
 import { buildGatewayChannelStatus } from "./channel-status.js";
@@ -42,6 +44,7 @@ import type {
 } from "./types.js";
 import type { Logger } from "../utils/logger.js";
 import { silentLogger } from "../utils/logger.js";
+import type { SessionContinuityRecord } from "../channels/webchat/types.js";
 import {
   buildRuntimeContractVerifierTraceId,
   buildRuntimeContractWorkerTraceId,
@@ -365,6 +368,15 @@ export {
   persistWebSessionRuntimeState,
   resolveSessionStatefulContinuation,
 } from "./daemon-session-state.js";
+import {
+  coerceReviewSurfaceState,
+  coerceVerificationSurfaceState,
+  createIdleReviewSurfaceState,
+  createIdleVerificationSurfaceState,
+  formatWorkflowOwnershipSummary,
+  type WatchCockpitSnapshot,
+} from "./watch-cockpit.js";
+import { collectSessionWorkflowOwnership } from "./workflow-ownership.js";
 export type { ResolvedTraceLoggingConfig } from "./daemon-trace.js";
 export type { LLMFailureSurfaceSummary } from "./daemon-llm-failure.js";
 export {
@@ -458,6 +470,7 @@ const CURRENT_MODULE_FILE_PATH =
     : process.argv[1]
       ? resolvePath(process.argv[1])
       : resolvePath(process.cwd(), "runtime", "dist", "bin", "daemon.js");
+const execFileAsync = promisify(execFile);
 
 /**
  * Build a minimal environment for system.bash.
@@ -1001,6 +1014,10 @@ export class DaemonManager {
       channelName: string;
       send: (content: string) => Promise<void>;
     }
+  >();
+  private readonly _watchCockpitRepoCache = new Map<
+    string,
+    { updatedAt: number; repo: WatchCockpitSnapshot["repo"]; worktrees: WatchCockpitSnapshot["worktrees"] }
   >();
   private _resolvedContextWindowTokens: number | undefined;
   private _hostToolingProfile: HostToolingProfile | null = null;
@@ -2268,6 +2285,8 @@ export class DaemonManager {
         this._observabilityService
           ? this._observabilityService.getLogTail(params)
           : undefined,
+      getWatchCockpitSnapshot: async (params) =>
+        this.buildWatchCockpitSnapshot(params),
     });
     const signals = this.createWebChatSignals(webChat);
     const onMessage = this.createWebChatMessageHandler({
@@ -3996,6 +4015,7 @@ export class DaemonManager {
         });
       },
     );
+    this._watchCockpitRepoCache.delete(webSessionId);
 
     await cleanupDesktopSession(webSessionId, {
       desktopManager: this._desktopManager,
@@ -4545,42 +4565,298 @@ export class DaemonManager {
     }
     const runtimeStatusSnapshot = buildSessionRuntimeContractStatusSnapshot(
       metadata,
-    );
-    const openWorkers = Array.isArray(runtimeStatusSnapshot?.openWorkers)
-      ? runtimeStatusSnapshot.openWorkers.filter(
-          (entry) => typeof entry === "object" && entry !== null,
-        )
-      : [];
-    const worktreeCount = openWorkers.reduce((count, entry) => {
-      const executionLocation =
-        typeof entry === "object" && entry !== null
-          ? (entry as Record<string, unknown>).executionLocation
-          : undefined;
-      return typeof executionLocation === "object" &&
-        executionLocation !== null &&
-        (executionLocation as Record<string, unknown>).mode === "worktree" &&
-        typeof (executionLocation as Record<string, unknown>).worktreePath ===
-          "string"
-        ? count + 1
-        : count;
-    }, 0);
-    const childCount =
+    ) as Record<string, unknown> | undefined;
+    const childInfos =
       this._subAgentManager?.listAll().filter(
         (entry) => entry.parentSessionId === sessionId,
-      ).length ?? 0;
-    const ownershipParts = [
-      childCount > 0 ? `${childCount} child${childCount === 1 ? "" : "ren"}` : null,
-      openWorkers.length > 0
-        ? `${openWorkers.length} worker${openWorkers.length === 1 ? "" : "s"}`
-        : null,
-      worktreeCount > 0
-        ? `${worktreeCount} worktree${worktreeCount === 1 ? "" : "s"}`
-        : null,
-    ].filter((value): value is string => Boolean(value));
+      ).map((entry) => ({
+        sessionId: entry.sessionId,
+        status: entry.status,
+        task: entry.task,
+        shellProfile: entry.shellProfile,
+      })) ?? [];
+    const ownership = collectSessionWorkflowOwnership({
+      runtimeStatusSnapshot,
+      taskResult: { tasks: [] },
+      childInfos,
+    });
     return {
       workflowStage: resolveSessionWorkflowState(metadata).stage,
-      workflowOwnershipSummary: ownershipParts.join(" · "),
+      workflowOwnershipSummary: formatWorkflowOwnershipSummary(ownership),
     };
+  }
+
+  private async buildWatchCockpitSnapshot(params: {
+    readonly sessionId: string;
+    readonly actorId: string;
+    readonly channel: "webchat";
+    readonly continuity: SessionContinuityRecord;
+    readonly redactionProfile: "watch_cockpit";
+  }): Promise<WatchCockpitSnapshot | undefined> {
+    const session = this._webSessionManager?.get(params.sessionId);
+    const metadata =
+      session?.metadata && typeof session.metadata === "object"
+        ? session.metadata
+        : {};
+    const runtimeStatusSnapshot = buildSessionRuntimeContractStatusSnapshot(
+      metadata,
+    ) as Record<string, unknown> | undefined;
+    const taskResult = this._taskTrackerStore
+      ? {
+          tasks: await this._taskTrackerStore.listTasks(params.sessionId),
+        }
+      : { tasks: [] };
+    const childInfos =
+      this._subAgentManager?.listAll().filter(
+        (entry) => entry.parentSessionId === params.sessionId,
+      ).map((entry) => ({
+        sessionId: entry.sessionId,
+        status: entry.status,
+        task: entry.task,
+        shellProfile: entry.shellProfile,
+      })) ?? [];
+    const ownership = collectSessionWorkflowOwnership({
+      runtimeStatusSnapshot,
+      taskResult,
+      childInfos,
+    });
+    const { repo, worktrees } = await this.getWatchCockpitRepoSections(
+      params.continuity,
+      ownership,
+    );
+    const approvals = this.buildWatchCockpitApprovals(params.sessionId);
+    const review =
+      coerceReviewSurfaceState(metadata.reviewSurfaceState) ??
+      createIdleReviewSurfaceState();
+    const verification =
+      coerceVerificationSurfaceState(metadata.verificationSurfaceState) ??
+      createIdleVerificationSurfaceState();
+    return {
+      session: {
+        sessionId: params.continuity.sessionId,
+        shellProfile: params.continuity.shellProfile,
+        workflowStage: params.continuity.workflowStage,
+        resumabilityState: params.continuity.resumabilityState,
+        ...(params.continuity.preview ? { preview: params.continuity.preview } : {}),
+        ...(resolveSessionWorkflowState(metadata).objective
+          ? { objective: resolveSessionWorkflowState(metadata).objective }
+          : {}),
+        messageCount: params.continuity.messageCount,
+        lastActiveAt: params.continuity.lastActiveAt,
+      },
+      repo,
+      worktrees,
+      review,
+      verification,
+      approvals,
+      ownership,
+    };
+  }
+
+  private buildWatchCockpitApprovals(sessionId: string): WatchCockpitSnapshot["approvals"] {
+    const pending =
+      this._approvalEngine?.getPending().filter(
+        (request) => request.sessionId === sessionId,
+      ) ?? [];
+    return {
+      count: pending.length,
+      entries: pending.slice(0, 8).map((request) => ({
+        requestId: request.id,
+        toolName: request.toolName,
+        state: "pending",
+        ...(typeof request.deadlineAt === "number" ? { deadlineAt: request.deadlineAt } : {}),
+        ...(Array.isArray(request.requiredApproverRoles) &&
+        request.requiredApproverRoles.length > 0
+          ? { approverRoles: request.requiredApproverRoles }
+          : {}),
+        ...(typeof request.message === "string" && request.message.trim().length > 0
+          ? {
+              preview:
+                request.message.trim().length > 160
+                  ? `${request.message.trim().slice(0, 157)}...`
+                  : request.message.trim(),
+            }
+          : {}),
+      })),
+    };
+  }
+
+  private async getWatchCockpitRepoSections(
+    continuity: SessionContinuityRecord,
+    ownership: readonly WatchCockpitSnapshot["ownership"][number][],
+  ): Promise<{
+    repo: WatchCockpitSnapshot["repo"];
+    worktrees: WatchCockpitSnapshot["worktrees"];
+  }> {
+    const workspaceRoot =
+      typeof continuity.workspaceRoot === "string" &&
+      continuity.workspaceRoot.trim().length > 0
+        ? continuity.workspaceRoot.trim()
+        : undefined;
+    if (!workspaceRoot) {
+      return {
+        repo: { available: false, unavailableReason: "workspace unavailable" },
+        worktrees: {
+          available: false,
+          entries: [],
+          unavailableReason: "workspace unavailable",
+        },
+      };
+    }
+    const cacheKey = continuity.sessionId;
+    const cached = this._watchCockpitRepoCache.get(cacheKey);
+    if (cached && Date.now() - cached.updatedAt < 5_000) {
+      return {
+        repo: { ...cached.repo, cached: true },
+        worktrees: { ...cached.worktrees, cached: true },
+      };
+    }
+    try {
+      const cwd = resolvePath(workspaceRoot);
+      const [
+        { stdout: repoRootStdout },
+        { stdout: branchStdout },
+        { stdout: headStdout },
+        { stdout: statusStdout },
+        worktreeResult,
+      ] = await Promise.all([
+        execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd }),
+        execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd }),
+        execFileAsync("git", ["rev-parse", "HEAD"], { cwd }),
+        execFileAsync("git", ["status", "--porcelain=v1"], { cwd }),
+        execFileAsync("git", ["worktree", "list", "--porcelain"], { cwd }).catch(
+          () => ({ stdout: "" }),
+        ),
+      ]);
+      const repoRoot = repoRootStdout.trim();
+      const statusLines = statusStdout
+        .split(/\r?\n/g)
+        .map((line) => line.trimEnd())
+        .filter(Boolean);
+      const dirtyCounts = { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 };
+      const changedFiles: string[] = [];
+      for (const line of statusLines) {
+        const xy = line.slice(0, 2);
+        const filePath = line.slice(3).trim();
+        if (xy === "??") {
+          dirtyCounts.untracked += 1;
+        } else {
+          if (xy[0] && xy[0] !== " ") dirtyCounts.staged += 1;
+          if (xy[1] && xy[1] !== " ") dirtyCounts.unstaged += 1;
+          if (xy.includes("U")) dirtyCounts.conflicted += 1;
+        }
+        if (filePath && changedFiles.length < 8) {
+          changedFiles.push(this.redactCockpitPath(filePath, repoRoot, workspaceRoot));
+        }
+      }
+      const repo: WatchCockpitSnapshot["repo"] = {
+        available: true,
+        workspaceRoot: this.redactCockpitPath(workspaceRoot, repoRoot, workspaceRoot),
+        repoRoot: this.redactCockpitPath(repoRoot, repoRoot, workspaceRoot),
+        branch:
+          branchStdout.trim() && branchStdout.trim() !== "HEAD"
+            ? branchStdout.trim()
+            : undefined,
+        head: headStdout.trim() || undefined,
+        dirtyCounts,
+        changedFiles,
+      };
+      const worktrees = this.parseGitWorktreeList(
+        worktreeResult.stdout,
+        repoRoot,
+        workspaceRoot,
+        ownership,
+      );
+      this._watchCockpitRepoCache.set(cacheKey, {
+        updatedAt: Date.now(),
+        repo,
+        worktrees,
+      });
+      return { repo, worktrees };
+    } catch {
+      const repo = {
+        available: false,
+        workspaceRoot,
+        unavailableReason: "git repo unavailable",
+      } satisfies WatchCockpitSnapshot["repo"];
+      const worktrees = {
+        available: false,
+        entries: [],
+        unavailableReason: "git repo unavailable",
+      } satisfies WatchCockpitSnapshot["worktrees"];
+      this._watchCockpitRepoCache.set(cacheKey, {
+        updatedAt: Date.now(),
+        repo,
+        worktrees,
+      });
+      return { repo, worktrees };
+    }
+  }
+
+  private parseGitWorktreeList(
+    stdout: string,
+    repoRoot: string,
+    workspaceRoot: string,
+    ownership: readonly WatchCockpitSnapshot["ownership"][number][],
+  ): WatchCockpitSnapshot["worktrees"] {
+    const ownershipByPath = new Map(
+      ownership
+        .filter((entry) => typeof entry.worktreePath === "string")
+        .map((entry) => [resolvePath(entry.worktreePath as string), entry]),
+    );
+    const blocks = stdout.split(/\n\n+/g).map((block) => block.trim()).filter(Boolean);
+    const entries = blocks.map((block) => {
+      const lines = block.split(/\r?\n/g);
+      const pathLine = lines.find((line) => line.startsWith("worktree "));
+      const headLine = lines.find((line) => line.startsWith("HEAD "));
+      const branchLine = lines.find((line) => line.startsWith("branch "));
+      const prunable = lines.some((line) => line.startsWith("prunable"));
+      const detached = lines.some((line) => line === "detached");
+      const absolutePath = pathLine ? pathLine.slice("worktree ".length).trim() : "";
+      const owner = ownershipByPath.get(resolvePath(absolutePath));
+      return {
+        path: this.redactCockpitPath(absolutePath, repoRoot, workspaceRoot),
+        ...(branchLine ? { branch: branchLine.slice("branch ".length).trim().replace("refs/heads/", "") } : {}),
+        ...(headLine ? { head: headLine.slice("HEAD ".length).trim() } : {}),
+        clean: !prunable,
+        ...(owner ? { ownedByRuntime: true, ownerRole: owner.role } : {}),
+        ...(owner?.childSessionId ? { ownerSessionId: owner.childSessionId } : {}),
+        ...(owner?.workerId ? { ownerWorkerId: owner.workerId } : {}),
+        ...(detached && !branchLine ? { branch: "detached" } : {}),
+      };
+    }).filter((entry) => entry.path);
+    return {
+      available: true,
+      entries,
+    };
+  }
+
+  private redactCockpitPath(
+    rawPath: string,
+    repoRoot?: string,
+    workspaceRoot?: string,
+  ): string {
+    const normalized = String(rawPath ?? "").trim();
+    if (!normalized) {
+      return normalized;
+    }
+    const repo = typeof repoRoot === "string" && repoRoot.trim().length > 0
+      ? resolvePath(repoRoot)
+      : undefined;
+    const workspace =
+      typeof workspaceRoot === "string" && workspaceRoot.trim().length > 0
+        ? resolvePath(workspaceRoot)
+        : undefined;
+    const candidate = resolvePath(normalized);
+    if (repo && candidate.startsWith(repo)) {
+      const relative = candidate.slice(repo.length).replace(/^\/+/, "");
+      return relative.length > 0 ? relative : ".";
+    }
+    if (workspace && candidate.startsWith(workspace)) {
+      const relative = candidate.slice(workspace.length).replace(/^\/+/, "");
+      return relative.length > 0 ? relative : ".";
+    }
+    return basename(candidate);
   }
 
   private async appendGovernanceAuditEvent(params: {

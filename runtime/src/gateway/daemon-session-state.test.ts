@@ -19,7 +19,9 @@ import {
   SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY,
   SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY,
   SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY,
+  SESSION_REVIEW_SURFACE_STATE_METADATA_KEY,
   SESSION_RUNTIME_CONTRACT_STATUS_SNAPSHOT_METADATA_KEY,
+  SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY,
   type Session,
   SESSION_WORKFLOW_STATE_METADATA_KEY,
 } from "./session.js";
@@ -324,6 +326,85 @@ describe("web session runtime state helpers", () => {
       objective: "Review the coding workflow changes",
       enteredAt: 111,
       updatedAt: 222,
+    });
+  });
+
+  it("persists and hydrates review and verification surface state", async () => {
+    const memoryBackend = createMemoryBackendStub();
+    await persistWebSessionRuntimeState(
+      memoryBackend,
+      "web-session-cockpit",
+      createSession({
+        [SESSION_REVIEW_SURFACE_STATE_METADATA_KEY]: {
+          status: "completed",
+          source: "local",
+          startedAt: 100,
+          updatedAt: 200,
+          completedAt: 210,
+          summaryPreview: "Review complete.",
+        },
+        [SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY]: {
+          status: "completed",
+          source: "delegated",
+          startedAt: 300,
+          updatedAt: 400,
+          completedAt: 410,
+          delegatedSessionId: "child-verify-1",
+          summaryPreview: "Verification complete.",
+          verdict: "pass",
+        },
+      }),
+    );
+    const hydrated = createSession();
+    await hydrateWebSessionRuntimeState(memoryBackend, "web-session-cockpit", hydrated);
+    expect(hydrated.metadata[SESSION_REVIEW_SURFACE_STATE_METADATA_KEY]).toMatchObject({
+      status: "completed",
+      source: "local",
+      summaryPreview: "Review complete.",
+    });
+    expect(hydrated.metadata[SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY]).toMatchObject({
+      status: "completed",
+      source: "delegated",
+      delegatedSessionId: "child-verify-1",
+      verdict: "pass",
+    });
+  });
+
+  it("clears cockpit review and verification state when forking runtime state", async () => {
+    const memoryBackend = createMemoryBackendStub();
+    await memoryBackend.set("webchat:runtime-state:web-source", {
+      version: 6,
+      reviewSurfaceState: {
+        status: "completed",
+        source: "local",
+        startedAt: 10,
+        updatedAt: 20,
+        completedAt: 21,
+        summaryPreview: "done",
+      },
+      verificationSurfaceState: {
+        status: "running",
+        source: "delegated",
+        startedAt: 30,
+        updatedAt: 40,
+        delegatedSessionId: "child-1",
+        verdict: "unknown",
+      },
+    });
+    const forked = await forkWebSessionRuntimeState(memoryBackend, {
+      sourceWebSessionId: "web-source",
+      targetWebSessionId: "web-target",
+    });
+    expect(forked).toBe(true);
+    const persisted = await loadPersistedWebSessionRuntimeState(memoryBackend, "web-target");
+    expect(persisted?.reviewSurfaceState).toMatchObject({
+      status: "idle",
+      source: "local",
+    });
+    expect(persisted?.verificationSurfaceState).toMatchObject({
+      status: "idle",
+      source: "local",
+      verdict: "unknown",
     });
   });
 
