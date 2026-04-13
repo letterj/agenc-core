@@ -12,6 +12,8 @@ import {
 
 const FILE_MUTATION_TOOL_NAMES = new Set([
   "system.appendFile",
+  "system.applyPatch",
+  "system.delete",
   "system.editFile",
   "system.mkdir",
   "system.move",
@@ -30,10 +32,12 @@ export interface DeterministicAcceptanceProbeEvidence {
   readonly failedProbeCount: number;
   readonly executedCommands: readonly string[];
   readonly failureExcerpts: readonly string[];
+  readonly successfulWorkspaceMutationsSinceLastProbe: number;
 }
 
 export interface DeterministicAcceptanceProbeDecision {
   readonly shouldIntervene: boolean;
+  readonly allowRecovery?: boolean;
   readonly validationCode?: AcceptanceProbeValidationCode;
   readonly stopReasonDetail?: string;
   readonly blockingMessage?: string;
@@ -60,6 +64,42 @@ function hasSuccessfulStructuredMutation(
         : "";
     return command !== "view";
   });
+}
+
+function countSuccessfulStructuredMutations(
+  toolCalls: readonly ToolCallRecord[],
+): number {
+  let count = 0;
+  for (const toolCall of toolCalls) {
+    if (didToolCallFail(toolCall.isError, toolCall.result)) {
+      continue;
+    }
+    if (!FILE_MUTATION_TOOL_NAMES.has(toolCall.name)) {
+      continue;
+    }
+    if (toolCall.name === "desktop.text_editor") {
+      const command =
+        typeof toolCall.args.command === "string"
+          ? toolCall.args.command.trim().toLowerCase()
+          : "";
+      if (command === "view") {
+        continue;
+      }
+    }
+    count += 1;
+  }
+  return count;
+}
+
+function findLastAcceptanceProbeIndex(
+  toolCalls: readonly ToolCallRecord[],
+): number {
+  for (let i = toolCalls.length - 1; i >= 0; i -= 1) {
+    if (toolCalls[i]?.args.__runtimeAcceptanceProbe === true) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 function buildAcceptanceProbePlans(
@@ -173,6 +213,13 @@ export async function runDeterministicAcceptanceProbes(params: {
   const failedRuns = probeRuns.filter((run) =>
     didToolCallFail(run.isError, run.result)
   );
+  const lastAcceptanceProbeIndex = findLastAcceptanceProbeIndex(params.allToolCalls);
+  const successfulWorkspaceMutationsSinceLastProbe =
+    lastAcceptanceProbeIndex >= 0
+      ? countSuccessfulStructuredMutations(
+          params.allToolCalls.slice(lastAcceptanceProbeIndex + 1),
+        )
+      : countSuccessfulStructuredMutations(params.allToolCalls);
   const evidence: DeterministicAcceptanceProbeEvidence = {
     workspaceRoot,
     executedProbeCount: probeRuns.length,
@@ -190,6 +237,7 @@ export async function runDeterministicAcceptanceProbes(params: {
     }),
     failureExcerpts: failedRuns
       .map((run) => truncate(extractToolFailureTextFromResult(run.result), 240)),
+    successfulWorkspaceMutationsSinceLastProbe,
   };
 
   if (failedRuns.length === 0) {
@@ -200,8 +248,24 @@ export async function runDeterministicAcceptanceProbes(params: {
     };
   }
 
+  if (
+    lastAcceptanceProbeIndex >= 0 &&
+    successfulWorkspaceMutationsSinceLastProbe === 0
+  ) {
+    return {
+      shouldIntervene: true,
+      allowRecovery: false,
+      validationCode: "deterministic_acceptance_probe_failed",
+      stopReasonDetail:
+        "Deterministic acceptance probe failed again after a recovery turn that made no successful workspace mutations.",
+      evidence,
+      probeRuns,
+    };
+  }
+
   return {
     shouldIntervene: true,
+    allowRecovery: true,
     validationCode: "deterministic_acceptance_probe_failed",
     stopReasonDetail: buildStopReasonDetail(failedRuns),
     blockingMessage: buildBlockingMessage({

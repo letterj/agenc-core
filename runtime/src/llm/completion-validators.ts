@@ -25,6 +25,8 @@ import type {
 import { runTopLevelVerifierValidation } from "../gateway/top-level-verifier.js";
 import { getRemainingRequestTaskMilestones } from "./request-task-progress.js";
 
+const DEFAULT_DETERMINISTIC_ACCEPTANCE_PROBE_ATTEMPTS = 3;
+
 export interface CompletionValidatorExecutionResult
   extends CompletionValidatorResult {
   readonly probeRuns?: readonly ToolCallRecord[];
@@ -385,6 +387,20 @@ export function buildCompletionValidators(params: {
             ...(decision.probeRuns.length > 0 ? { probeRuns: decision.probeRuns } : {}),
           };
         }
+        if (decision.allowRecovery === false) {
+          return {
+            id: "deterministic_acceptance_probes",
+            outcome: "fail_closed",
+            reason:
+              decision.validationCode ??
+              "deterministic_acceptance_probe_failed",
+            exhaustedDetail:
+              decision.stopReasonDetail ??
+              "Deterministic acceptance-probe recovery exhausted.",
+            validationCode: decision.validationCode,
+            probeRuns: decision.probeRuns,
+          };
+        }
         return {
           id: "deterministic_acceptance_probes",
           outcome: "retry_with_blocking_message",
@@ -393,7 +409,9 @@ export function buildCompletionValidators(params: {
             "deterministic_acceptance_probe_failed",
           blockingMessage: decision.blockingMessage,
           evidence: decision.evidence,
-          maxAttempts: 1,
+          maxAttempts:
+            params.ctx.requiredToolEvidence?.maxCorrectionAttempts ??
+            DEFAULT_DETERMINISTIC_ACCEPTANCE_PROBE_ATTEMPTS,
           exhaustedDetail:
             decision.stopReasonDetail ??
             "Deterministic acceptance-probe recovery exhausted.",

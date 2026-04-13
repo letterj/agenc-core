@@ -144,6 +144,28 @@ function buildVerificationContractFromEnvelope(
   };
 }
 
+function defaultMaxCorrectionAttemptsForTurn(params: {
+  readonly turnExecutionContract: TurnExecutionContract;
+  readonly base?: ChatExecuteParams["requiredToolEvidence"];
+}): number {
+  if (params.base?.maxCorrectionAttempts !== undefined) {
+    return Math.max(0, Math.floor(params.base.maxCorrectionAttempts));
+  }
+  const ownsNonDocumentationArtifacts =
+    params.turnExecutionContract.targetArtifacts.length > 0 &&
+    !areDocumentationOnlyArtifacts(params.turnExecutionContract.targetArtifacts);
+  if (
+    ownsNonDocumentationArtifacts &&
+    (
+      params.turnExecutionContract.turnClass === "workflow_implementation" ||
+      params.turnExecutionContract.ownerMode === "workflow_owner"
+    )
+  ) {
+    return 3;
+  }
+  return 1;
+}
+
 interface ResolvedWorkflowEvidence {
   readonly workspaceRoot?: string;
   readonly sourceArtifacts: readonly string[];
@@ -320,10 +342,7 @@ export function mergeTurnExecutionRequiredToolEvidence(params: {
   }
 
   return {
-    maxCorrectionAttempts: Math.max(
-      0,
-      Math.floor(params.base?.maxCorrectionAttempts ?? 1),
-    ),
+    maxCorrectionAttempts: defaultMaxCorrectionAttemptsForTurn(params),
     ...(params.base?.delegationSpec
       ? { delegationSpec: params.base.delegationSpec }
       : {}),

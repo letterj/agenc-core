@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatExecutor } from "./chat-executor.js";
 import type { ChatExecuteParams } from "./chat-executor.js";
 import { evaluateArtifactEvidenceGate } from "./chat-executor-stop-gate.js";
-import type { ActiveTaskContext } from "./turn-execution-contract-types.js";
 import type {
   LLMChatOptions,
   LLMMessage,
@@ -274,11 +273,11 @@ describe("top-level artifact evidence gate", () => {
 
   it("re-enters the loop when deterministic acceptance probes fail", async () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), "agenc-acceptance-probe-"));
-    const sourcePath = join(workspaceRoot, "src/main.txt");
+    const sourcePath = join(workspaceRoot, "src/main.c");
     mkdirSync(join(workspaceRoot, "src"), { recursive: true });
     writeFileSync(
       join(workspaceRoot, "Makefile"),
-      "all:\n\t@if grep -q good src/main.txt; then echo ok; else echo build failed >&2; exit 2; fi\n",
+      "all:\n\t@if grep -q good src/main.c; then echo ok; else echo build failed >&2; exit 2; fi\n",
       "utf8",
     );
 
@@ -357,6 +356,122 @@ describe("top-level artifact evidence gate", () => {
       expect((provider.chat as ReturnType<typeof vi.fn>).mock.calls[2]?.[1]).toMatchObject({
         toolChoice: "required",
       });
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps repairing workflow-owned coding turns while deterministic probes remain productive", async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), "agenc-acceptance-budget-"));
+    const sourcePath = join(workspaceRoot, "src/main.c");
+    mkdirSync(join(workspaceRoot, "src"), { recursive: true });
+    writeFileSync(
+      join(workspaceRoot, "Makefile"),
+      "all:\n\t@if grep -q good src/main.c; then echo ok; else echo build failed >&2; exit 2; fi\n",
+      "utf8",
+    );
+
+    const provider = createMockProvider("primary", {
+      chat: vi
+        .fn<[LLMMessage[], LLMChatOptions?], Promise<LLMResponse>>()
+        .mockResolvedValueOnce(
+          mockResponse({
+            content: "",
+            finishReason: "tool_calls",
+            toolCalls: [
+              {
+                id: "tc-1",
+                name: "system.writeFile",
+                arguments: safeJson({
+                  path: sourcePath,
+                  content: "still bad build",
+                }),
+              },
+            ],
+          }),
+        )
+        .mockResolvedValueOnce(
+          mockResponse({
+            content: "Everything is implemented.",
+          }),
+        )
+        .mockResolvedValueOnce(
+          mockResponse({
+            content: "",
+            finishReason: "tool_calls",
+            toolCalls: [
+              {
+                id: "tc-2",
+                name: "system.writeFile",
+                arguments: safeJson({
+                  path: sourcePath,
+                  content: "still bad build again",
+                }),
+              },
+            ],
+          }),
+        )
+        .mockResolvedValueOnce(
+          mockResponse({
+            content: "Retried the implementation.",
+          }),
+        )
+        .mockResolvedValueOnce(
+          mockResponse({
+            content: "",
+            finishReason: "tool_calls",
+            toolCalls: [
+              {
+                id: "tc-3",
+                name: "system.writeFile",
+                arguments: safeJson({
+                  path: sourcePath,
+                  content: "good build",
+                }),
+              },
+            ],
+          }),
+        )
+        .mockResolvedValueOnce(
+          mockResponse({
+            content:
+              "Implementation completed with passing acceptance probes after multiple productive repair turns, and this completion summary is intentionally verbose so the stop gate does not misclassify it as a truncated success claim.",
+          }),
+        ),
+    });
+    const toolHandler = vi.fn(async (name: string, args: Record<string, unknown>) => {
+      if (name === "system.writeFile") {
+        const targetPath = String(args.path);
+        writeFileSync(
+          targetPath,
+          String(args.content ?? ""),
+          "utf8",
+        );
+        return safeJson({ ok: true, path: targetPath });
+      }
+      return safeJson({ exitCode: 0, stdout: "ok" });
+    });
+    const executor = new ChatExecutor({ providers: [provider], toolHandler });
+
+    try {
+      const result = await executor.execute(
+        createParams({
+          runtimeContext: { workspaceRoot },
+          requiredToolEvidence: {
+            maxCorrectionAttempts: 3,
+            verificationContract: {
+              workspaceRoot,
+              targetArtifacts: [sourcePath],
+            },
+          },
+        }),
+      );
+
+      expect(result.stopReason).toBe("completed");
+      expect(result.toolCalls.filter((call) => call.name === "system.writeFile")).toHaveLength(3);
+      expect(result.toolCalls.filter((call) => call.name === "verification.runProbe")).toHaveLength(3);
+      expect((provider.chat as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(6);
+      expect(readFileSync(sourcePath, "utf8")).toBe("good build");
     } finally {
       rmSync(workspaceRoot, { recursive: true, force: true });
     }

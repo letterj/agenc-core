@@ -38,6 +38,8 @@ function makeCtx(params: {
   readonly activeToolHandler?: ExecutionContext["activeToolHandler"];
   readonly finalContent?: string;
   readonly targetArtifacts?: readonly string[];
+  readonly turnClass?: string;
+  readonly ownerMode?: string;
   readonly flags?: RuntimeContractFlags;
 }): ExecutionContext {
   const flags = params.flags ?? makeFlags();
@@ -60,6 +62,8 @@ function makeCtx(params: {
     requestTaskState: createRequestTaskProgressState(),
     activeRuntimeReminderKeys: new Set<string>(),
     turnExecutionContract: {
+      turnClass: params.turnClass ?? "dialogue",
+      ownerMode: params.ownerMode ?? "none",
       targetArtifacts: params.targetArtifacts ?? [],
     },
     runtimeContractSnapshot: createRuntimeContractSnapshot(flags),
@@ -73,6 +77,21 @@ function successfulWrite(path: string): ToolCallRecord {
     result: JSON.stringify({ ok: true, path }),
     isError: false,
     durationMs: 1,
+  };
+}
+
+function syntheticAcceptanceProbe(result: unknown): ToolCallRecord {
+  return {
+    name: "verification.runProbe",
+    args: {
+      probeId: "build",
+      cwd: "/tmp/workspace",
+      __runtimeAcceptanceProbe: true,
+    },
+    result: JSON.stringify(result),
+    isError: true,
+    durationMs: 1,
+    synthetic: true,
   };
 }
 
@@ -214,6 +233,71 @@ describe("completion-validators", () => {
     expect(deterministicResult.stopHookResult?.phase).toBe("VerificationReady");
     expect(topLevelResult.outcome).toBe("retry_with_blocking_message");
     expect(toolHandler).not.toHaveBeenCalled();
+  });
+
+  it("uses the shared correction budget for deterministic acceptance probes on workflow-owned turns", async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), "deterministic-budget-"));
+    writeFileSync(
+      join(workspaceRoot, "Makefile"),
+      "all:\n\t@printf 'ok\\n'\n",
+    );
+    const validators = buildCompletionValidators({
+      ctx: makeCtx({
+        workspaceRoot,
+        allToolCalls: [successfulWrite(join(workspaceRoot, "src/main.c"))],
+        targetArtifacts: [join(workspaceRoot, "src/main.c")],
+        turnClass: "workflow_implementation",
+        ownerMode: "workflow_owner",
+      }),
+      runtimeContractFlags: makeFlags(),
+    });
+
+    const deterministic = validators.find(
+      (validator) => validator.id === "deterministic_acceptance_probes",
+    );
+    const result = await deterministic!.execute();
+
+    expect(result.outcome).toBe("pass");
+    expect(result.probeRuns).toHaveLength(1);
+  });
+
+  it("fails closed when a deterministic acceptance recovery turn made no workspace mutations", async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), "deterministic-stall-"));
+    writeFileSync(
+      join(workspaceRoot, "Makefile"),
+      "all:\n\t@echo build failed >&2\n\t@exit 2\n",
+    );
+    const validators = buildCompletionValidators({
+      ctx: makeCtx({
+        workspaceRoot,
+        allToolCalls: [
+          successfulWrite(join(workspaceRoot, "src/main.c")),
+          syntheticAcceptanceProbe({
+            exitCode: 2,
+            stdout: "",
+            stderr: "build failed",
+            timedOut: false,
+            durationMs: 1,
+            truncated: false,
+          }),
+        ],
+        targetArtifacts: [join(workspaceRoot, "src/main.c")],
+        turnClass: "workflow_implementation",
+        ownerMode: "workflow_owner",
+      }),
+      runtimeContractFlags: makeFlags(),
+    });
+
+    const deterministic = validators.find(
+      (validator) => validator.id === "deterministic_acceptance_probes",
+    );
+    const result = await deterministic!.execute();
+
+    expect(result.outcome).toBe("fail_closed");
+    expect(result.reason).toBe("deterministic_acceptance_probe_failed");
+    expect(result.exhaustedDetail).toContain(
+      "made no successful workspace mutations",
+    );
   });
 
   it("runs the top-level verifier even when runtimeContractV2 is false", async () => {
