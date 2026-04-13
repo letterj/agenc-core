@@ -41,6 +41,27 @@ describe("chat-executor-routing-state", () => {
     ).toEqual(["mcp.example.status"]);
   });
 
+  it("falls back to allowed tools when routing exists but no route is active", () => {
+    expect(
+      resolveEffectiveRoutedToolNames({
+        hasToolRouting: true,
+        activeRoutedToolNames: [],
+        allowedTools: ["desktop.bash", "mcp.example.start"],
+      }),
+    ).toEqual(["desktop.bash", "mcp.example.start"]);
+  });
+
+  it("preserves an explicitly empty routed override", () => {
+    expect(
+      resolveEffectiveRoutedToolNames({
+        requestedRoutedToolNames: [],
+        hasToolRouting: true,
+        activeRoutedToolNames: ["mcp.example.status"],
+        allowedTools: ["desktop.bash", "mcp.example.start"],
+      }),
+    ).toEqual([]);
+  });
+
   it("normalizes and applies the active routed subset in one place", () => {
     const ctx = {
       activeRoutedToolNames: ["desktop.bash"],

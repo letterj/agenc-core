@@ -69,7 +69,7 @@ export function resolveEffectiveRoutedToolNames(input: {
     return activeRoutedToolNames;
   }
   if (input.hasToolRouting) {
-    return [];
+    return input.allowedTools ? normalizeToolNames(input.allowedTools) : undefined;
   }
   return input.allowedTools ? normalizeToolNames(input.allowedTools) : undefined;
 }
