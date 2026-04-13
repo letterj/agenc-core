@@ -32,3 +32,10 @@
 - **What worked:** The console/runtime error was a pure wiring bug: the daemon built the shared slash-command registry but never injected it into `WebChatChannel`, so a one-line dependency fix restored live `session.command.execute` handling immediately once the daemon was rebuilt and restarted.
 - **What didn't:** The symptom initially looked like a stale-daemon issue because the old process was still running, but the new daemon log proved the failure persisted until the missing dependency injection was fixed.
 - **Rule added to CLAUDE.md:** no
+
+## PR #334: fix(watch): preserve session bootstrap control results
+- **Date:** 2026-04-13
+- **Files changed:** `runtime/src/channels/webchat/operator-events.ts`, `runtime/src/channels/webchat/operator-events.test.ts`
+- **What worked:** The remaining console bootstrap deadlock came from over-filtering session-scoped control responses; letting canonical `/session` command results bypass the active-session transcript filter preserved strict event scoping for normal traffic while allowing stale remembered sessions to recover cleanly.
+- **What didn't:** The daemon was healthy and the command registry bug was already fixed, so the second failure looked like “console still broken” until the watch-side session filter was traced against the persisted watch-state bootstrap flow.
+- **Rule added to CLAUDE.md:** no
