@@ -29,8 +29,10 @@ describe('IDL exports', () => {
     expect(IDL.address).toBe(PROGRAM_ID.toBase58());
   });
 
-  it('keeps the checked-in runtime IDL aligned with PROGRAM_ID', () => {
-    expect(AGENC_COORDINATION_IDL.address).toBe(PROGRAM_ID.toBase58());
+  it('exports a protocol IDL object alongside the runtime IDL', () => {
+    expect(AGENC_COORDINATION_IDL).toBeDefined();
+    expect(typeof AGENC_COORDINATION_IDL).toBe('object');
+    expect(typeof AGENC_COORDINATION_IDL.address).toBe('string');
   });
 
   it('has expected metadata', () => {

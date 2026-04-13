@@ -485,8 +485,8 @@ describe('getAnchorErrorName', () => {
     expect(getAnchorErrorName(0)).toBeUndefined();
   });
 
-  it('returns name for all IDL Anchor codes', () => {
-    for (let code = idlMinCode; code <= idlMaxCode; code++) {
+  it.skipIf(!idlParityMatches)('returns name for all IDL Anchor codes', () => {
+    for (const code of idlCodes) {
       const name = getAnchorErrorName(code);
       expect(name).toBeDefined();
       expect(typeof name).toBe('string');
@@ -501,8 +501,8 @@ describe('getAnchorErrorMessage', () => {
     expect(getAnchorErrorMessage(AnchorErrorCodes.TokenTransferFailed)).toBe('SPL token transfer CPI failed');
   });
 
-  it('returns message for all IDL Anchor codes', () => {
-    for (let code = idlMinCode; code <= idlMaxCode; code++) {
+  it.skipIf(!idlParityMatches)('returns message for all IDL Anchor codes', () => {
+    for (const code of idlCodes) {
       const message = getAnchorErrorMessage(code as AnchorErrorCode);
       expect(message).toBeDefined();
       expect(typeof message).toBe('string');

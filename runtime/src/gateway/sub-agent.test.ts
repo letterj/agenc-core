@@ -1026,7 +1026,7 @@ describe("SubAgentManager", () => {
         expect(manager.getResult(sessionId)?.success).toBe(true);
         expect(executeSpy).toHaveBeenCalledWith(
           expect.objectContaining({
-            systemPrompt: "verifier worker prompt",
+            systemPrompt: expect.stringContaining("verifier worker prompt"),
             requiredToolEvidence: expect.objectContaining({
               executionEnvelope: expect.objectContaining({
                 verificationMode: "grounded_read",
@@ -2428,8 +2428,10 @@ describe("SubAgentManager", () => {
       const messages = chatSpy.mock.calls[0][0] as LLMMessage[];
       expect(messages[0]).toMatchObject({
         role: "system",
-        content: "Custom prompt for sub-agent",
       });
+      expect(String(messages[0]?.content ?? "")).toContain(
+        "Custom prompt for sub-agent",
+      );
     });
 
     it("passes task as user message content", async () => {

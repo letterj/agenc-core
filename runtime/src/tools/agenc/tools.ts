@@ -2494,6 +2494,7 @@ export function createCreateTaskTool(
 
         let taskJobSpecPda: string | null = null;
         let jobSpecTransactionSignature: string | null = null;
+        let jobSpecPublishWarning: string | null = null;
         if (storedJobSpec) {
           try {
             const published = await setTaskJobSpecPointer(
@@ -2506,10 +2507,8 @@ export function createCreateTaskTool(
             taskJobSpecPda = published.taskJobSpecPda.toBase58();
             jobSpecTransactionSignature = published.transactionSignature;
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            return errorResult(
-              `Task was created at ${taskPda.toBase58()} but job spec metadata publishing failed: ${message}`,
-            );
+            jobSpecPublishWarning =
+              error instanceof Error ? error.message : String(error);
           }
         }
 
@@ -2577,6 +2576,7 @@ export function createCreateTaskTool(
               ? { algorithm: 'sha256', canonicalization: 'json-stable-v1' }
               : null,
             jobSpecTransactionSignature,
+            jobSpecPublishWarning,
             jobSpecLinkWarning,
             transactionSignature: txSignature,
             validationTransactionSignature,
