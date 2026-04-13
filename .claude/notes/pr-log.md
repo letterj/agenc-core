@@ -25,3 +25,10 @@
 - **What worked:** Removing the last legacy protocol and command-name shims while adding structured runtime result payloads made shell, console, and web use the same command/session semantics instead of preserving transcript-only fallbacks, and the watch bootstrap hardening closed the session-auth loop that was breaking the TUI.
 - **What didn't:** The final drift lived in several small places rather than one big subsystem, so landing the cleanup safely required coordinated protocol, watch, and web changes plus tighter test fixtures before the alias removals were trustworthy.
 - **Rule added to CLAUDE.md:** no
+
+## PR #332: fix(runtime): inject command registry into webchat
+- **Date:** 2026-04-13
+- **Files changed:** `runtime/src/gateway/daemon.ts`
+- **What worked:** The console/runtime error was a pure wiring bug: the daemon built the shared slash-command registry but never injected it into `WebChatChannel`, so a one-line dependency fix restored live `session.command.execute` handling immediately once the daemon was rebuilt and restarted.
+- **What didn't:** The symptom initially looked like a stale-daemon issue because the old process was still running, but the new daemon log proved the failure persisted until the missing dependency injection was fixed.
+- **Rule added to CLAUDE.md:** no

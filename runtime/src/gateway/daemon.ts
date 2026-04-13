@@ -2226,6 +2226,7 @@ export class DaemonManager {
         getStatus: () => gateway.getStatus(),
         config,
       },
+      commandRegistry,
       getDaemonStatus: () => this.getStatus(),
       skills: skillList,
       hooks,
