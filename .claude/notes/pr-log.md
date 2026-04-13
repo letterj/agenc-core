@@ -18,3 +18,10 @@
 - **What worked:** Treating the daemon command registry and shared session continuity/cockpit contracts as the product source of truth let the shell, console, and web clients converge without inventing a second orchestration layer, while the watch cleanup removed duplicated first-party command paths instead of leaving compatibility logic to drift.
 - **What didn't:** The older watch and web clients each had their own local command assumptions, so finishing the parity pass required tightening protocol shapes and structured result metadata before the UI layers could stop depending on ad hoc transcript-oriented behavior.
 - **Rule added to CLAUDE.md:** no
+
+## PR #331: fix(runtime): finish unified session surface cleanup
+- **Date:** 2026-04-13
+- **Files changed:** `runtime/src/channels/webchat/*`, `runtime/src/gateway/daemon-command-registry.ts`, `runtime/src/watch/*`, `runtime/tests/watch/*`, `runtime/src/browser.ts`, `web/src/components/chat/CommandResultPanel*`, `web/src/hooks/useChat*`, `web/test-server.mjs`
+- **What worked:** Removing the last legacy protocol and command-name shims while adding structured runtime result payloads made shell, console, and web use the same command/session semantics instead of preserving transcript-only fallbacks, and the watch bootstrap hardening closed the session-auth loop that was breaking the TUI.
+- **What didn't:** The final drift lived in several small places rather than one big subsystem, so landing the cleanup safely required coordinated protocol, watch, and web changes plus tighter test fixtures before the alias removals were trustworthy.
+- **Rule added to CLAUDE.md:** no
