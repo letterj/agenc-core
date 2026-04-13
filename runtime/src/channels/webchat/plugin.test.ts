@@ -27,6 +27,7 @@ import {
 } from "../../gateway/session.js";
 import { SESSION_WORKFLOW_STATE_METADATA_KEY } from "../../gateway/workflow-state.js";
 import { SlashCommandRegistry } from "../../gateway/commands.js";
+import type { GatewayAutonomyConfig } from "../../gateway/types.js";
 
 // ============================================================================
 // Test helpers
@@ -91,6 +92,50 @@ function createDeps(overrides?: Partial<WebChatDeps>): WebChatDeps {
       },
     }),
     ...overrides,
+  };
+}
+
+function makeAutonomy(overrides?: Partial<GatewayAutonomyConfig>): GatewayAutonomyConfig {
+  return {
+    enabled: true,
+    featureFlags: {
+      canaryRollout: true,
+      shellProfiles: true,
+      codingCommands: true,
+      shellExtensions: true,
+      watchCockpit: true,
+      multiAgent: true,
+      backgroundRuns: true,
+      notifications: true,
+      replayGates: true,
+      ...(overrides?.featureFlags ?? {}),
+    },
+    killSwitches: {
+      canaryRollout: false,
+      shellProfiles: false,
+      codingCommands: false,
+      shellExtensions: false,
+      watchCockpit: false,
+      multiAgent: false,
+      backgroundRuns: false,
+      notifications: false,
+      replayGates: false,
+      ...(overrides?.killSwitches ?? {}),
+    },
+    canary: {
+      enabled: true,
+      featureAllowList: [
+        "shellProfiles",
+        "codingCommands",
+        "shellExtensions",
+        "watchCockpit",
+        "multiAgent",
+      ],
+      domainAllowList: ["shell", "extensions", "watch"],
+      percentage: 1,
+      ...(overrides?.canary ?? {}),
+    },
+    ...(overrides ?? {}),
   };
 }
 
@@ -435,6 +480,114 @@ describe("WebChatChannel", () => {
           },
         });
       });
+    });
+
+    it("builds the command catalog with session policy scope and effective profile coercion", async () => {
+      const memoryBackend = new InMemoryBackend();
+      const registry = new SlashCommandRegistry({ logger: silentLogger });
+      registry.register({
+        name: "files",
+        description: "files test",
+        global: true,
+        metadata: {
+          category: "coding",
+          clients: ["web"],
+          rolloutFeature: "codingCommands",
+          viewKind: "files",
+        },
+        handler: async () => undefined,
+      });
+
+      const deps = createDeps({
+        memoryBackend,
+        commandRegistry: registry,
+        gateway: {
+          getStatus: () => ({
+            state: "running",
+            uptimeMs: 60_000,
+            channels: ["webchat"],
+            activeSessions: 1,
+            controlPlanePort: 9100,
+          }),
+          config: {
+            agent: { name: "test-agent" },
+            autonomy: makeAutonomy({
+              canary: {
+                enabled: true,
+                tenantAllowList: ["tenant-b"],
+                featureAllowList: ["shellProfiles", "codingCommands"],
+                domainAllowList: ["shell", "extensions", "watch"],
+                percentage: 1,
+              },
+            }),
+          },
+        },
+        resolvePolicyScopeForSession: () => ({ tenantId: "tenant-a" }),
+      });
+      const channel = new WebChatChannel(deps);
+      const context = createContext();
+      await channel.initialize(context);
+      await channel.start();
+
+      const seedSend = vi.fn<(response: ControlResponse) => void>();
+      channel.handleMessage(
+        "client_1",
+        "chat.message",
+        msg("chat.message", { content: "Inspect commands" }),
+        seedSend,
+      );
+      const ownerToken = requireOwnerToken(seedSend);
+      const sessionId = vi.mocked(context.onMessage).mock.calls[0][0].sessionId;
+      const store = new WebChatSessionStore({ memoryBackend });
+      const ownerCredential = await store.resolveOwnerCredential(ownerToken);
+      expect(ownerCredential?.ownerKey).toEqual(expect.any(String));
+      await store.recordActivity({
+        sessionId: "session-catalog",
+        ownerKey: ownerCredential!.ownerKey,
+        sender: "user",
+        content: "Inspect commands",
+        timestamp: 100,
+      });
+      await persistWebSessionRuntimeState(
+        memoryBackend,
+        "session-catalog",
+        {
+          id: "session-catalog",
+          metadata: {
+            [SESSION_SHELL_PROFILE_METADATA_KEY]: "coding",
+          },
+        } as any,
+      );
+
+      const send = vi.fn<(response: ControlResponse) => void>();
+      channel.handleMessage(
+        "client_2",
+        "session.command.catalog.get",
+        msg(
+          "session.command.catalog.get",
+          {
+            ownerToken,
+            client: "web",
+            sessionId: "session-catalog",
+          },
+          "catalog-1",
+        ),
+        send,
+      );
+
+      const response = await waitForResponse(
+        send,
+        "session.command.catalog",
+        "catalog-1",
+      );
+      expect(response.payload).toEqual([
+        expect.objectContaining({
+          name: "files",
+          available: false,
+          effectiveProfile: "general",
+          heldBackBy: "codingCommands",
+        }),
+      ]);
     });
   });
 
@@ -1284,6 +1437,33 @@ describe("WebChatChannel", () => {
       expect((response.payload as Record<string, unknown>).sessionId).toBe(
         sessionId,
       );
+    });
+
+    it("accepts canonical chat.session.resume requests", async () => {
+      const send1 = vi.fn<(response: ControlResponse) => void>();
+
+      channel.handleMessage(
+        "client_1",
+        "chat.message",
+        msg("chat.message", { content: "Hello" }),
+        send1,
+      );
+
+      const gatewayMsg = vi.mocked(context.onMessage).mock.calls[0][0];
+      const sessionId = gatewayMsg.sessionId;
+
+      const send2 = vi.fn<(response: ControlResponse) => void>();
+      channel.handleMessage(
+        "client_1",
+        "chat.session.resume",
+        msg("chat.session.resume", { sessionId }, "req-canonical-resume"),
+        send2,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(
+        findResponse(send2, "chat.resumed", "req-canonical-resume")?.payload,
+      ).toEqual(expect.objectContaining({ sessionId }));
     });
 
     it("should reject resume from different client (session hijacking prevention)", async () => {

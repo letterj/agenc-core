@@ -261,7 +261,7 @@ async function openShellSession(
       (!options.newSession ? state.sessions[shellKey] : undefined);
     if (resumeSessionId) {
       activeSessionId = resumeSessionId;
-      send("chat.resume", {
+      send("chat.session.resume", {
         sessionId: resumeSessionId,
         ownerToken,
         workspaceRoot,

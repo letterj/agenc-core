@@ -27,7 +27,10 @@ import {
   coerceSessionShellProfile,
   type SessionShellProfile,
 } from "../../gateway/shell-profile.js";
-import { evaluateShellFeatureRollout } from "../../gateway/shell-rollout.js";
+import {
+  evaluateShellFeatureRollout,
+  resolveConfiguredShellProfile,
+} from "../../gateway/shell-rollout.js";
 import type { GatewayAutonomyConfig } from "../../gateway/types.js";
 import { DEFAULT_WORKSPACE_ID } from "../../gateway/workspace.js";
 import type { ControlMessage, ControlResponse } from "../../gateway/types.js";
@@ -123,7 +126,9 @@ async function resolveGitSnapshot(
  * Each WS connection gets a clientId from the Gateway's auto-incrementing
  * counter. WebChat session IDs are intentionally salted with randomness so a
  * daemon restart cannot accidentally reuse old persisted memory by session ID.
- * Session continuity across reconnects is supported via explicit 'chat.resume'.
+ * Session continuity across reconnects is supported via explicit
+ * 'chat.session.resume' requests. Legacy 'chat.resume' is kept as a
+ * compatibility alias while first-party clients migrate.
  */
 export class WebChatChannel
   extends BaseChannelPlugin
@@ -425,7 +430,7 @@ export class WebChatChannel
       return;
     }
 
-    if (type === "chat.resume") {
+    if (type === "chat.resume" || type === "chat.session.resume") {
       this.handleChatResume(clientId, payload, id, tracedSend);
       return;
     }
@@ -1303,15 +1308,29 @@ export class WebChatChannel
     const autonomyConfig = this.deps.gateway.config as {
       autonomy?: GatewayAutonomyConfig;
     };
+    const policyScope =
+      targetSessionId && this.deps.resolvePolicyScopeForSession
+        ? this.deps.resolvePolicyScopeForSession({
+            sessionId: targetSessionId,
+            channel: "webchat",
+          })
+        : undefined;
+    const effectiveProfile =
+      targetSessionId && sessionRecord?.shellProfile
+        ? resolveConfiguredShellProfile({
+            autonomy: autonomyConfig.autonomy,
+            tenantId: policyScope?.tenantId,
+            requested: sessionRecord.shellProfile,
+            stableKey: targetSessionId,
+          }).profile
+        : sessionRecord?.shellProfile;
     const catalog = (this.deps.commandRegistry?.getCatalog() ?? [])
       .filter((entry) => !client || entry.clients.includes(client))
       .map((entry) => {
         if (!entry.rolloutFeature || !targetSessionId) {
           return {
             ...entry,
-            ...(sessionRecord?.shellProfile
-              ? { effectiveProfile: sessionRecord.shellProfile }
-              : {}),
+            ...(effectiveProfile ? { effectiveProfile } : {}),
           };
         }
         const domain =
@@ -1322,7 +1341,7 @@ export class WebChatChannel
               : "shell";
         const decision = evaluateShellFeatureRollout({
           autonomy: autonomyConfig.autonomy,
-          tenantId: undefined,
+          tenantId: policyScope?.tenantId,
           stableKey: targetSessionId,
           feature: entry.rolloutFeature,
           domain,
@@ -1336,9 +1355,7 @@ export class WebChatChannel
                 availabilityReason: `${entry.rolloutFeature} rollout is currently held back for this session`,
                 heldBackBy: entry.rolloutFeature,
               }),
-          ...(sessionRecord?.shellProfile
-            ? { effectiveProfile: sessionRecord.shellProfile }
-            : {}),
+          ...(effectiveProfile ? { effectiveProfile } : {}),
         };
       });
     send({

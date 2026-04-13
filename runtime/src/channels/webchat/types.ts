@@ -138,6 +138,14 @@ export interface WebChatDeps {
       autonomy?: unknown;
     };
   };
+  /** Optional policy-scope resolver for session-scoped rollout/catalog decisions. */
+  resolvePolicyScopeForSession?: (params: {
+    sessionId: string;
+    channel: string;
+  }) => {
+    tenantId?: string;
+    projectId?: string;
+  };
   /** Optional daemon-level status for operator memory/process panels. */
   getDaemonStatus?: () => {
     pid: number;

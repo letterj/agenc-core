@@ -21,7 +21,6 @@ import {
   WS_CHAT_SESSION,
   WS_CHAT_OWNER,
   WS_CHAT_NEW,
-  WS_CHAT_RESUMED,
   WS_CHAT_SESSION_FORK,
   WS_CHAT_SESSION_INSPECT,
   WS_CHAT_SESSION_LIST,
@@ -780,20 +779,6 @@ export function useChat({ send, connected }: UseChatOptions): UseChatReturn {
         if (ownerToken) {
           ownerTokenRef.current = ownerToken;
           persistWebChatOwnerToken(ownerToken);
-        }
-        break;
-      }
-
-      case WS_CHAT_RESUMED: {
-        const payload = (msg.payload ?? msg) as Record<string, unknown>;
-        const resumedId = (payload.sessionId as string) ?? null;
-        setSessionId(resumedId);
-        // Fetch history for the resumed session
-        if (resumedId) {
-          send({
-            type: WS_CHAT_HISTORY,
-            payload: authPayload(),
-          });
         }
         break;
       }

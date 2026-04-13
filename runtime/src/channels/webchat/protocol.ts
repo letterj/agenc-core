@@ -35,6 +35,7 @@ export const WS_CHAT_OWNER = "chat.owner" as const;
 export const WS_CHAT_NEW = "chat.new" as const;
 export const WS_CHAT_RESUMED = "chat.resumed" as const;
 export const WS_CHAT_SESSIONS = "chat.sessions" as const;
+export const WS_CHAT_SESSION_RESUME = "chat.session.resume" as const;
 export const WS_CHAT_SESSION_LIST = "chat.session.list" as const;
 export const WS_CHAT_SESSION_INSPECT = "chat.session.inspect" as const;
 export const WS_CHAT_SESSION_FORK = "chat.session.fork" as const;
