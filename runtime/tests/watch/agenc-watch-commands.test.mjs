@@ -86,7 +86,7 @@ function createCommandHarness(overrides = {}) {
     { name: "/verify-override", usage: "/verify-override <continue|complete|fail> <reason> [--user-update <text>]", description: "verify override", aliases: [] },
     { name: "/desktop", usage: "/desktop <start|stop|status|vnc|list|attach>", description: "desktop", aliases: [] },
     { name: "/sessions", usage: "/sessions", description: "sessions", aliases: [] },
-    { name: "/session", usage: "/session <id>", description: "session", aliases: [] },
+    { name: "/session", usage: "/session [status|list|inspect|history|resume|fork]", description: "session", aliases: [] },
     { name: "/session-label", usage: "/session-label [show|clear|<label>]", description: "session label", aliases: ["/rename-session"] },
     { name: "/history", usage: "/history", description: "history", aliases: [] },
     { name: "/model", usage: "/model", description: "model", aliases: ["/models"] },
@@ -507,6 +507,7 @@ test("command controller shows agent threads through /agents", () => {
   const { controller, calls } = createCommandHarness();
 
   assert.equal(controller.dispatchOperatorInput("/agents all"), true);
+  assert.equal(controller.dispatchOperatorInput("/agents spawn coding --objective Fix tests"), true);
 
   assert.ok(
     calls.some(
@@ -514,6 +515,14 @@ test("command controller shows agent threads through /agents", () => {
         entry.type === "send" &&
         entry.frameType === "session.command.execute" &&
         entry.payload?.content === "/agents list --all",
+    ),
+  );
+  assert.ok(
+    calls.some(
+      (entry) =>
+        entry.type === "send" &&
+        entry.frameType === "session.command.execute" &&
+        entry.payload?.content === "/agents spawn coding --objective Fix tests",
     ),
   );
 });
@@ -718,7 +727,7 @@ test("command controller serves daemon logs locally for /logs", () => {
   assert.ok(calls.some((entry) => entry.type === "event" && entry.kind === "logs"));
 });
 
-test("command controller forwards /init to the daemon chat surface", () => {
+test("command controller forwards /init through the shared session command bus", () => {
   const { controller, calls } = createCommandHarness();
 
   assert.equal(controller.dispatchOperatorInput("/init --force"), true);
@@ -727,7 +736,7 @@ test("command controller forwards /init to the daemon chat surface", () => {
     calls.some(
       (entry) =>
         entry.type === "send" &&
-        entry.frameType === "chat.message" &&
+        entry.frameType === "session.command.execute" &&
         entry.payload?.content === "/init --force",
     ),
   );
@@ -916,7 +925,7 @@ test("command controller translates compaction commands onto the daemon session 
   assert.equal(controller.dispatchOperatorInput("/compact status"), true);
 
   const chatPayloads = calls
-    .filter((entry) => entry.type === "send" && entry.frameType === "chat.message")
+    .filter((entry) => entry.type === "send" && entry.frameType === "session.command.execute")
     .map((entry) => entry.payload?.content ?? "");
 
   assert.ok(chatPayloads.includes("/compact"));
@@ -974,7 +983,7 @@ test("command controller translates permissions commands onto the daemon policy 
   assert.equal(controller.dispatchOperatorInput("/permissions reset"), true);
 
   const chatPayloads = calls
-    .filter((entry) => entry.type === "send" && entry.frameType === "chat.message")
+    .filter((entry) => entry.type === "send" && entry.frameType === "session.command.execute")
     .map((entry) => entry.payload?.content ?? "");
 
   assert.ok(chatPayloads.includes("/policy status"));
@@ -1016,12 +1025,12 @@ test("command controller translates approvals commands onto the daemon approval 
   assert.equal(controller.dispatchOperatorInput("/approve req-8 always"), true);
 
   const chatPayloads = calls
-    .filter((entry) => entry.type === "send" && entry.frameType === "chat.message")
+    .filter((entry) => entry.type === "send" && entry.frameType === "session.command.execute")
     .map((entry) => entry.payload?.content ?? "");
 
-  assert.ok(chatPayloads.includes("approve list"));
-  assert.ok(chatPayloads.includes("approve req-7 no"));
-  assert.ok(chatPayloads.includes("approve req-8 always"));
+  assert.ok(chatPayloads.includes("/approve list"));
+  assert.ok(chatPayloads.includes("/approve req-7 no"));
+  assert.ok(chatPayloads.includes("/approve req-8 always"));
 });
 
 test("command controller forwards extended durable run controls onto run.control", () => {
@@ -1348,7 +1357,7 @@ test("command controller reports unavailable run controls and missing checkpoint
   );
 });
 
-test("command controller forwards desktop tooling commands onto chat.message", () => {
+test("command controller forwards desktop tooling commands onto the shared session command bus", () => {
   const { controller, calls } = createCommandHarness();
 
   assert.equal(controller.dispatchOperatorInput("/desktop list"), true);
@@ -1356,7 +1365,7 @@ test("command controller forwards desktop tooling commands onto chat.message", (
   assert.equal(controller.dispatchOperatorInput("/desktop nope"), true);
 
   const chatPayloads = calls
-    .filter((entry) => entry.type === "send" && entry.frameType === "chat.message")
+    .filter((entry) => entry.type === "send" && entry.frameType === "session.command.execute")
     .map((entry) => entry.payload?.content ?? "");
 
   assert.ok(chatPayloads.includes("/desktop list"));
@@ -1626,8 +1635,8 @@ test("command controller routes /sessions through the canonical session list com
 
   assert.equal(controller.dispatchOperatorInput("/sessions runtime"), true);
 
-  assert.equal(watchState.manualSessionsRequestPending, false);
-  assert.equal(watchState.manualSessionsQuery, null);
+  assert.equal(watchState.manualSessionsRequestPending, true);
+  assert.equal(watchState.manualSessionsQuery, "runtime");
   assert.ok(
     calls.some(
       (entry) =>
@@ -1636,6 +1645,44 @@ test("command controller routes /sessions through the canonical session list com
         entry.payload?.content === "/session list runtime",
     ),
   );
+});
+
+test("command controller forwards canonical /session subcommands and keeps id shorthand", () => {
+  const { controller, calls } = createCommandHarness({
+    WATCH_COMMANDS: [
+      {
+        name: "/session",
+        usage: "/session [status|list|inspect|history|resume|fork]",
+        description: "session",
+        aliases: [],
+      },
+    ],
+    parseWatchSlashCommand(value) {
+      const trimmed = String(value ?? "").trim();
+      if (!trimmed.startsWith("/")) return null;
+      const [commandToken, ...args] = trimmed.split(/\s+/);
+      return {
+        commandToken,
+        args,
+        command: commandToken === "/session" ? { name: commandToken } : null,
+      };
+    },
+  });
+
+  assert.equal(controller.dispatchOperatorInput("/session"), true);
+  assert.equal(controller.dispatchOperatorInput("/session list"), true);
+  assert.equal(controller.dispatchOperatorInput("/session resume sess-2"), true);
+  assert.equal(controller.dispatchOperatorInput("/session sess-3"), true);
+
+  const payloads = calls
+    .filter((entry) => entry.type === "send" && entry.frameType === "session.command.execute")
+    .map((entry) => entry.payload?.content ?? "");
+
+  assert.ok(payloads.includes("/session status"));
+  assert.ok(payloads.includes("/session list"));
+  assert.ok(payloads.includes("/session resume sess-2"));
+  assert.ok(payloads.includes("/session resume sess-3"));
+  assert.equal(calls.some((entry) => entry.type === "send"), true);
 });
 
 test("command controller applies optimistic model selection only for concrete model switches", () => {
@@ -1655,7 +1702,7 @@ test("command controller applies optimistic model selection only for concrete mo
     calls.some(
       (entry) =>
         entry.type === "send" &&
-        entry.frameType === "chat.message" &&
+        entry.frameType === "session.command.execute" &&
         entry.payload?.content === "/model grok-4-1-fast-reasoning",
     ),
   );

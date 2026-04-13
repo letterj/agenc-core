@@ -120,7 +120,7 @@ function buildApprovalsCommand(parsedSlash) {
   if (rawToken === "/approve") {
     if (args.length === 0 || (args.length === 1 && args[0]?.toLowerCase() === "list")) {
       return {
-        content: "approve list",
+        content: "/approve list",
         title: "Approvals",
         body: "Requested pending approvals for the active session.",
       };
@@ -129,7 +129,7 @@ function buildApprovalsCommand(parsedSlash) {
     const disposition = (args[1] ?? "").trim().toLowerCase();
     if (requestId && ["yes", "no", "always"].includes(disposition)) {
       return {
-        content: `approve ${requestId} ${disposition}`,
+        content: `/approve ${requestId} ${disposition}`,
         title: "Approval Resolve",
         body: `Requested ${disposition} for approval ${requestId}.`,
       };
@@ -143,7 +143,7 @@ function buildApprovalsCommand(parsedSlash) {
   const subcommand = (args[0] ?? "list").trim().toLowerCase();
   if (!subcommand || subcommand === "list") {
     return {
-      content: "approve list",
+      content: "/approve list",
       title: "Approvals",
       body: "Requested pending approvals for the active session.",
     };
@@ -170,7 +170,7 @@ function buildApprovalsCommand(parsedSlash) {
     };
   }
   return {
-    content: `approve ${requestId} ${disposition}`,
+    content: `/approve ${requestId} ${disposition}`,
     title: "Approval Resolve",
     body: `Requested ${disposition} for approval ${requestId}.`,
   };
@@ -1477,6 +1477,15 @@ export function createWatchCommandController(dependencies = {}) {
     return true;
   }
 
+  const KNOWN_SESSION_SUBCOMMANDS = new Set([
+    "status",
+    "list",
+    "inspect",
+    "history",
+    "resume",
+    "fork",
+  ]);
+
   function printHelp() {
     const helpEvent = pushEvent(
       "help",
@@ -1621,12 +1630,17 @@ export function createWatchCommandController(dependencies = {}) {
 
       if (canonicalName === "/agents") {
         const query = parsedSlash.args.join(" ").trim();
+        const normalizedQuery = query.toLowerCase();
         const content =
-          query.toLowerCase() === "all"
-            ? "/agents list --all"
-            : query.length > 0
-              ? `/agents list ${query}`
-              : "/agents list";
+          query.length === 0
+            ? "/agents list"
+            : normalizedQuery === "all"
+              ? "/agents list --all"
+              : /^list(\s|$)/i.test(query)
+                ? `/agents ${query}`
+                : /^(spawn|assign|inspect|stop|roles)(\s|$)/i.test(query)
+                  ? `/agents ${query}`
+                  : `/agents list ${query}`;
         return dispatchSessionCommand(content, {
           title: "Agents",
           body:
@@ -1869,19 +1883,22 @@ export function createWatchCommandController(dependencies = {}) {
             : "Requested current model routing info.",
           "teal",
         );
-        send("chat.message", authPayload({ content: value }));
-        return true;
+        return dispatchSessionCommand(value, {
+          title: modelArg ? "Model Switch" : "Model Query",
+          body:
+            modelArg
+              ? `Requested model switch to: ${modelArg}`
+              : "Requested current model routing info.",
+          allowBootstrapQueue: false,
+        });
       }
 
       if (canonicalName === "/init") {
-        pushEvent(
-          "operator",
-          "Project Guide Init",
-          "Requested AGENC.md generation for the active workspace.",
-          "teal",
-        );
-        send("chat.message", authPayload({ content: value }));
-        return true;
+        return dispatchSessionCommand(value, {
+          title: "Project Guide Init",
+          body: "Requested AGENC.md generation for the active workspace.",
+          allowBootstrapQueue: false,
+        });
       }
 
       if (canonicalName === "/voice") {
@@ -1903,19 +1920,29 @@ export function createWatchCommandController(dependencies = {}) {
             setTransientStatus("voice status ready");
           } else {
             // Voice persona change or config query — forward to daemon
-            send("chat.message", authPayload({ content: value }));
+            return dispatchSessionCommand(value, {
+              title: "Voice",
+              body: "Requested daemon-backed voice command.",
+              allowBootstrapQueue: false,
+            });
           }
         } else {
           // No voice controller — just forward to daemon for config display
-          send("chat.message", authPayload({ content: value }));
+          return dispatchSessionCommand(value, {
+            title: "Voice",
+            body: "Requested daemon-backed voice command.",
+            allowBootstrapQueue: false,
+          });
         }
         return true;
       }
 
       if (canonicalName === "/context") {
-        pushEvent("operator", "Context", "Requested context window usage.", "teal");
-        send("chat.message", authPayload({ content: "/context" }));
-        return true;
+        return dispatchSessionCommand("/context", {
+          title: "Context",
+          body: "Requested context window usage.",
+          allowBootstrapQueue: false,
+        });
       }
 
       if (canonicalName === "/compact") {
@@ -1924,9 +1951,11 @@ export function createWatchCommandController(dependencies = {}) {
           pushEvent("error", "Usage Error", action.error, "red");
           return true;
         }
-        pushEvent("operator", action.title, action.body, "teal");
-        send("chat.message", authPayload({ content: action.content }));
-        return true;
+        return dispatchSessionCommand(action.content, {
+          title: action.title,
+          body: action.body,
+          allowBootstrapQueue: false,
+        });
       }
 
       if (
@@ -2011,9 +2040,11 @@ export function createWatchCommandController(dependencies = {}) {
           pushEvent("error", "Usage Error", action.error, "red");
           return true;
         }
-        pushEvent("operator", action.title, action.body, "teal");
-        send("chat.message", authPayload({ content: action.content }));
-        return true;
+        return dispatchSessionCommand(action.content, {
+          title: action.title,
+          body: action.body,
+          allowBootstrapQueue: false,
+        });
       }
 
       if (canonicalName === "/market") {
@@ -2047,9 +2078,11 @@ export function createWatchCommandController(dependencies = {}) {
           pushEvent("error", "Usage Error", action.error, "red");
           return true;
         }
-        pushEvent("operator", action.title, action.body, "teal");
-        send("chat.message", authPayload({ content: action.content }));
-        return true;
+        return dispatchSessionCommand(action.content, {
+          title: action.title,
+          body: action.body,
+          allowBootstrapQueue: false,
+        });
       }
 
       if (canonicalName === "/approvals") {
@@ -2058,9 +2091,11 @@ export function createWatchCommandController(dependencies = {}) {
           pushEvent("error", "Usage Error", action.error, "red");
           return true;
         }
-        pushEvent("operator", action.title, action.body, "teal");
-        send("chat.message", authPayload({ content: action.content }));
-        return true;
+        return dispatchSessionCommand(action.content, {
+          title: action.title,
+          body: action.body,
+          allowBootstrapQueue: false,
+        });
       }
 
       if (canonicalName === "/diff") {
@@ -2233,6 +2268,8 @@ export function createWatchCommandController(dependencies = {}) {
 
       if (canonicalName === "/sessions") {
         const query = parsedSlash.args.join(" ").trim();
+        watchState.manualSessionsRequestPending = true;
+        watchState.manualSessionsQuery = query.length > 0 ? query : null;
         return dispatchSessionCommand(
           query.length > 0 ? `/session list ${query}` : "/session list",
           {
@@ -2246,18 +2283,28 @@ export function createWatchCommandController(dependencies = {}) {
       }
 
       if (canonicalName === "/session") {
-        if (!firstArg) {
-          pushEvent(
-            "error",
-            "Missing Session Id",
-            "Usage: /session <sessionId>",
-            "red",
-          );
-          return true;
+        const args = parsedSlash.args.map((arg) => String(arg ?? "").trim()).filter(Boolean);
+        if (args.length === 0) {
+          return dispatchSessionCommand("/session status", {
+            title: "Session Status",
+            body: "Requested current session status.",
+          });
         }
-        return dispatchSessionCommand(`/session resume ${firstArg}`, {
+        const firstSubcommand = args[0].toLowerCase();
+        if (KNOWN_SESSION_SUBCOMMANDS.has(firstSubcommand)) {
+          if (firstSubcommand === "list") {
+            const query = args.slice(1).join(" ").trim();
+            watchState.manualSessionsRequestPending = true;
+            watchState.manualSessionsQuery = query.length > 0 ? query : null;
+          }
+          return dispatchSessionCommand(`/session ${args.join(" ")}`, {
+            title: "Session",
+            body: `Requested session command: ${args.join(" ")}.`,
+          });
+        }
+        return dispatchSessionCommand(`/session resume ${args[0]}`, {
           title: "Session Resume",
-          body: `Resuming ${firstArg}.`,
+          body: `Resuming ${args[0]}.`,
         });
       }
 

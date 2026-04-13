@@ -126,6 +126,7 @@ test("dispatchOperatorSurfaceEvent handles session-ready events", () => {
   assert.deepEqual(calls, [
     ["persistSessionId", "session-1"],
     ["resetLiveRunSurface"],
+    ["send", "session.command.catalog.get", { auth: true, client: "console", sessionId: "session-1" }],
     ["markBootstrapReady", "session ready: session-1"],
     ["requestCockpit", "session ready"],
   ]);
@@ -157,6 +158,7 @@ test("dispatchOperatorSurfaceEvent resumes sessions by restoring history and ins
   assert.deepEqual(calls, [
     ["persistSessionId", "session-2"],
     ["resetLiveRunSurface"],
+    ["send", "session.command.catalog.get", { auth: true, client: "console", sessionId: "session-2" }],
     ["send", "chat.history", { auth: true, limit: 50 }],
     ["requestRunInspect", "resume", { force: true }],
     ["requestCockpit", "resume"],
@@ -260,6 +262,123 @@ test("dispatchOperatorSurfaceEvent filters manual session lists with the active 
       "teal",
     ],
     ["status", "session filter loaded: 1 match(es)"],
+  ]);
+});
+
+test("dispatchOperatorSurfaceEvent bootstraps from canonical session list results", () => {
+  const { api, state, calls } = createHarness({
+    state: {
+      bootstrapReady: false,
+      sessionId: "session-prev",
+    },
+  });
+  const sessions = [
+    { sessionId: "session-next", label: "Latest" },
+  ];
+
+  dispatchOperatorSurfaceEvent(
+    {
+      family: "chat",
+      type: "session.command.result",
+      payload: {
+        commandName: "session",
+        content: "1 session",
+        data: {
+          kind: "session",
+          subcommand: "list",
+          sessions,
+        },
+      },
+      payloadRecord: {
+        commandName: "session",
+        content: "1 session",
+        data: {
+          kind: "session",
+          subcommand: "list",
+          sessions,
+        },
+      },
+      payloadList: null,
+      isSessionScoped: false,
+      message: {},
+    },
+    null,
+    api,
+  );
+
+  assert.equal(state.sessionId, "session-next");
+  assert.deepEqual(calls, [
+    ["persistSessionId", "session-next"],
+    [
+      "status",
+      "resuming session session-next",
+    ],
+    [
+      "send",
+      "session.command.execute",
+      {
+        auth: true,
+        client: "console",
+        content: "/session resume session-next",
+        sessionId: "session-next",
+      },
+    ],
+  ]);
+});
+
+test("dispatchOperatorSurfaceEvent handles canonical session resume results", () => {
+  const { api, state, calls } = createHarness({
+    state: { bootstrapReady: false },
+  });
+
+  dispatchOperatorSurfaceEvent(
+    {
+      family: "chat",
+      type: "session.command.result",
+      payload: {
+        commandName: "session",
+        content: "resumed",
+        sessionId: "session-5",
+        data: {
+          kind: "session",
+          subcommand: "resume",
+          resumed: {
+            sessionId: "session-5",
+            messageCount: 12,
+          },
+        },
+      },
+      payloadRecord: {
+        commandName: "session",
+        content: "resumed",
+        sessionId: "session-5",
+        data: {
+          kind: "session",
+          subcommand: "resume",
+          resumed: {
+            sessionId: "session-5",
+            messageCount: 12,
+          },
+        },
+      },
+      payloadList: null,
+      isSessionScoped: true,
+      message: {},
+    },
+    null,
+    api,
+  );
+
+  assert.equal(state.sessionId, "session-5");
+  assert.equal(state.pendingResumeHistoryRestore, true);
+  assert.deepEqual(calls, [
+    ["persistSessionId", "session-5"],
+    ["resetLiveRunSurface"],
+    ["send", "session.command.catalog.get", { auth: true, client: "console", sessionId: "session-5" }],
+    ["send", "chat.history", { auth: true, limit: 50 }],
+    ["requestRunInspect", "resume", { force: true }],
+    ["requestCockpit", "resume"],
+    ["markBootstrapReady", "session resumed: session-5; restoring history"],
   ]);
 });
 
