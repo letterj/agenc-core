@@ -142,7 +142,12 @@ export async function runPipelineHttpRepro(
   });
 
   const step2 = await runBash(
-    `cd ${workspace} && python3 -m http.server ${port} >/tmp/agenc-http.log 2>&1 & echo $!`,
+    [
+      "set -euo pipefail",
+      `cd ${workspace}`,
+      `python3 -m http.server ${port} >/tmp/agenc-http.log 2>&1 &`,
+      "echo $!",
+    ].join("\n"),
   );
   if (step2.ok) {
     serverPid = step2.stdout.split(/\s+/)[0]?.trim();
@@ -184,35 +189,35 @@ export async function runPipelineHttpRepro(
     preview: preview(step5),
   });
 
+  const serverPidArg = serverPid && /^\d+$/.test(serverPid) ? serverPid : undefined;
   const step6 = await runBash(
     [
-      "if command -v lsof >/dev/null 2>&1; then",
-      `  SERVER_PIDS=$(lsof -nP -iTCP:${port} -sTCP:LISTEN -t 2>/dev/null || true)`,
-      '  for pid in $SERVER_PIDS; do',
-      '    kill "$pid" >/dev/null 2>&1 || true',
-      "  done",
-      "elif command -v fuser >/dev/null 2>&1; then",
+      "set +e",
+      ...(serverPidArg
+        ? [`kill ${serverPidArg} >/dev/null 2>&1 || true`]
+        : []),
+      "for _ in 1 2 3 4 5; do",
+      `  if ! curl -fsS --max-time 1 http://127.0.0.1:${port} >/dev/null 2>&1; then echo 0; exit 0; fi`,
+      "  sleep 0.2",
+      "done",
+      "if command -v fuser >/dev/null 2>&1; then",
       `  fuser -k ${port}/tcp >/dev/null 2>&1 || true`,
-      "else",
+      "fi",
+      "if command -v pkill >/dev/null 2>&1; then",
       `  pkill -f 'http.server ${port}' >/dev/null 2>&1 || true`,
       "fi",
-      "sleep 1",
-      `if command -v ss >/dev/null 2>&1; then`,
-      `  ss -ltn '( sport = :${port} )' | tail -n +2 | wc -l`,
-      "elif command -v lsof >/dev/null 2>&1; then",
-      `  lsof -nP -iTCP:${port} -sTCP:LISTEN 2>/dev/null | tail -n +2 | wc -l`,
-      "else",
-      `  if curl -fsS --max-time 1 http://127.0.0.1:${port} >/dev/null 2>&1; then echo 1; else echo 0; fi`,
-      "fi",
+      "sleep 0.5",
+      `if curl -fsS --max-time 1 http://127.0.0.1:${port} >/dev/null 2>&1; then echo 1; else echo 0; fi`,
     ].join("\n"),
   );
-  const portListeners = Number(step6.stdout.trim() || "0");
+  const listenerStatus = step6.stdout.trim().split(/\s+/).at(-1) ?? "1";
+  const portListeners = Number(listenerStatus);
   steps.push({
     step: 6,
     tool: "system.bash",
     ok: step6.ok && Number.isFinite(portListeners) && portListeners === 0,
     preview: step6.ok
-      ? `listeners_on_${port}=${step6.stdout.trim()}`
+      ? `listeners_on_${port}=${listenerStatus}`
       : preview(step6),
   });
 

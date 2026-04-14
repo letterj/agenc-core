@@ -390,21 +390,40 @@ function isVerificationLikeToolCall(record: ToolCallRecord): boolean {
   }
 }
 
+function isSuccessfulWorkspaceMutation(record: ToolCallRecord): boolean {
+  if (didToolCallFail(record.isError, record.result)) {
+    return false;
+  }
+  if (!(record.name in MUTATION_PATH_ARG_BY_TOOL)) {
+    return false;
+  }
+  if (record.name === "desktop.text_editor") {
+    const command =
+      typeof record.args?.command === "string"
+        ? record.args.command.trim().toLowerCase()
+        : "";
+    return command !== "view";
+  }
+  return true;
+}
+
 function findUnresolvedVerificationFailures(
   allToolCalls: readonly ToolCallRecord[],
 ): ToolCallRecord[] {
-  const verificationCalls = allToolCalls.filter(isVerificationLikeToolCall);
-  if (verificationCalls.length === 0) {
-    return [];
+  for (let index = allToolCalls.length - 1; index >= 0; index -= 1) {
+    const call = allToolCalls[index];
+    if (!isVerificationLikeToolCall(call)) {
+      continue;
+    }
+    if (!didToolCallFail(call.isError, call.result)) {
+      return [];
+    }
+    const laterMutationResolved = allToolCalls
+      .slice(index + 1)
+      .some(isSuccessfulWorkspaceMutation);
+    return laterMutationResolved ? [] : [call];
   }
-  const lastVerificationCall = verificationCalls.at(-1);
-  if (
-    !lastVerificationCall ||
-    !didToolCallFail(lastVerificationCall.isError, lastVerificationCall.result)
-  ) {
-    return [];
-  }
-  return [lastVerificationCall];
+  return [];
 }
 
 function summarizeVerificationFailureCall(record: ToolCallRecord): string {

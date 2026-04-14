@@ -292,7 +292,9 @@ export class DiscordChannel extends BaseChannelPlugin {
     });
 
     client.on("interactionCreate", (interaction: unknown) => {
-      this.handleInteraction(interaction as DiscordInteraction).catch((err) => {
+      return this.handleInteraction(
+        interaction as DiscordInteraction,
+      ).catch((err) => {
         this.context.logger.error(
           `Error handling interactionCreate: ${errorMessage(err)}`,
         );

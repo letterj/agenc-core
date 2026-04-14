@@ -117,11 +117,16 @@ import {
   serializeRemainingRequestMs,
   setStopReason,
 } from "./chat-executor-ctx-helpers.js";
-import type { DelegationOutputValidationCode } from "../utils/delegation-validation.js";
+import {
+  DELEGATION_OUTPUT_VALIDATION_CODES,
+  type DelegationOutputValidationCode,
+} from "../utils/delegation-validation.js";
 import {
   type CompletionValidatorId,
   updateRuntimeContractValidatorSnapshot,
   updateRuntimeContractToolProtocolSnapshot,
+  updateRuntimeContractVerifierStage,
+  updateRuntimeContractVerifierVerdict,
 } from "../runtime-contract/types.js";
 import {
   getPendingToolProtocolCalls,
@@ -140,6 +145,10 @@ import {
   REQUEST_TASK_PROGRESS_NO_TASK_YET_KEY,
   type RequestTaskObservationResult,
 } from "./request-task-progress.js";
+import {
+  isExplicitTopLevelVerifierRequiredForTurn,
+  runTopLevelVerifierValidation,
+} from "../gateway/top-level-verifier.js";
 
 // ============================================================================
 // Callback interfaces
@@ -464,6 +473,15 @@ function failClosedOnMalformedToolContinuation(
     };
   }
   return true;
+}
+
+function asDelegationOutputValidationCode(
+  value: unknown,
+): DelegationOutputValidationCode | undefined {
+  return typeof value === "string" &&
+    (DELEGATION_OUTPUT_VALIDATION_CODES as readonly string[]).includes(value)
+    ? (value as DelegationOutputValidationCode)
+    : undefined;
 }
 
 export interface ToolLoopConfig {
@@ -1665,6 +1683,17 @@ export async function executeToolCallLoop(
       callbacks,
       "tool_followup",
     );
+    const stopHookRecoveryReason =
+      params.stopHookResult?.reason ?? params.stopHookResult?.stopReason;
+    const shouldRequireRecoveryTool =
+      params.validationCode === "missing_file_mutation_evidence" ||
+      params.validationCode === "missing_file_artifact_evidence" ||
+      stopHookRecoveryReason === "filesystem_artifact_verification" ||
+      stopHookRecoveryReason === "deterministic_acceptance_probe_failed" ||
+      (params.stopHookResult !== undefined && ctx.requiredToolEvidence !== undefined);
+    const recoveryToolChoice = shouldRequireRecoveryTool
+      ? "required"
+      : undefined;
     const recoveryResponse = await callModelWithReactiveCompact(
       ctx,
       callbacks,
@@ -1678,6 +1707,7 @@ export async function executeToolCallLoop(
         statefulSessionId: ctx.sessionId,
         statefulResumeAnchor: ctx.stateful?.resumeAnchor,
         statefulHistoryCompacted: ctx.stateful?.historyCompacted,
+        toolChoice: recoveryToolChoice,
         budgetReason: params.budgetReason,
       }),
     );
@@ -1707,6 +1737,31 @@ export async function executeToolCallLoop(
           ctx.validationCode = params.validationCode;
         }
       }
+      return false;
+    }
+    if (
+      (params.validationCode === "missing_file_mutation_evidence" ||
+        params.validationCode === "missing_file_artifact_evidence") &&
+      !responseHasToolCalls(recoveryResponse)
+    ) {
+      ctx.continuationState.active = undefined;
+      callbacks.emitExecutionTrace(ctx, {
+        type: "continuation_stopped",
+        phase: "tool_followup",
+        callIndex: ctx.callIndex,
+        payload: {
+          reason: params.reason,
+          validatorId: params.validatorId,
+          attempt: activeContinuation.attempt,
+          maxAttempts: continuationCap,
+          exhaustedDetail: params.exhaustedDetail,
+          validationCode: params.validationCode,
+          stopCause: "missing_required_recovery_tool_calls",
+        },
+      });
+      callbacks.setStopReason(ctx, "validation_error", params.exhaustedDetail);
+      ctx.validationCode = params.validationCode;
+      ctx.response = { ...recoveryResponse, content: "" };
       return false;
     }
     ctx.response = recoveryResponse;
@@ -2112,6 +2167,9 @@ export async function executeToolCallLoop(
     });
 
     let completionValidationStatus = "passed";
+    const topLevelVerifierEnabled = isExplicitTopLevelVerifierRequiredForTurn({
+      turnExecutionContract: ctx.turnExecutionContract,
+    });
     const stopHooksEnabled =
       config.runtimeContractFlags.stopHooksEnabled &&
       config.stopHookRuntime !== undefined;
@@ -2251,6 +2309,9 @@ export async function executeToolCallLoop(
           "validation_error",
           hookResult.stopReason ?? "Stop-hook chain prevented completion.",
         );
+        ctx.validationCode = asDelegationOutputValidationCode(
+          hookResult.stopReason ?? hookResult.reason,
+        );
         if (ctx.response) {
           ctx.response = {
             ...ctx.response,
@@ -2258,6 +2319,9 @@ export async function executeToolCallLoop(
           };
         }
       } else if (hookResult.outcome === "retry_with_blocking_message") {
+        const hookValidationCode = asDelegationOutputValidationCode(
+          hookResult.stopReason ?? hookResult.reason,
+        );
         const stopHookRecovery = await attemptCompletionRecovery({
           reason: hookResult.reason ?? "turn_end_stop_gate",
           blockingMessage: hookResult.blockingMessage,
@@ -2269,7 +2333,8 @@ export async function executeToolCallLoop(
                 ? ctx.requiredToolEvidence.maxCorrectionAttempts
                 : undefined,
           budgetReason:
-            hookResult.reason === "artifact_evidence"
+            hookValidationCode === "missing_file_mutation_evidence" ||
+            hookValidationCode === "missing_file_artifact_evidence"
               ? "Max model recalls exceeded during artifact-evidence recovery turn"
               : hookResult.reason === "filesystem_artifact_verification"
                 ? "Max model recalls exceeded during filesystem artifact recovery turn"
@@ -2278,8 +2343,13 @@ export async function executeToolCallLoop(
                   : "Max model recalls exceeded during stop-hook recovery turn",
           exhaustedDetail:
             hookResult.reason === "narrated_future_tool_work"
-              ? "Stop-hook recovery exhausted: the model kept narrating future work instead of calling tools."
-              : "Stop-hook recovery exhausted after the model continued to emit an invalid completion summary.",
+              ? "Stop-gate recovery exhausted: the model kept narrating future work instead of calling tools."
+              : (hookValidationCode === "missing_file_mutation_evidence" ||
+                    hookValidationCode === "missing_file_artifact_evidence") &&
+                  hookResult.blockingMessage
+                ? hookResult.blockingMessage
+                : "Stop-gate recovery exhausted after the model continued to emit an invalid completion summary.",
+          validationCode: hookValidationCode,
           validatorId: "turn_end_stop_gate",
           stopHookResult: hookResult,
           continuationSummary,
@@ -2299,6 +2369,140 @@ export async function executeToolCallLoop(
           },
         });
         if (stopHookRecovery) {
+          continue;
+        }
+      }
+    }
+
+    if (ctx.stopReason === "completed" && topLevelVerifierEnabled) {
+      callbacks.emitExecutionTrace(ctx, {
+        type: "completion_validator_started",
+        phase: "tool_followup",
+        callIndex: ctx.callIndex,
+        payload: {
+          validatorId: "top_level_verifier",
+          enabled: true,
+          runtimeContract: ctx.runtimeContractSnapshot,
+        },
+      });
+      const validation = await runTopLevelVerifierValidation({
+        sessionId: ctx.sessionId,
+        userRequest: ctx.messageText,
+        result: {
+          content: ctx.response?.content ?? "",
+          stopReason: ctx.stopReason,
+          completionState: ctx.completionState,
+          turnExecutionContract: ctx.turnExecutionContract,
+          toolCalls: ctx.allToolCalls,
+          stopReasonDetail: ctx.stopReasonDetail,
+          validationCode: ctx.validationCode,
+          completionProgress: undefined,
+          runtimeContractSnapshot: ctx.runtimeContractSnapshot,
+        },
+        subAgentManager:
+          config.completionValidation?.topLevelVerifier?.subAgentManager ?? null,
+        verifierService:
+          config.completionValidation?.topLevelVerifier?.verifierService ?? null,
+        taskStore: config.completionValidation?.topLevelVerifier?.taskStore ?? null,
+        remoteJobManager:
+          config.completionValidation?.topLevelVerifier?.remoteJobManager ?? null,
+        agentDefinitions:
+          config.completionValidation?.topLevelVerifier?.agentDefinitions,
+        logger: config.completionValidation?.topLevelVerifier?.logger,
+        onTraceEvent:
+          config.completionValidation?.topLevelVerifier?.onTraceEvent,
+      });
+      ctx.verifierSnapshot = validation.verifier;
+      ctx.runtimeContractSnapshot = updateRuntimeContractVerifierVerdict({
+        snapshot: ctx.runtimeContractSnapshot,
+        verifier: validation.runtimeVerifier,
+      });
+      ctx.runtimeContractSnapshot = updateRuntimeContractVerifierStage({
+        snapshot: ctx.runtimeContractSnapshot,
+        verifierStages: {
+          ...ctx.runtimeContractSnapshot.verifierStages,
+          runtimeRequired: true,
+          launcherKind:
+            validation.launcherKind ??
+            (ctx.runtimeContractSnapshot.verifierStages.launcherKind === "none"
+              ? "subagent"
+              : ctx.runtimeContractSnapshot.verifierStages.launcherKind),
+          stageStatus:
+            validation.outcome === "pass"
+              ? "passed"
+              : validation.outcome === "skipped"
+                ? "skipped"
+                : validation.runtimeVerifier.overall === "fail"
+                  ? "failed"
+                  : "retry",
+          ...(validation.taskId ? { taskId: validation.taskId } : {}),
+          ...(validation.verifierRequirement
+            ? {
+                bootstrapSource: validation.verifierRequirement.bootstrapSource,
+                profiles: validation.verifierRequirement.profiles,
+                probeCategories: validation.verifierRequirement.probeCategories,
+              }
+            : {}),
+        },
+      });
+      callbacks.emitExecutionTrace(ctx, {
+        type: "completion_validator_finished",
+        phase: "tool_followup",
+        callIndex: ctx.callIndex,
+        payload: {
+          validatorId: "top_level_verifier",
+          enabled: true,
+          outcome: validation.outcome,
+          reason: "top_level_verifier",
+          runtimeContract: ctx.runtimeContractSnapshot,
+        },
+      });
+
+      if (validation.outcome === "fail_closed") {
+        completionValidationStatus = "fail_closed";
+        callbacks.setStopReason(
+          ctx,
+          "validation_error",
+          validation.exhaustedDetail ?? validation.summary,
+        );
+        if (ctx.response) {
+          ctx.response = {
+            ...ctx.response,
+            content: "",
+          };
+        }
+      } else if (validation.outcome === "retry_with_blocking_message") {
+        const topLevelRecovery = await attemptCompletionRecovery({
+          reason: "top_level_verifier",
+          blockingMessage: validation.blockingMessage,
+          evidence: { verifier: validation.runtimeVerifier },
+          maxAttempts:
+            ctx.requiredToolEvidence?.maxCorrectionAttemptsExplicit === true
+              ? ctx.requiredToolEvidence.maxCorrectionAttempts
+              : undefined,
+          budgetReason:
+            "Max model recalls exceeded during top-level verifier recovery turn",
+          exhaustedDetail:
+            validation.exhaustedDetail ??
+            `Top-level verifier ${validation.runtimeVerifier.overall}: ${validation.summary}`,
+          validatorId: "top_level_verifier",
+          continuationSummary,
+        });
+        completionValidationStatus = topLevelRecovery
+          ? "recovery_requested"
+          : "recovery_exhausted";
+        callbacks.emitExecutionTrace(ctx, {
+          type: "completion_validation_finished",
+          phase: "tool_followup",
+          callIndex: ctx.callIndex,
+          payload: {
+            status: completionValidationStatus,
+            stopReason: ctx.stopReason,
+            validationCode: ctx.validationCode,
+            runtimeContract: ctx.runtimeContractSnapshot,
+          },
+        });
+        if (topLevelRecovery) {
           continue;
         }
       }

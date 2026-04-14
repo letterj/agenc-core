@@ -25,6 +25,34 @@ function cloneExecutionLocation(
   return JSON.parse(JSON.stringify(location)) as RuntimeExecutionLocation;
 }
 
+function getEquivalentPathRoots(path: string): readonly string[] {
+  const normalizedPath = resolvePath(path);
+  if (process.platform !== "darwin") {
+    return [normalizedPath];
+  }
+  if (normalizedPath.startsWith("/private/var/")) {
+    return [normalizedPath, normalizedPath.slice("/private".length)];
+  }
+  if (normalizedPath.startsWith("/var/")) {
+    return [normalizedPath, `/private${normalizedPath}`];
+  }
+  return [normalizedPath];
+}
+
+function relativeToEquivalentRoot(
+  path: string,
+  root: string,
+): string | undefined {
+  for (const rootCandidate of getEquivalentPathRoots(root)) {
+    for (const pathCandidate of getEquivalentPathRoots(path)) {
+      if (isPathWithinRoot(pathCandidate, rootCandidate)) {
+        return relative(rootCandidate, pathCandidate);
+      }
+    }
+  }
+  return undefined;
+}
+
 function translatePathForWorktree(
   path: string | undefined,
   location: RuntimeExecutionLocation,
@@ -39,12 +67,16 @@ function translatePathForWorktree(
   }
   const normalizedPath = resolvePath(path);
   const normalizedGitRoot = resolvePath(location.gitRoot);
-  if (!isPathWithinRoot(normalizedPath, normalizedGitRoot)) {
+  const relativePath = relativeToEquivalentRoot(
+    normalizedPath,
+    normalizedGitRoot,
+  );
+  if (relativePath === undefined) {
     return normalizedPath;
   }
   return resolvePath(
     location.worktreePath,
-    relative(normalizedGitRoot, normalizedPath),
+    relativePath,
   );
 }
 

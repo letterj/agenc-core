@@ -1998,8 +1998,12 @@ describe("WebChatChannel", () => {
           ),
           send,
         );
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(findResponse(send, "watch.cockpit", "req-watch-cockpit")?.payload).toEqual(
+        const cockpitResponse = await waitForResponse(
+          send,
+          "watch.cockpit",
+          "req-watch-cockpit",
+        );
+        expect(cockpitResponse.payload).toEqual(
           expect.objectContaining({
             session: expect.objectContaining({
               sessionId: "session-continuity",
@@ -2092,10 +2096,12 @@ describe("WebChatChannel", () => {
           ),
           send,
         );
-        await new Promise((resolve) => setTimeout(resolve, 0));
-
-        const forkResponse = findResponse(send, "chat.session.fork", "req-fork");
-        expect(forkResponse?.payload).toEqual(
+        const forkResponse = await waitForResponse(
+          send,
+          "chat.session.fork",
+          "req-fork",
+        );
+        expect(forkResponse.payload).toEqual(
           expect.objectContaining({
             sourceSessionId: "session-source",
             forkSource: "runtime_state",
@@ -2103,7 +2109,7 @@ describe("WebChatChannel", () => {
           }),
         );
 
-        const targetSessionId = (forkResponse?.payload as Record<string, unknown>)
+        const targetSessionId = (forkResponse.payload as Record<string, unknown>)
           .targetSessionId as string;
         expect(await store.loadSession(targetSessionId)).toMatchObject({
           metadata: {

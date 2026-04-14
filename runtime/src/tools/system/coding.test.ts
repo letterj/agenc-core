@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 
@@ -158,7 +158,7 @@ describe("createCodingTools", () => {
     const worktreeState = JSON.parse(
       (await worktreeStatus!.execute({ worktreePath })).content,
     ) as { worktreePath: string; head: string | null };
-    expect(worktreeState.worktreePath).toBe(worktreePath);
+    expect(worktreeState.worktreePath).toBe(await realpath(worktreePath));
     expect(worktreeState.head).not.toBeNull();
 
     const searchResult = JSON.parse(

@@ -9,8 +9,15 @@ export default defineConfig({
   test: {
     globals: false,
     environment: 'node',
+    pool: 'forks',
     include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
-    exclude: ['node_modules', 'dist'],
+    exclude: [
+      'node_modules',
+      'dist',
+      'tests/integration.test.ts',
+      'tests/eval-replay.integration.test.ts',
+      'tests/benchmark-runner.integration.test.ts',
+    ],
     testTimeout: 30000,
     deps: {
       interopDefault: true,

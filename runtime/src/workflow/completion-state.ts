@@ -56,6 +56,9 @@ export function resolveWorkflowCompletionState(input: {
     if (verifier?.overall === "retry" || verifier?.overall === "fail") {
       return hasProgress ? "partial" : "blocked";
     }
+    if (input.verificationContract && !hasProgress && verifier?.overall === "skipped") {
+      return "needs_verification";
+    }
     return "completed";
   }
 
