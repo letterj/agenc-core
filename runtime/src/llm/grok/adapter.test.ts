@@ -562,18 +562,23 @@ describe("GrokProvider", () => {
     const provider = new GrokProvider({
       apiKey: "test-key",
     });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
-    await provider.chat(
-      [{ role: "user", content: "inspect the repo" }],
-      {
-        trace: {
-          includeProviderPayloads: true,
-          onProviderTraceEvent: (event) => {
-            events.push(event as unknown as Record<string, unknown>);
+    try {
+      await provider.chat(
+        [{ role: "user", content: "inspect the repo" }],
+        {
+          trace: {
+            includeProviderPayloads: true,
+            onProviderTraceEvent: (event) => {
+              events.push(event as unknown as Record<string, unknown>);
+            },
           },
         },
-      },
-    );
+      );
+    } finally {
+      dateNow.mockRestore();
+    }
 
     expect(events[0]).toMatchObject({
       kind: "request",
