@@ -15,7 +15,7 @@ export interface ToolGovernanceClassification {
 
 const READ_ACTION_PREFIXES = ["get", "list", "query", "inspect", "read", "status"];
 
-const IRREVERSIBLE_FINANCIAL_RE = /^(wallet\.|agenc\.(?:create|claim|complete|submit|transfer|register|stake|reward)|system\.wallet)/i;
+const IRREVERSIBLE_FINANCIAL_RE = /^(wallet\.|agenc\.(?:create|claim|complete|submit|transfer|register|stake|reward)|system\.wallet|jupiter\.(?:executeSwap|transferSol|transferToken)$|.*\.(?:executeSwap|transferSol|transferToken)$)/i;
 const DESTRUCTIVE_SIDE_EFFECT_RE = /(?:delete|destroy|drop|remove|revoke|terminate|kill|stop|cancel|reset|overwrite|truncate)/i;
 const SECRET_ACCESS_RE = /^(system\.bash|desktop\.bash|system\.evaluateJs|system\.sandbox(?:Start|Exec|Stop)|system\.processStart|desktop\.process_start)/i;
 const NETWORK_OPEN_WORLD_RE = /^(system\.http|system\.remoteJob|system\.research|system\.server|desktop\.bash|system\.bash|mcp\.)/i;

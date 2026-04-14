@@ -36,6 +36,22 @@ describe("tool-governance", () => {
     expect(classified.riskScore).toBe(0.95);
   });
 
+  it("classifies skill-based token swaps and transfers as irreversible financial actions", () => {
+    for (const toolName of [
+      "jupiter.executeSwap",
+      "jupiter.transferSol",
+      "jupiter.transferToken",
+      "defi.transferToken",
+    ]) {
+      const classified = classifyToolGovernance(toolName, {
+        amount: "1000",
+      });
+
+      expect(classified.policyClass).toBe("irreversible_financial_action");
+      expect(classified.riskScore).toBe(0.95);
+    }
+  });
+
   it("builds a policy action with explicit scope", () => {
     const action = buildToolPolicyAction({
       toolName: "system.processStart",
