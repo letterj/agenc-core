@@ -14,14 +14,6 @@ export const MAX_URL_PREVIEW_CHARS = 80;
 export const MAX_BASH_OUTPUT_CHARS = 100_000;
 /** Max chars for command preview in tool summaries. */
 export const MAX_COMMAND_PREVIEW_CHARS = 60;
-/**
- * Max consecutive identical failing tool calls before the loop is broken.
- * When the LLM calls the same tool with the same arguments and gets an error
- * N times in a row, we inject a hint after (N-1) and break after N.
- */
-export const MAX_CONSECUTIVE_IDENTICAL_FAILURES = 3;
-/** Break tool loop after N rounds where every tool call failed. */
-export const MAX_CONSECUTIVE_ALL_FAILED_ROUNDS = 3;
 export const RECOVERY_HINT_PREFIX = "Tool recovery hint:";
 export const SHELL_BUILTIN_COMMANDS = new Set([
   "set",
@@ -106,14 +98,6 @@ export const MAX_ADAPTIVE_TOOL_ROUNDS = 0;
 /** Default minimum verifier confidence for accepting subagent outputs. */
 /** Default max rounds for verifier/critique loops (initial round included). */
 export const DEFAULT_SUBAGENT_VERIFIER_MAX_ROUNDS = 2;
-/** Break no-progress loops after repeated semantically equivalent rounds. */
-export const MAX_CONSECUTIVE_SEMANTIC_DUPLICATE_ROUNDS = 2;
-/** Default repeated-failure threshold before opening session breaker. */
-export const DEFAULT_TOOL_FAILURE_BREAKER_THRESHOLD = 5;
-/** Default rolling window for repeated-failure breaker accounting. */
-export const DEFAULT_TOOL_FAILURE_BREAKER_WINDOW_MS = 300_000;
-/** Default cooldown once repeated-failure breaker opens. */
-export const DEFAULT_TOOL_FAILURE_BREAKER_COOLDOWN_MS = 120_000;
 /** Keep raw tool image payloads out of model replay by default. */
 export const ENABLE_TOOL_IMAGE_REPLAY = false;
 

@@ -5,7 +5,7 @@
  */
 
 import type { LLMToolCall, LLMMessage, ToolHandler } from "./types.js";
-import type { ToolCallRecord, ToolCallAction, ToolLoopState, RecoveryHint, LLMRetryPolicyOverrides } from "./chat-executor-types.js";
+import type { ToolCallRecord, ToolCallAction, RecoveryHint, LLMRetryPolicyOverrides } from "./chat-executor-types.js";
 import type { LLMRetryPolicyMatrix } from "./policy.js";
 import { classifyVerificationProbeResult } from "../gateway/verifier-probes.js";
 import { resolveRuntimeTimeoutMs } from "./runtime-limit-policy.js";
@@ -18,12 +18,8 @@ import {
   SAFE_TOOL_RETRY_PREFIXES,
   MAX_TOOL_CALL_ARGUMENT_CHARS,
   MAX_TOOL_CALL_ARGUMENT_PREVIEW_CHARS,
-  MAX_CONSECUTIVE_IDENTICAL_FAILURES,
-  MAX_CONSECUTIVE_ALL_FAILED_ROUNDS,
-  MAX_CONSECUTIVE_SEMANTIC_DUPLICATE_ROUNDS,
   RECOVERY_HINT_PREFIX,
 } from "./chat-executor-constants.js";
-import { buildSemanticToolCallKey } from "./chat-executor-recovery.js";
 import { safeStringify } from "../tools/types.js";
 
 const NON_JSON_FAILURE_PREFIXES = [
@@ -1061,100 +1057,6 @@ export async function executeToolWithRetry(
     durationMs,
     finalToolTimeoutMs,
   };
-}
-
-/** Update loop-state consecutive failure tracking. */
-export function trackToolCallFailureState(
-  toolFailed: boolean,
-  semanticToolKey: string,
-  loopState: ToolLoopState,
-): void {
-  const failKey = toolFailed ? semanticToolKey : "";
-  if (toolFailed && failKey === loopState.lastFailKey) {
-    loopState.consecutiveFailCount++;
-  } else {
-    loopState.lastFailKey = failKey;
-    loopState.consecutiveFailCount = toolFailed ? 1 : 0;
-  }
-}
-
-// ============================================================================
-// Stuck-loop detection (extracted from executeToolCallLoop)
-// ============================================================================
-
-/** Mutable counters for cross-round stuck detection. */
-export interface RoundStuckState {
-  consecutiveAllFailedRounds: number;
-  lastRoundSemanticKey: string;
-  consecutiveSemanticDuplicateRounds: number;
-}
-
-/** Result of stuck-loop detection check. */
-interface StuckDetectionResult {
-  readonly shouldBreak: boolean;
-  readonly reason?: string;
-}
-
-/** Check for stuck tool loop patterns across rounds. */
-export function checkToolLoopStuckDetection(
-  roundCalls: readonly ToolCallRecord[],
-  loopState: ToolLoopState,
-  stuckState: RoundStuckState,
-): StuckDetectionResult {
-  // Per-call consecutive identical failure check.
-  if (loopState.consecutiveFailCount >= MAX_CONSECUTIVE_IDENTICAL_FAILURES) {
-    return {
-      shouldBreak: true,
-      reason: "Detected repeated semantically-equivalent failing tool calls",
-    };
-  }
-
-  if (roundCalls.length === 0) return { shouldBreak: false };
-
-  const roundFailures = roundCalls.filter((call) =>
-    didToolCallFail(call.isError, call.result),
-  ).length;
-  if (roundFailures === roundCalls.length) {
-    stuckState.consecutiveAllFailedRounds++;
-  } else {
-    stuckState.consecutiveAllFailedRounds = 0;
-  }
-  if (stuckState.consecutiveAllFailedRounds >= MAX_CONSECUTIVE_ALL_FAILED_ROUNDS) {
-    return {
-      shouldBreak: true,
-      reason: `All tool calls failed for ${MAX_CONSECUTIVE_ALL_FAILED_ROUNDS} consecutive rounds`,
-    };
-  }
-
-  // Semantic duplicate detection — catches loops where the model makes
-  // identical tool calls regardless of success/failure.  Previously this
-  // only fired when every call in the round failed, which let successful
-  // identical writes (same file, same content) loop forever.
-  const roundSemanticKey = roundCalls
-    .map((call) => buildSemanticToolCallKey(call.name, call.args))
-    .sort()
-    .join("|");
-  if (
-    roundSemanticKey.length > 0 &&
-    roundSemanticKey === stuckState.lastRoundSemanticKey
-  ) {
-    stuckState.consecutiveSemanticDuplicateRounds++;
-  } else {
-    stuckState.consecutiveSemanticDuplicateRounds = 0;
-  }
-  stuckState.lastRoundSemanticKey = roundSemanticKey;
-  if (
-    stuckState.consecutiveSemanticDuplicateRounds >
-    MAX_CONSECUTIVE_SEMANTIC_DUPLICATE_ROUNDS
-  ) {
-    return {
-      shouldBreak: true,
-      reason:
-        "Detected repeated semantically equivalent tool rounds with no material progress",
-    };
-  }
-
-  return { shouldBreak: false };
 }
 
 /** Build recovery hint messages for injection after a tool round. */

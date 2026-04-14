@@ -183,7 +183,6 @@ export function createChatExecutor(
     toolCallTimeoutMs: llmConfig?.toolCallTimeoutMs,
     requestTimeoutMs: llmConfig?.requestTimeoutMs,
     retryPolicyMatrix: llmConfig?.retryPolicy,
-    toolFailureCircuitBreaker: llmConfig?.toolFailureCircuitBreaker,
     resolveHostToolingProfile: params.resolveHostToolingProfile,
     resolveHostWorkspaceRoot: params.resolveHostWorkspaceRoot,
     pipelineExecutor: params.pipelineExecutor,

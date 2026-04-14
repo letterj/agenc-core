@@ -1748,51 +1748,6 @@ function validateAutonomySection(autonomy: unknown, errors: string[]): void {
   }
 }
 
-function validateLlmToolFailureCircuitBreakerSection(
-  breakerValue: unknown,
-  errors: string[],
-): void {
-  if (breakerValue === undefined) return;
-  if (!isRecord(breakerValue)) {
-    errors.push("llm.toolFailureCircuitBreaker must be an object");
-    return;
-  }
-
-  if (
-    breakerValue.enabled !== undefined &&
-    typeof breakerValue.enabled !== "boolean"
-  ) {
-    errors.push("llm.toolFailureCircuitBreaker.enabled must be a boolean");
-  }
-  if (breakerValue.threshold !== undefined) {
-    requireIntRange(
-      breakerValue.threshold,
-      "llm.toolFailureCircuitBreaker.threshold",
-      2,
-      128,
-      errors,
-    );
-  }
-  if (breakerValue.windowMs !== undefined) {
-    requireIntRange(
-      breakerValue.windowMs,
-      "llm.toolFailureCircuitBreaker.windowMs",
-      1_000,
-      3_600_000,
-      errors,
-    );
-  }
-  if (breakerValue.cooldownMs !== undefined) {
-    requireIntRange(
-      breakerValue.cooldownMs,
-      "llm.toolFailureCircuitBreaker.cooldownMs",
-      1_000,
-      3_600_000,
-      errors,
-    );
-  }
-}
-
 function validateLlmRetryPolicySection(
   retryPolicyValue: unknown,
   errors: string[],
@@ -2714,7 +2669,6 @@ function validateLlmSection(llm: unknown, errors: string[]): void {
     );
   }
 
-  validateLlmToolFailureCircuitBreakerSection(llm.toolFailureCircuitBreaker, errors);
   validateLlmRetryPolicySection(llm.retryPolicy, errors);
 
   if (llm.maxTokens !== undefined) {

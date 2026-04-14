@@ -61,7 +61,6 @@ import {
   type RuntimeRunClass,
 } from "./run-budget.js";
 import { trackTokenUsage } from "./chat-executor-state.js";
-import type { ToolFailureCircuitBreaker } from "./tool-failure-circuit-breaker.js";
 import type {
   ChatCallUsageRecord,
   CooldownEntry,
@@ -158,7 +157,6 @@ export interface CallModelForPhaseDependencies {
   readonly sessionTokenBudget: number | undefined;
   readonly sessionCompactionThreshold: number | undefined;
   readonly maxTrackedSessions: number;
-  readonly toolFailureBreaker: ToolFailureCircuitBreaker;
 }
 
 /**
@@ -452,7 +450,6 @@ export async function callModelForPhase(
     ctx.sessionId,
     next.response.usage.totalTokens,
     deps.maxTrackedSessions,
-    deps.toolFailureBreaker,
   );
   recordRuntimeModelCall({
     policy: deps.economicsPolicy,

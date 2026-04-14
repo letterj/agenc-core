@@ -1700,12 +1700,6 @@ describe("config loading", () => {
           maxFailureBudgetPerRequest: 6,
           toolCallTimeoutMs: 120_000,
           requestTimeoutMs: 0,
-          toolFailureCircuitBreaker: {
-            enabled: true,
-            threshold: 6,
-            windowMs: 300_000,
-            cooldownMs: 120_000,
-          },
           retryPolicy: {
             timeout: {
               maxRetries: 1,
@@ -1737,12 +1731,6 @@ describe("config loading", () => {
           maxFailureBudgetPerRequest: -1,
           toolCallTimeoutMs: 100,
           requestTimeoutMs: 1_000,
-          toolFailureCircuitBreaker: {
-            enabled: "yes" as unknown as boolean,
-            threshold: 1,
-            windowMs: 100,
-            cooldownMs: 100,
-          },
           retryPolicy: {
             made_up: {},
             timeout: {
@@ -1779,18 +1767,6 @@ describe("config loading", () => {
     );
     expect(result.errors).toContain(
       "llm.requestTimeoutMs must be 0 or an integer between 5000 and 7200000",
-    );
-    expect(result.errors).toContain(
-      "llm.toolFailureCircuitBreaker.enabled must be a boolean",
-    );
-    expect(result.errors).toContain(
-      "llm.toolFailureCircuitBreaker.threshold must be an integer between 2 and 128",
-    );
-    expect(result.errors).toContain(
-      "llm.toolFailureCircuitBreaker.windowMs must be an integer between 1000 and 3600000",
-    );
-    expect(result.errors).toContain(
-      "llm.toolFailureCircuitBreaker.cooldownMs must be an integer between 1000 and 3600000",
     );
     expect(result.errors).toContain(
       "llm.retryPolicy.made_up is not a recognized failure class",

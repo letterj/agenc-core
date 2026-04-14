@@ -104,20 +104,30 @@ export const SESSION_ID_ARG = "__agencSessionId";
  * This map is intentionally NOT exposed via tool args. Mutation
  * happens via the helpers below; tools never see the underlying Set.
  */
-const sessionReadState = new Map<string, Set<string>>();
+interface SessionReadSnapshot {
+  readonly content?: string;
+  readonly timestamp?: number;
+}
+
+const sessionReadState = new Map<string, Map<string, SessionReadSnapshot>>();
 
 export function recordSessionRead(
   sessionId: string | undefined,
   canonicalPath: string,
+  snapshot?: SessionReadSnapshot,
 ): void {
   if (!sessionId || sessionId.trim().length === 0) return;
   if (!canonicalPath || canonicalPath.trim().length === 0) return;
-  let set = sessionReadState.get(sessionId);
-  if (!set) {
-    set = new Set();
-    sessionReadState.set(sessionId, set);
+  let fileMap = sessionReadState.get(sessionId);
+  if (!fileMap) {
+    fileMap = new Map();
+    sessionReadState.set(sessionId, fileMap);
   }
-  set.add(canonicalPath);
+  const previous = fileMap.get(canonicalPath);
+  fileMap.set(canonicalPath, {
+    ...(previous ?? {}),
+    ...(snapshot ?? {}),
+  });
 }
 
 export function hasSessionRead(
@@ -125,9 +135,18 @@ export function hasSessionRead(
   canonicalPath: string,
 ): boolean {
   if (!sessionId || sessionId.trim().length === 0) return false;
-  const set = sessionReadState.get(sessionId);
-  if (!set) return false;
-  return set.has(canonicalPath);
+  const fileMap = sessionReadState.get(sessionId);
+  if (!fileMap) return false;
+  return fileMap.has(canonicalPath);
+}
+
+export function getSessionReadSnapshot(
+  sessionId: string | undefined,
+  canonicalPath: string,
+): SessionReadSnapshot | undefined {
+  if (!sessionId || sessionId.trim().length === 0) return undefined;
+  const fileMap = sessionReadState.get(sessionId);
+  return fileMap?.get(canonicalPath);
 }
 
 /**
@@ -666,6 +685,30 @@ function normalizeEditStrings(
   };
 }
 
+function getFileTimestampMs(fileStats: { mtimeMs?: number }): number | undefined {
+  return typeof fileStats.mtimeMs === "number" && Number.isFinite(fileStats.mtimeMs)
+    ? fileStats.mtimeMs
+    : undefined;
+}
+
+function hasFileChangedSinceSnapshot(params: {
+  readonly snapshot: SessionReadSnapshot | undefined;
+  readonly currentTimestamp: number | undefined;
+  readonly currentContent: string;
+}): boolean {
+  if (
+    params.snapshot?.timestamp === undefined ||
+    params.snapshot.content === undefined ||
+    params.currentTimestamp === undefined
+  ) {
+    return false;
+  }
+  if (params.currentTimestamp <= params.snapshot.timestamp) {
+    return false;
+  }
+  return params.currentContent !== params.snapshot.content;
+}
+
 /** Detect if file content is likely binary (contains null bytes). */
 function isBinaryContent(buffer: Buffer): boolean {
   for (let i = 0; i < Math.min(buffer.length, 8192); i++) {
@@ -747,7 +790,10 @@ function createReadFileTool(
         // subsequent system.writeFile / system.editFile calls on this
         // path satisfy the Read-before-Write rule. See PR #314 and
         // the SESSION_ID_ARG comment for the rationale.
-        recordSessionRead(resolveSessionId(args), resolved!);
+        recordSessionRead(resolveSessionId(args), resolved!, {
+          content: binary ? undefined : buffer.toString("utf-8"),
+          timestamp: getFileTimestampMs(fileStats),
+        });
 
         return {
           content: safeStringify({
@@ -834,16 +880,30 @@ function createWriteFileTool(
           // ENOENT — file does not exist yet, this is a creation, no
           // prior read required.
         }
-        if (
-          targetExists &&
-          sessionId !== undefined &&
-          !hasSessionRead(sessionId, resolved!)
-        ) {
+        const readSnapshot = getSessionReadSnapshot(sessionId, resolved!);
+        if (targetExists && sessionId !== undefined && !hasSessionRead(sessionId, resolved!)) {
           return errorResult(
             `File has not been read yet. Read it first before writing to it. ` +
               `Call system.readFile on "${args.path}" before calling system.writeFile, ` +
               `OR prefer system.editFile (str_replace semantics) for incremental edits.`,
           );
+        }
+
+        if (targetExists && readSnapshot?.timestamp !== undefined) {
+          const existingBuffer = await readFile(resolved!);
+          const existingContent = existingBuffer.toString("utf-8");
+          const existingStat = await stat(resolved!);
+          if (
+            hasFileChangedSinceSnapshot({
+              snapshot: readSnapshot,
+              currentTimestamp: getFileTimestampMs(existingStat),
+              currentContent: existingContent,
+            })
+          ) {
+            return errorResult(
+              `File has been modified since it was last read. Read "${args.path}" again before writing to it.`,
+            );
+          }
         }
 
         const encoding = (args.encoding as string) || "utf-8";
@@ -888,7 +948,12 @@ function createWriteFileTool(
         // Successful write counts as the "current state" the model has
         // seen — record the path so subsequent edits to the same file
         // in the same session don't require a redundant readFile.
-        recordSessionRead(sessionId, resolved!);
+        const updatedStat = await stat(resolved!).catch(() => undefined);
+        recordSessionRead(sessionId, resolved!, {
+          content:
+            encoding === "base64" ? undefined : data.toString("utf-8"),
+          timestamp: getFileTimestampMs(updatedStat ?? {}) ?? Date.now(),
+        });
 
         return {
           content: safeStringify({
@@ -1109,10 +1174,8 @@ function createEditFileTool(
         // pattern). Same rule as system.writeFile: the model must have
         // called system.readFile on this path in the current session.
         const sessionId = resolveSessionId(args);
-        if (
-          sessionId !== undefined &&
-          !hasSessionRead(sessionId, resolved!)
-        ) {
+        const readSnapshot = getSessionReadSnapshot(sessionId, resolved!);
+        if (sessionId !== undefined && !hasSessionRead(sessionId, resolved!)) {
           return errorResult(
             `File has not been read yet. Read it first before editing it. ` +
               `Call system.readFile on "${args.path}" before calling system.editFile. ` +
@@ -1133,6 +1196,17 @@ function createEditFileTool(
           );
         }
         const existingContent = existingBuffer.toString("utf-8");
+        if (
+          hasFileChangedSinceSnapshot({
+            snapshot: readSnapshot,
+            currentTimestamp: getFileTimestampMs(fileStats),
+            currentContent: existingContent,
+          })
+        ) {
+          return errorResult(
+            `File has been modified since it was last read. Read "${args.path}" again before editing it.`,
+          );
+        }
 
         const requestedPath = args.path as string;
         const { actualOldString, actualNewString } = normalizeEditStrings(
@@ -1199,7 +1273,11 @@ function createEditFileTool(
 
         // Record the post-edit content as "read" so the next edit in
         // this session does not require a redundant readFile.
-        recordSessionRead(sessionId, resolved!);
+        const updatedStat = await stat(resolved!).catch(() => undefined);
+        recordSessionRead(sessionId, resolved!, {
+          content: newContent,
+          timestamp: getFileTimestampMs(updatedStat ?? {}) ?? Date.now(),
+        });
 
         return {
           content: safeStringify({

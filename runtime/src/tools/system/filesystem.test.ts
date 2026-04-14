@@ -645,6 +645,17 @@ describe("system.editFile", () => {
     mockReadFile.mockResolvedValue(buf);
   }
 
+  function setupExistingFileWithMtime(content: string, mtimeMs: number): void {
+    const buf = Buffer.from(content);
+    mockStat.mockResolvedValue({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: buf.length,
+      mtimeMs,
+    } as never);
+    mockReadFile.mockResolvedValue(buf);
+  }
+
   function readFirst(path: string, sessionId = "session-edit"): Promise<unknown> {
     return readTool.execute({ path, __agencSessionId: sessionId });
   }
@@ -795,6 +806,28 @@ describe("system.editFile", () => {
     expect(result.isError).toBe(true);
     expect(parseResult(result).error).toContain("not found");
     expect(parseResult(result).error).toContain("Re-read the file");
+  });
+
+  it("rejects edit when the file changed after it was read", async () => {
+    const before = `int main(void) { return 0; }\n`;
+    const after = `int main(void) { return 1; }\n`;
+    setupExistingFileWithMtime(before, 1000);
+    await readFirst("/workspace/main.c");
+
+    setupExistingFileWithMtime(after, 2000);
+
+    const result = await tool.execute({
+      path: "/workspace/main.c",
+      old_string: "return 0",
+      new_string: "return 2",
+      __agencSessionId: "session-edit",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(parseResult(result).error).toContain(
+      "modified since it was last read",
+    );
+    expect(mockWriteFile).not.toHaveBeenCalled();
   });
 
   it("normalizes curly quotes before matching and preserves quote style", async () => {

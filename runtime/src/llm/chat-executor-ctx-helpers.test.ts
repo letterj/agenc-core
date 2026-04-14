@@ -86,9 +86,11 @@ function createParams(
 
 describe("ChatExecutor ctx-helpers behavior", () => {
   describe("tool loop stop reason and recovery hints", () => {
-    it("breaks loop when same tool call fails consecutively", async () => {
+    it("does not hard-stop the loop just because the same tool call keeps failing", async () => {
       // Simulate the LLM calling desktop.bash with "mkdir" (no directory),
-      // which returns exitCode:1 every time. Should stop after 3 identical failures.
+      // which returns exitCode:1 every time. Claude-style behavior is to
+      // let the normal runtime round budget stop the loop rather than a
+      // local repeated-failure fuse.
       const toolHandler = vi
         .fn()
         .mockResolvedValue('{"exitCode":1,"stdout":"","stderr":"usage: mkdir dir"}');
@@ -120,8 +122,9 @@ describe("ChatExecutor ctx-helpers behavior", () => {
         }),
       );
 
-      // Should have stopped after 3 identical failures, not all 10 rounds
-      expect(result.toolCalls.length).toBe(3);
+      expect(result.stopReason).toBe("tool_calls");
+      expect(result.stopReasonDetail).toContain("Reached max tool rounds");
+      expect(result.toolCalls.length).toBe(11);
       expect(result.toolCalls.every((tc) => tc.name === "desktop.bash")).toBe(
         true,
       );
@@ -1070,8 +1073,7 @@ describe("ChatExecutor ctx-helpers behavior", () => {
       expect(String(injectedHint?.content)).toContain("/tmp");
     });
 
-    it("emits a terminal trace event when repeated failed rounds stop the tool loop", async () => {
-      const traceEvents: Array<Record<string, unknown>> = [];
+    it("lets repeated failed rounds run until the normal round budget stops the loop", async () => {
       let callCount = 0;
       const toolHandler = vi
         .fn()
@@ -1103,28 +1105,13 @@ describe("ChatExecutor ctx-helpers behavior", () => {
       });
       const result = await executor.execute(
         createParams({
-          trace: {
-            onExecutionTraceEvent: (event) =>
-              traceEvents.push(event as unknown as Record<string, unknown>),
-          },
+          trace: {},
         }),
       );
 
-      expect(result.stopReason).toBe("no_progress");
-      expect(traceEvents).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "tool_loop_stuck_detected",
-            phase: "tool_followup",
-            payload: expect.objectContaining({
-              reason: expect.stringContaining("failing tool calls"),
-              roundToolCallCount: 1,
-              roundFailureCount: 1,
-              consecutiveFailCount: 3,
-            }),
-          }),
-        ]),
-      );
+      expect(result.stopReason).toBe("tool_calls");
+      expect(result.stopReasonDetail).toContain("Reached max tool rounds");
+      expect(toolHandler).toHaveBeenCalledTimes(10);
     });
   });
 });

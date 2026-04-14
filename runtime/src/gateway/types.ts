@@ -62,13 +62,6 @@ export interface GatewayLLMConfig extends LLMXaiCapabilitySurface {
       circuitBreakerEligible?: boolean;
     }
   >>;
-  /** Session-level circuit breaker for repeated failing tool patterns. */
-  toolFailureCircuitBreaker?: {
-    enabled?: boolean;
-    threshold?: number;
-    windowMs?: number;
-    cooldownMs?: number;
-  };
   /** Maximum token budget per session. 0 or undefined = unlimited. */
   sessionTokenBudget?: number;
   /** Maximum tool call rounds per message. 0 or undefined = unlimited. */

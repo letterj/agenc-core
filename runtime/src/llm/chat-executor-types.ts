@@ -174,7 +174,6 @@ type ChatExecutionTraceEventType =
   | "stop_hook_retry_requested"
   | "stop_gate_intervention"
   | "tool_arguments_invalid"
-  | "tool_loop_stuck_detected"
   | "tool_dispatch_finished"
   | "tool_dispatch_started"
   | "tool_protocol_opened"
@@ -400,17 +399,6 @@ export type LLMRetryPolicyOverrides = Partial<{
   [K in LLMFailureClass]: Partial<LLMRetryPolicyRule>;
 }>;
 
-export interface ToolFailureCircuitBreakerConfig {
-  /** Enable per-session tool failure circuit breaker (default: true). */
-  readonly enabled?: boolean;
-  /** Repeated semantic failure threshold before opening breaker (default: 5). */
-  readonly threshold?: number;
-  /** Rolling window for counting repeated failures in ms (default: 300_000). */
-  readonly windowMs?: number;
-  /** Breaker open cooldown in ms (default: 120_000). */
-  readonly cooldownMs?: number;
-}
-
 /** Configuration for ChatExecutor construction. */
 export interface ChatExecutorConfig {
   /** Ordered providers — first is primary, rest are fallbacks. */
@@ -521,8 +509,6 @@ export interface ChatExecutorConfig {
   readonly requestTimeoutMs?: number;
   /** Failure-class retry policy overrides (merged with defaults). */
   readonly retryPolicyMatrix?: LLMRetryPolicyOverrides;
-  /** Session-level breaker for repeated failing tool patterns. */
-  readonly toolFailureCircuitBreaker?: ToolFailureCircuitBreakerConfig;
   /** Optional live host-tooling profile used to constrain planner output. */
   readonly resolveHostToolingProfile?: () => HostToolingProfile | null;
   /** Optional canonical host workspace root used to ground planner paths. */
@@ -566,17 +552,6 @@ export interface ChatExecutorConfig {
 export interface CooldownEntry {
   availableAt: number;
   failures: number;
-}
-
-export interface SessionToolFailurePattern {
-  count: number;
-  lastAt: number;
-}
-
-export interface SessionToolFailureCircuitState {
-  openUntil: number;
-  reason?: string;
-  patterns: Map<string, SessionToolFailurePattern>;
 }
 
 export interface FallbackResult {
@@ -623,8 +598,6 @@ export interface ToolLoopState {
   remainingToolImageChars: number;
   activeRoutedToolSet: Set<string> | null;
   expandAfterRound: boolean;
-  lastFailKey: string;
-  consecutiveFailCount: number;
 }
 
 /** Control flow action returned by executeSingleToolCall(). */

@@ -25,7 +25,6 @@ import {
   isRuntimeLimitReached,
 } from "./runtime-limit-policy.js";
 import type { CooldownEntry } from "./chat-executor-types.js";
-import type { ToolFailureCircuitBreaker } from "./tool-failure-circuit-breaker.js";
 
 /**
  * Compute the list of provider names that are currently in
@@ -96,7 +95,6 @@ export function trackTokenUsage(
   sessionId: string,
   tokens: number,
   maxTrackedSessions: number,
-  toolFailureBreaker: ToolFailureCircuitBreaker,
 ): void {
   const current = sessionTokens.get(sessionId) ?? 0;
 
@@ -109,7 +107,6 @@ export function trackTokenUsage(
     const oldest = sessionTokens.keys().next().value;
     if (oldest !== undefined) {
       sessionTokens.delete(oldest);
-      toolFailureBreaker.clearSession(oldest);
     }
   }
 }

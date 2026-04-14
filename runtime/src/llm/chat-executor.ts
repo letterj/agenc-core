@@ -69,14 +69,10 @@ import {
   DEFAULT_TOOL_CALL_TIMEOUT_MS,
   DEFAULT_REQUEST_TIMEOUT_MS,
   MAX_ADAPTIVE_TOOL_ROUNDS,
-  DEFAULT_TOOL_FAILURE_BREAKER_THRESHOLD,
-  DEFAULT_TOOL_FAILURE_BREAKER_WINDOW_MS,
-  DEFAULT_TOOL_FAILURE_BREAKER_COOLDOWN_MS,
 } from "./chat-executor-constants.js";
 import {
   resolveRetryPolicyMatrix,
 } from "./chat-executor-tool-utils.js";
-import { ToolFailureCircuitBreaker } from "./tool-failure-circuit-breaker.js";
 import {
   type HistoryCompactionDependencies,
 } from "./chat-executor-history-compaction.js";
@@ -112,7 +108,6 @@ export type {
   ChatExecutorResult,
   DeterministicPipelineExecutor,
   LLMRetryPolicyOverrides,
-  ToolFailureCircuitBreakerConfig,
   ChatExecutorConfig,
 } from "./chat-executor-types.js";
 
@@ -152,7 +147,6 @@ export class ChatExecutor {
   private readonly toolCallTimeoutMs: number;
   private readonly requestTimeoutMs: number;
   private readonly retryPolicyMatrix: LLMRetryPolicyMatrix;
-  private readonly toolFailureBreaker: ToolFailureCircuitBreaker;
   private readonly resolveHostWorkspaceRoot?: () => string | null;
   private readonly economicsPolicy: RuntimeEconomicsPolicy;
   private readonly modelRoutingPolicy: ModelRoutingPolicy;
@@ -277,31 +271,6 @@ export class ChatExecutor {
       config.requestTimeoutMs,
     );
     this.retryPolicyMatrix = resolveRetryPolicyMatrix(config.retryPolicyMatrix);
-    this.toolFailureBreaker = new ToolFailureCircuitBreaker({
-      enabled: config.toolFailureCircuitBreaker?.enabled ?? true,
-      windowMs: Math.max(
-        1_000,
-        Math.floor(
-          config.toolFailureCircuitBreaker?.windowMs ??
-            DEFAULT_TOOL_FAILURE_BREAKER_WINDOW_MS,
-        ),
-      ),
-      threshold: Math.max(
-        2,
-        Math.floor(
-          config.toolFailureCircuitBreaker?.threshold ??
-            DEFAULT_TOOL_FAILURE_BREAKER_THRESHOLD,
-        ),
-      ),
-      cooldownMs: Math.max(
-        1_000,
-        Math.floor(
-          config.toolFailureCircuitBreaker?.cooldownMs ??
-            DEFAULT_TOOL_FAILURE_BREAKER_COOLDOWN_MS,
-        ),
-      ),
-      maxTrackedSessions: this.maxTrackedSessions,
-    });
     this.economicsPolicy = config.economicsPolicy ?? buildRuntimeEconomicsPolicy({
       sessionTokenBudget: this.sessionTokenBudget,
       plannerMaxTokens: this.plannerMaxTokens,
@@ -427,7 +396,6 @@ export class ChatExecutor {
       sessionTokenBudget: this.sessionTokenBudget,
       sessionCompactionThreshold: this.sessionCompactionThreshold,
       maxTrackedSessions: this.maxTrackedSessions,
-      toolFailureBreaker: this.toolFailureBreaker,
     };
   }
 
@@ -484,7 +452,6 @@ export class ChatExecutor {
       toolCallTimeoutMs: this.toolCallTimeoutMs,
       retryPolicyMatrix: this.retryPolicyMatrix,
       allowedTools: this.allowedTools,
-      toolFailureBreaker: this.toolFailureBreaker,
       contextWindowTokens: this.promptBudget.contextWindowTokens,
       runtimeContractFlags: this.runtimeContractFlags,
       ...(this.stopHookRuntime ? { stopHookRuntime: this.stopHookRuntime } : {}),
@@ -517,7 +484,6 @@ export class ChatExecutor {
   /** Reset token usage for a specific session. */
   resetSessionTokens(sessionId: string): void {
     this.sessionTokens.delete(sessionId);
-    this.toolFailureBreaker.clearSession(sessionId);
     for (const provider of this.providers) {
       provider.resetSessionState?.(sessionId);
     }
@@ -526,7 +492,6 @@ export class ChatExecutor {
   /** Clear all session token tracking. */
   clearAllSessionTokens(): void {
     this.sessionTokens.clear();
-    this.toolFailureBreaker.clearAll();
     for (const provider of this.providers) {
       provider.clearSessionState?.();
     }

@@ -32,10 +32,6 @@ import type {
   ToolCallAction,
   RecoveryHint,
 } from "./chat-executor-types.js";
-import type {
-  RoundStuckState,
-} from "./chat-executor-tool-utils.js";
-import type { ToolFailureCircuitBreaker } from "./tool-failure-circuit-breaker.js";
 import {
   MAX_TOOL_IMAGE_CHARS_BUDGET,
 } from "./chat-executor-constants.js";
@@ -44,25 +40,20 @@ import {
   isRuntimeLimitReached,
 } from "./runtime-limit-policy.js";
 import {
-  didToolCallFail,
   checkToolCallPermission,
   normalizeToolCallArguments,
   repairToolCallArgumentsFromMessageText,
   parseToolCallArguments,
   executeToolWithRetry,
   summarizeToolArgumentChanges,
-  trackToolCallFailureState,
-  checkToolLoopStuckDetection,
   buildToolLoopRecoveryMessages,
   buildRoutingExpansionMessage,
-  enrichToolResultMetadata,
 } from "./chat-executor-tool-utils.js";
 import {
   applyActiveRoutedToolNames,
   buildActiveRoutedToolSet,
 } from "./chat-executor-routing-state.js";
 import {
-  buildSemanticToolCallKey,
   buildRecoveryHints,
   preflightStaleCopiedCmakeHarnessInvocation,
 } from "./chat-executor-recovery.js";
@@ -477,7 +468,6 @@ export interface ToolLoopConfig {
   readonly toolCallTimeoutMs: number;
   readonly retryPolicyMatrix: LLMRetryPolicyMatrix;
   readonly allowedTools: Set<string> | null;
-  readonly toolFailureBreaker: ToolFailureCircuitBreaker;
   /**
    * The model's context window in tokens. Used to compute the
    * autocompact threshold as a percentage of the window
@@ -1091,23 +1081,6 @@ export async function executeSingleToolCall(
     abortRound = true;
   }
 
-  if (exec.toolFailed) {
-    const failKey = buildSemanticToolCallKey(toolCall.name, args);
-    const circuitReason = config.toolFailureBreaker.recordFailure(
-      ctx.sessionId,
-      failKey,
-      toolCall.name,
-    );
-    if (circuitReason) {
-      callbacks.setStopReason(ctx, "no_progress", circuitReason);
-      abortRound = true;
-      result = enrichToolResultMetadata(result, {
-        circuitBreaker: "open",
-        circuitBreakerReason: circuitReason,
-      });
-    }
-  }
-
   // Cut 5.3: apply per-tool result budget. When the budget config is
   // wired, oversized successful results are persisted to disk and
   // replaced with a placeholder pointing at the file path. Failed
@@ -1214,13 +1187,6 @@ export async function executeSingleToolCall(
     );
     abortRound = true;
   }
-
-  // Track consecutive semantic failures to detect stuck loops.
-  const semanticToolKey = buildSemanticToolCallKey(toolCall.name, args);
-  if (!exec.toolFailed) {
-    config.toolFailureBreaker.clearPattern(ctx.sessionId, semanticToolKey);
-  }
-  trackToolCallFailureState(exec.toolFailed, semanticToolKey, loopState);
 
   const promptToolContent = buildPromptToolContent(
     result,
@@ -1495,17 +1461,10 @@ export async function executeToolCallLoop(
 
   let rounds = 0;
   let effectiveMaxToolRounds = ctx.effectiveMaxToolRounds;
-  const stuckState: RoundStuckState = {
-    consecutiveAllFailedRounds: 0,
-    lastRoundSemanticKey: "",
-    consecutiveSemanticDuplicateRounds: 0,
-  };
   const loopState: ToolLoopState = {
     remainingToolImageChars: MAX_TOOL_IMAGE_CHARS_BUDGET,
     activeRoutedToolSet: null,
     expandAfterRound: false,
-    lastFailKey: "",
-    consecutiveFailCount: 0,
   };
 
   // Turn-end completion validation now shares one turn-local
@@ -1874,13 +1833,6 @@ export async function executeToolCallLoop(
       sealPendingToolProtocol(ctx, callbacks, "request_timeout");
       break;
     }
-    const activeCircuit = config.toolFailureBreaker.getActiveCircuit(ctx.sessionId);
-    if (activeCircuit) {
-      materializeResponseToolCalls(ctx, callbacks);
-      sealPendingToolProtocol(ctx, callbacks, "circuit_breaker");
-      callbacks.setStopReason(ctx, "no_progress", activeCircuit.reason);
-      break;
-    }
     if (isRuntimeLimitReached(rounds, effectiveMaxToolRounds)) {
       materializeResponseToolCalls(ctx, callbacks);
       sealPendingToolProtocol(ctx, callbacks, "max_tool_rounds");
@@ -2014,36 +1966,6 @@ export async function executeToolCallLoop(
     const roundCalls = ctx.allToolCalls.slice(roundToolCallStart);
     if (abortRound) {
       sealPendingToolProtocol(ctx, callbacks, "round_aborted");
-      break;
-    }
-
-    // Stuck-loop detection (consecutive failures, semantic duplicates).
-    const stuckResult = checkToolLoopStuckDetection(roundCalls, loopState, stuckState);
-    if (stuckResult.shouldBreak) {
-      const roundFailures = roundCalls.filter((call) =>
-        didToolCallFail(call.isError, call.result)
-      ).length;
-      callbacks.emitExecutionTrace(ctx, {
-        type: "tool_loop_stuck_detected",
-        phase: "tool_followup",
-        callIndex: ctx.callIndex,
-        payload: {
-          reason: stuckResult.reason,
-          roundToolCallCount: roundCalls.length,
-          roundFailureCount: roundFailures,
-          consecutiveFailCount: loopState.consecutiveFailCount,
-          consecutiveAllFailedRounds: stuckState.consecutiveAllFailedRounds,
-          consecutiveSemanticDuplicateRounds:
-            stuckState.consecutiveSemanticDuplicateRounds,
-        },
-      });
-      if (ctx.response) {
-        ctx.response = {
-          ...ctx.response,
-          content: "",
-        };
-      }
-      callbacks.setStopReason(ctx, "no_progress", stuckResult.reason);
       break;
     }
 
