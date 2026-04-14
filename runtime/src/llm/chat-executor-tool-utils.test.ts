@@ -199,7 +199,7 @@ describe("chat-executor-tool-utils", () => {
       expect(repaired.repairedFields).toEqual([]);
     });
 
-    it("removes model-invented agenc.createTask taskId when the prompt forbids it", () => {
+    it("does not repair raw agenc.createTask arguments", () => {
       const repaired = repairToolCallArgumentsFromMessageText(
         "agenc.createTask",
         {
@@ -218,12 +218,14 @@ describe("chat-executor-tool-utils", () => {
         description: "self test parser omitted task id after restart",
         reward: "10000000",
         requiredCapabilities: "1",
+        taskId: '{"description":"self',
+        constraintHash: '{"description":"self',
         validationMode: "auto",
       });
-      expect(repaired.repairedFields).toEqual(["constraintHash", "taskId"]);
+      expect(repaired.repairedFields).toEqual([]);
     });
 
-    it("normalizes human-friendly agenc.createTask arguments from model output", () => {
+    it("leaves human-friendly agenc.createTask arguments invalid", () => {
       const repaired = repairToolCallArgumentsFromMessageText(
         "agenc.createTask",
         {
@@ -237,21 +239,16 @@ describe("chat-executor-tool-utils", () => {
       );
 
       expect(repaired.args).toEqual({
-        description: "Write one fun fact about Solana devnet.",
         fullDescription: "Write one fun fact about Solana devnet.",
-        reward: "10000000",
-        requiredCapabilities: "2",
+        reward: "0.01",
+        requiredCapabilities: '["INFERENCE"]',
+        taskId: "random-tech-fact-001",
+        rewardMint: "So11111111111111111111111111111111111111112",
       });
-      expect(repaired.repairedFields).toEqual([
-        "taskId",
-        "rewardMint",
-        "description",
-        "reward",
-        "requiredCapabilities",
-      ]);
+      expect(repaired.repairedFields).toEqual([]);
     });
 
-    it("falls back to COMPUTE for tag-like agenc.createTask capabilities", () => {
+    it("does not fall back to COMPUTE for tag-like agenc.createTask capabilities", () => {
       const repaired = repairToolCallArgumentsFromMessageText(
         "agenc.createTask",
         {
@@ -264,13 +261,10 @@ describe("chat-executor-tool-utils", () => {
 
       expect(repaired.args).toEqual({
         description: "Random joke task",
-        reward: "1000000000",
-        requiredCapabilities: "1",
+        reward: "1 SOL",
+        requiredCapabilities: "meme, relationship, humor",
       });
-      expect(repaired.repairedFields).toEqual([
-        "reward",
-        "requiredCapabilities",
-      ]);
+      expect(repaired.repairedFields).toEqual([]);
     });
   });
 

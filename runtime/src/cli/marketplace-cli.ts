@@ -1073,9 +1073,10 @@ export async function runMarketTaskCreateCommand(
 
   try {
     const { program } = await createSignerProgramContext(options);
-    const createTaskOptions = options.jobSpecStoreDir
-      ? { jobSpecStoreDir: options.jobSpecStoreDir }
-      : undefined;
+    const createTaskOptions = {
+      ...(options.jobSpecStoreDir ? { jobSpecStoreDir: options.jobSpecStoreDir } : {}),
+      allowRawTaskCreation: true,
+    };
     const tool = createCreateTaskTool(program, silentLogger, createTaskOptions);
     const result = await tool.execute({
       description: options.description,

@@ -178,9 +178,9 @@ describe('ApprovalEngine', () => {
       expect(engine.requiresApproval('wallet.transfer', {})).toBeNull();
     });
 
-    it('matches agenc.createTask with reward > 1 SOL (lamports)', () => {
-      expect(engine.requiresApproval('agenc.createTask', { reward: 1_000_000_001 })).not.toBeNull();
-      expect(engine.requiresApproval('agenc.createTask', { reward: 1_000_000_000 })).toBeNull();
+    it('always requires approval for raw agenc.createTask', () => {
+      expect(engine.requiresApproval('agenc.createTask', { reward: 1 })).not.toBeNull();
+      expect(engine.requiresApproval('agenc.createTask', {})).not.toBeNull();
     });
 
     it('always requires approval for agenc.registerAgent', () => {
@@ -1063,9 +1063,9 @@ describe('ApprovalEngine', () => {
       expect(rule!.conditions!.minAmount).toBe(0.1);
     });
 
-    it('agenc.createTask has minAmount 1 SOL in lamports', () => {
+    it('agenc.createTask has no threshold condition', () => {
       const rule = DEFAULT_APPROVAL_RULES.find((r) => r.tool === 'agenc.createTask');
-      expect(rule!.conditions!.minAmount).toBe(1_000_000_000);
+      expect(rule!.conditions).toBeUndefined();
     });
 
     it('agenc.stakeReputation has minAmount 0.1 SOL in lamports', () => {

@@ -1245,7 +1245,9 @@ async function handleTasksCreate(
       }
     }
     const { program } = await createProgramContext(deps);
-    const tool = createCreateTaskTool(program, silentLogger);
+    const tool = createCreateTaskTool(program, silentLogger, {
+      allowRawTaskCreation: true,
+    });
     const result = await tool.execute(createArgs);
     if (result.isError) {
       send({ type: 'error', error: `Failed to create task: ${parseToolError(result)}`, id });

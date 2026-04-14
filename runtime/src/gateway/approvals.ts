@@ -303,8 +303,7 @@ export const DEFAULT_APPROVAL_RULES: readonly ApprovalRule[] = [
   },
   {
     tool: "agenc.createTask",
-    conditions: { minAmount: 1_000_000_000 },
-    description: "Task creation with reward exceeding 1 SOL",
+    description: "Raw marketplace task creation",
   },
   {
     tool: 'agenc.registerAgent',

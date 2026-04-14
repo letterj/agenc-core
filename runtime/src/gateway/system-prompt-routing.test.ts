@@ -61,7 +61,7 @@ You have broad access to this machine via the system.bash tool.`;
 describe("system prompt routing filter", () => {
   it("detects when routed tools still require protocol context", () => {
     expect(
-      hasProtocolToolRouting(["system.bash", "agenc.createTask"]),
+      hasProtocolToolRouting(["system.bash", "agenc.createTaskFromTemplate"]),
     ).toBe(true);
     expect(
       hasProtocolToolRouting(["system.bash", "social.sendMessage"]),
@@ -89,7 +89,7 @@ describe("system prompt routing filter", () => {
   it("preserves protocol sections when routed tools include protocol families", () => {
     const filtered = filterSystemPromptForToolRouting({
       systemPrompt: SYSTEM_PROMPT,
-      routedToolNames: ["system.bash", "agenc.createTask"],
+      routedToolNames: ["system.bash", "agenc.createTaskFromTemplate"],
     });
 
     expect(filtered).toContain("Solana:");
