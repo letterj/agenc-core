@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SqliteBackend } from "../../../src/memory/sqlite/backend.js";
 import { ChatExecutor } from "../../../src/llm/chat-executor.js";
+import { createPromptEnvelope } from "../../../src/llm/prompt-envelope.js";
 import type { LLMMessage, LLMProvider, LLMResponse } from "../../../src/llm/types.js";
 import {
   SessionManager,
@@ -183,7 +184,7 @@ describe("context compaction integration", () => {
         "Update AGENC.md from the compacted shell context and keep it accurate.",
       ),
       history: resumed.history,
-      systemPrompt: "You are a helpful assistant.",
+      promptEnvelope: createPromptEnvelope("You are a helpful assistant."),
       sessionId: "session-1",
       stateful,
       // After the regex pre-call classifier rip-out, implementation-class
