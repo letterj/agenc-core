@@ -2259,24 +2259,7 @@ export class DaemonManager {
       voiceBridge,
       memoryBackend,
       getSessionUsageSnapshot: (sessionId) => {
-        const contextWindowTokens =
-          this._resolvedContextWindowTokens ?? inferContextWindowTokens(config.llm);
-        const executor = this._chatExecutor;
-        if (!executor) {
-          return null;
-        }
-        return buildChatUsagePayload({
-          sessionId,
-          totalTokens: executor.getSessionTokenUsage(sessionId),
-          sessionTokenBudget: resolveSessionTokenBudget(
-            config.llm,
-            contextWindowTokens,
-          ),
-          compacted: false,
-          provider: config.llm?.provider,
-          model: config.llm?.model,
-          contextWindowTokens,
-        });
+        return this.buildSessionUsageSnapshot(sessionId, config.llm);
       },
       approvalEngine: approvalEngine ?? undefined,
       skillToggle,
@@ -5349,6 +5332,7 @@ export class DaemonManager {
       domain: "watch",
     });
     if (!admission.allowed) {
+      const usage = this.buildSessionUsageSnapshot(params.sessionId);
       return {
         session: {
           sessionId: params.continuity.sessionId,
@@ -5362,6 +5346,7 @@ export class DaemonManager {
           messageCount: params.continuity.messageCount,
           lastActiveAt: params.continuity.lastActiveAt,
         },
+        ...(usage ? { usage } : {}),
         repo: {
           available: false,
           unavailableReason: `watch cockpit held back: ${admission.reason}`,
@@ -5415,6 +5400,7 @@ export class DaemonManager {
     const verification =
       coerceVerificationSurfaceState(metadata.verificationSurfaceState) ??
       createIdleVerificationSurfaceState();
+    const usage = this.buildSessionUsageSnapshot(params.sessionId);
     return {
       session: {
         sessionId: params.continuity.sessionId,
@@ -5432,6 +5418,7 @@ export class DaemonManager {
         messageCount: params.continuity.messageCount,
         lastActiveAt: params.continuity.lastActiveAt,
       },
+      ...(usage ? { usage } : {}),
       repo,
       worktrees,
       review,
@@ -5439,6 +5426,31 @@ export class DaemonManager {
       approvals,
       ownership,
     };
+  }
+
+  private buildSessionUsageSnapshot(
+    sessionId: string,
+    llmConfig?: GatewayConfig["llm"],
+  ) {
+    const effectiveLlmConfig = llmConfig ?? this.gateway?.config?.llm;
+    const contextWindowTokens =
+      this._resolvedContextWindowTokens ?? inferContextWindowTokens(effectiveLlmConfig);
+    const executor = this._chatExecutor;
+    if (!executor) {
+      return null;
+    }
+    return buildChatUsagePayload({
+      sessionId,
+      totalTokens: executor.getSessionTokenUsage(sessionId),
+      sessionTokenBudget: resolveSessionTokenBudget(
+        effectiveLlmConfig,
+        contextWindowTokens,
+      ),
+      compacted: false,
+      provider: effectiveLlmConfig?.provider,
+      model: effectiveLlmConfig?.model,
+      contextWindowTokens,
+    });
   }
 
   private buildWatchCockpitApprovals(sessionId: string): WatchCockpitSnapshot["approvals"] {

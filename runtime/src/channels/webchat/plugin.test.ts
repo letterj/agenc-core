@@ -2035,6 +2035,13 @@ describe("WebChatChannel", () => {
               messageCount: continuity.messageCount,
               lastActiveAt: continuity.lastActiveAt,
             },
+            usage: {
+              sessionId: continuity.sessionId,
+              totalTokens: 2048,
+              budget: 16000,
+              compacted: false,
+              contextWindowTokens: 64000,
+            },
             repo: { available: false, unavailableReason: "test" },
             worktrees: { available: false, entries: [], unavailableReason: "test" },
             review: {
@@ -2078,6 +2085,10 @@ describe("WebChatChannel", () => {
             session: expect.objectContaining({
               sessionId: "session-continuity",
               workflowStage: "review",
+            }),
+            usage: expect.objectContaining({
+              totalTokens: 2048,
+              contextWindowTokens: 64000,
             }),
             approvals: { count: 0, entries: [] },
           }),

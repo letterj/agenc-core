@@ -168,6 +168,42 @@ test("dispatchOperatorSurfaceEvent seeds usage summary from session payloads", (
   assert.equal(state.lastUsageSummary, "1200 total / 64000 ctx");
 });
 
+test("dispatchOperatorSurfaceEvent refreshes usage summary from watch cockpit payloads", () => {
+  const { api, state } = createHarness({
+    api: {
+      summarizeUsage: (value) => `${value.totalTokens} total / ${value.contextWindowTokens} ctx`,
+    },
+  });
+
+  dispatchOperatorSurfaceEvent(
+    {
+      family: "status",
+      type: "watch.cockpit",
+      payload: {
+        session: { sessionId: "session-usage" },
+        usage: {
+          totalTokens: 4321,
+          contextWindowTokens: 256000,
+        },
+      },
+      payloadRecord: {
+        session: { sessionId: "session-usage" },
+        usage: {
+          totalTokens: 4321,
+          contextWindowTokens: 256000,
+        },
+      },
+      payloadList: null,
+      isSessionScoped: true,
+      message: { error: undefined },
+    },
+    null,
+    api,
+  );
+
+  assert.equal(state.lastUsageSummary, "4321 total / 256000 ctx");
+});
+
 test("dispatchOperatorSurfaceEvent resumes sessions by restoring history and inspecting the run", () => {
   const { api, state, calls } = createHarness({
     state: { bootstrapReady: true },

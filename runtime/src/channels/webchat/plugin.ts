@@ -1233,10 +1233,12 @@ export class WebChatChannel
       return;
     }
     if (!this.deps.getWatchCockpitSnapshot) {
+      const usage = this.deps.getSessionUsageSnapshot?.(targetSessionId) ?? null;
       send({
         type: "watch.cockpit",
         payload: {
           session: sessionRecord,
+          ...(usage ? { usage } : {}),
           repo: { available: false, unavailableReason: "cockpit unavailable" },
           worktrees: { available: false, entries: [], unavailableReason: "cockpit unavailable" },
           review: { status: "idle", source: "local", startedAt: Date.now(), updatedAt: Date.now() },

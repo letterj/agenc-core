@@ -969,6 +969,7 @@ function handleStatusSurfaceEvent(surfaceEvent, state, api) {
     state.cockpit = payload;
     state.cockpitUpdatedAt = api.now();
     state.cockpitFingerprint = api.cockpitFeedFingerprint(payload);
+    syncUsageSummaryFromPayload(state, api, payload);
     if (typeof payload?.session?.workflowStage === "string") {
       state.workflowStage = payload.session.workflowStage;
       state.workflowStageUpdatedAt = api.now();
