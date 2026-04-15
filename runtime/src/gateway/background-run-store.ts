@@ -2314,7 +2314,9 @@ export class BackgroundRunStore {
       this.memoryBackend,
       backgroundRunTranscriptStreamId(sessionId),
     );
-    return recoverTranscriptHistory(transcript);
+    return recoverTranscriptHistory(transcript, {
+      injectContinuationPrompt: true,
+    });
   }
 
   private async syncConversationHistory(params: {

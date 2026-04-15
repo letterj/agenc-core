@@ -9,7 +9,14 @@ import {
   forkTranscript,
   historyFromTranscript,
   loadTranscript,
+  metadataFromTranscript,
+  recoverTranscriptHistory,
+  recoverTranscriptState,
 } from "./session-transcript.js";
+import {
+  SESSION_SHELL_PROFILE_METADATA_KEY,
+  SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY,
+} from "./session.js";
 
 describe("session transcript adapter", () => {
   it("round-trips transcript events through transcript-capable backends", async () => {
@@ -74,5 +81,58 @@ describe("session transcript adapter", () => {
     const target = await loadTranscript(backend, "target");
     expect(historyFromTranscript(target)).toEqual(historyFromTranscript(source));
     expect(target?.events[0]?.eventId).not.toBe(source?.events[0]?.eventId);
+  });
+
+  it("replays only the latest whitelisted session metadata projection", async () => {
+    const backend = new InMemoryBackend();
+
+    await appendTranscriptBatch(backend, "session-meta", [
+      createTranscriptMetadataProjectionEvent({
+        surface: "webchat",
+        key: "session.metadata",
+        value: {
+          [SESSION_SHELL_PROFILE_METADATA_KEY]: "general",
+          ignored: "value",
+        },
+      }),
+      createTranscriptMetadataProjectionEvent({
+        surface: "webchat",
+        key: "session.metadata",
+        value: {
+          [SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY]: {
+            previousResponseId: "resp-1",
+          },
+        },
+      }),
+    ]);
+
+    const transcript = await loadTranscript(backend, "session-meta");
+    expect(metadataFromTranscript(transcript)).toEqual({
+      [SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY]: {
+        previousResponseId: "resp-1",
+      },
+    });
+  });
+
+  it("detects interrupted transcript turns and can inject a continuation prompt", async () => {
+    const backend = new InMemoryBackend();
+
+    await appendTranscriptBatch(backend, "session-interrupted", [
+      createTranscriptMessageEvent({
+        surface: "webchat",
+        message: { role: "user", content: "finish the previous task" },
+      }),
+    ]);
+
+    const transcript = await loadTranscript(backend, "session-interrupted");
+    expect(recoverTranscriptState(transcript).interruption).toMatchObject({
+      kind: "interrupted_prompt",
+    });
+    expect(
+      recoverTranscriptHistory(transcript, { injectContinuationPrompt: true }).at(-1),
+    ).toEqual({
+      role: "user",
+      content: "Continue from where you left off.",
+    });
   });
 });

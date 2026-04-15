@@ -47,6 +47,7 @@ import { summarizeTracePayloadForPreview } from "../../utils/trace-payload-seria
 import {
   forkTranscript,
   loadTranscript,
+  metadataFromTranscript,
   recoverTranscriptHistory,
 } from "../../gateway/session-transcript.js";
 import type {
@@ -2160,6 +2161,14 @@ export class WebChatChannel
           targetSessionId,
         )
       : undefined;
+    const transcriptMetadata =
+      this.deps.memoryBackend
+        ? metadataFromTranscript(
+            await loadTranscript(this.deps.memoryBackend, targetSessionId).catch(
+              () => undefined,
+            ),
+          )
+        : undefined;
     const persistedMessageCount = persisted?.messageCount ?? 0;
     const resolvedMessageCount =
       persistedMessageCount > 0
@@ -2171,8 +2180,16 @@ export class WebChatChannel
       sessionId: targetSessionId,
       messageCount: resolvedMessageCount,
       ...(workspaceRoot ? { workspaceRoot } : {}),
-      ...(replayContext?.state?.snapshot.shellProfile
-        ? { shellProfile: replayContext.state.snapshot.shellProfile }
+      ...((replayContext?.state?.snapshot.shellProfile ??
+        transcriptMetadata?.shellProfile) &&
+      typeof (replayContext?.state?.snapshot.shellProfile ??
+        transcriptMetadata?.shellProfile) === "string"
+        ? {
+            shellProfile: (
+              replayContext?.state?.snapshot.shellProfile ??
+              transcriptMetadata?.shellProfile
+            ) as SessionShellProfile,
+          }
         : {}),
     };
   }

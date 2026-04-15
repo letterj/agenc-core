@@ -259,6 +259,7 @@ export interface ChatExecuteParams {
     readonly resumeAnchor?: LLMStatefulResumeAnchor;
     readonly historyCompacted?: boolean;
     readonly artifactContext?: ArtifactCompactionState;
+    readonly sessionStartContextMessages?: readonly LLMMessage[];
   };
   /** Optional provider-payload tracing hooks for incident diagnostics. */
   readonly trace?: {
@@ -383,6 +384,8 @@ export interface ChatExecutorResult {
   readonly turnExecutionContract: TurnExecutionContract;
   /** Typed task carryover emitted for the next compatible turn, when applicable. */
   readonly activeTaskContext?: ActiveTaskContext;
+  /** Durable SessionStart hook context to replay on resumed turns. */
+  readonly sessionStartContextMessages?: readonly LLMMessage[];
   /** Optional detail for non-completed stop reasons. */
   readonly stopReasonDetail?: string;
   /** Optional delegated-output validation code associated with a validation_error stop. */

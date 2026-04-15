@@ -23,6 +23,7 @@ import {
   buildSessionStatefulOptions,
   enrichRuntimeContractSnapshotForSession,
   persistSessionActiveTaskContext,
+  persistSessionStartContextMessages,
   persistSessionRuntimeContractSnapshot,
   persistSessionRuntimeContractStatusSnapshot,
   persistSessionStatefulContinuation,
@@ -508,10 +509,10 @@ export async function executeWebChatConversationTurn(
 
     persistSessionStatefulContinuation(session, result);
     persistSessionActiveTaskContext(session, result);
+    persistSessionStartContextMessages(session, result);
     if (result.compacted) {
       await sessionMgr.compact(session.id);
     }
-    await persistWebSessionRuntimeState(memoryBackend, msg.sessionId, session);
 
     signals.signalIdle(msg.sessionId);
     sessionMgr.appendMessage(session.id, {
@@ -522,6 +523,10 @@ export async function executeWebChatConversationTurn(
       role: "assistant",
       content: result.content,
     });
+    const overflowCompaction =
+      typeof sessionMgr.flushPendingCompaction === "function"
+        ? await sessionMgr.flushPendingCompaction(session.id)
+        : null;
     await appendTranscriptBatch(memoryBackend, msg.sessionId, [
       createTranscriptMessageEvent({
         surface: "webchat",
@@ -534,7 +539,7 @@ export async function executeWebChatConversationTurn(
         value: session.metadata,
         dedupeKey: `webchat:metadata:${turnTraceId}`,
       }),
-      ...(result.compacted
+      ...(result.compacted || (overflowCompaction?.messagesRemoved ?? 0) > 0
         ? [
             createTranscriptHistorySnapshotEvent({
               surface: "webchat",
@@ -545,6 +550,7 @@ export async function executeWebChatConversationTurn(
           ]
         : []),
     ]);
+    await persistWebSessionRuntimeState(memoryBackend, msg.sessionId, session);
 
     await webChat.send({
       sessionId: msg.sessionId,

@@ -935,7 +935,9 @@ export class SubAgentManager {
       depth: persisted.depth,
       task: persisted.task,
       config: cloneJson(persisted.config),
-      history: [...recoverTranscriptHistory(transcript)],
+      history: [...recoverTranscriptHistory(transcript, {
+        injectContinuationPrompt: true,
+      })],
       startedAt: persisted.startedAt,
       status: persisted.status,
       result: persisted.result ? cloneJson(persisted.result) : null,

@@ -10,10 +10,55 @@ import type {
   TranscriptMetadataProjectionPayload,
   TranscriptCustomPayload,
 } from "../memory/types.js";
+import {
+  SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY,
+  SESSION_REVIEW_SURFACE_STATE_METADATA_KEY,
+  SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY,
+  SESSION_RUNTIME_CONTRACT_STATUS_SNAPSHOT_METADATA_KEY,
+  SESSION_SHELL_PROFILE_METADATA_KEY,
+  SESSION_STATEFUL_ARTIFACT_CONTEXT_METADATA_KEY,
+  SESSION_STATEFUL_ARTIFACT_RECORDS_METADATA_KEY,
+  SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY,
+  SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY,
+  SESSION_STATEFUL_SESSION_START_CONTEXT_MESSAGES_METADATA_KEY,
+  SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY,
+  SESSION_WORKFLOW_STATE_METADATA_KEY,
+} from "./session.js";
 
 const TRANSCRIPT_KV_PREFIX = "transcript:v1:";
 const SUBAGENT_TRANSCRIPT_PREFIX = "subagent-session:";
 const BACKGROUND_RUN_TRANSCRIPT_PREFIX = "background-run-session:";
+const CONTINUE_FROM_INTERRUPTED_TURN_PROMPT = "Continue from where you left off.";
+const SESSION_METADATA_PROJECTION_KEY = "session.metadata";
+const ALLOWED_SESSION_METADATA_KEYS = new Set<string>([
+  SESSION_SHELL_PROFILE_METADATA_KEY,
+  SESSION_WORKFLOW_STATE_METADATA_KEY,
+  SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY,
+  SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY,
+  SESSION_STATEFUL_ARTIFACT_CONTEXT_METADATA_KEY,
+  SESSION_STATEFUL_ARTIFACT_RECORDS_METADATA_KEY,
+  SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY,
+  SESSION_REVIEW_SURFACE_STATE_METADATA_KEY,
+  SESSION_VERIFICATION_SURFACE_STATE_METADATA_KEY,
+  SESSION_RUNTIME_CONTRACT_SNAPSHOT_METADATA_KEY,
+  SESSION_RUNTIME_CONTRACT_STATUS_SNAPSHOT_METADATA_KEY,
+  SESSION_STATEFUL_SESSION_START_CONTEXT_MESSAGES_METADATA_KEY,
+]);
+
+export interface TranscriptRecoveryOptions {
+  readonly injectContinuationPrompt?: boolean;
+}
+
+export interface TranscriptInterruptionState {
+  readonly kind: "none" | "interrupted_prompt";
+  readonly message?: LLMMessage;
+}
+
+export interface TranscriptRecoveryState {
+  readonly history: readonly LLMMessage[];
+  readonly metadata?: Record<string, unknown>;
+  readonly interruption: TranscriptInterruptionState;
+}
 
 export type SessionTranscriptEvent =
   | SessionTranscriptMessageEvent
@@ -169,6 +214,48 @@ function dropUnresolvedToolTurns(
     next.push(cloneMessage(message));
   }
   return next;
+}
+
+function detectInterruptedTurn(
+  history: readonly LLMMessage[],
+): TranscriptInterruptionState {
+  const lastRelevant = [...history]
+    .reverse()
+    .find((message) => message.role !== "system");
+  if (!lastRelevant) {
+    return { kind: "none" };
+  }
+  if (lastRelevant.role === "assistant" || lastRelevant.role === "tool") {
+    return { kind: "none" };
+  }
+  const content =
+    typeof lastRelevant.content === "string"
+      ? lastRelevant.content.trim()
+      : lastRelevant.content
+          .filter((part) => part.type === "text")
+          .map((part) => part.text.trim())
+          .join(" ")
+          .trim();
+  if (content.length === 0 || content === CONTINUE_FROM_INTERRUPTED_TURN_PROMPT) {
+    return { kind: "none" };
+  }
+  return { kind: "interrupted_prompt", message: cloneMessage(lastRelevant) };
+}
+
+function sanitizeProjectedSessionMetadata(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = value as Record<string, unknown>;
+  const projected: Record<string, unknown> = {};
+  for (const key of ALLOWED_SESSION_METADATA_KEYS) {
+    if (key in candidate) {
+      projected[key] = cloneUnknown(candidate[key]);
+    }
+  }
+  return Object.keys(projected).length > 0 ? projected : undefined;
 }
 
 function normalizeSurface(
@@ -515,13 +602,54 @@ export function historyFromTranscript(
   return history;
 }
 
-export function recoverTranscriptHistory(
+export function metadataFromTranscript(
   document: SessionTranscriptDocument | undefined,
-): readonly LLMMessage[] {
+): Record<string, unknown> | undefined {
+  if (!document) return undefined;
+  let metadata: Record<string, unknown> | undefined;
+  for (const event of document.events) {
+    if (
+      event.kind === "metadata_projection" &&
+      event.key === SESSION_METADATA_PROJECTION_KEY
+    ) {
+      metadata = sanitizeProjectedSessionMetadata(event.value);
+    }
+  }
+  return metadata ? cloneUnknown(metadata) : undefined;
+}
+
+export function recoverTranscriptState(
+  document: SessionTranscriptDocument | undefined,
+  options?: TranscriptRecoveryOptions,
+): TranscriptRecoveryState {
   const history = historyFromTranscript(document);
   const withoutWhitespace = dropWhitespaceOnlyAssistantMessages(history);
   const withoutUnresolved = dropUnresolvedToolTurns(withoutWhitespace);
-  return repairToolTurnSequence(withoutUnresolved);
+  const interruption = detectInterruptedTurn(withoutUnresolved);
+  const recovered = withoutUnresolved.map((message) => cloneMessage(message));
+  if (
+    options?.injectContinuationPrompt === true &&
+    interruption.kind === "interrupted_prompt"
+  ) {
+    recovered.push({
+      role: "user",
+      content: CONTINUE_FROM_INTERRUPTED_TURN_PROMPT,
+    });
+  }
+  return {
+    history: repairToolTurnSequence(recovered, {
+      repairMissingResults: true,
+    }),
+    metadata: metadataFromTranscript(document),
+    interruption,
+  };
+}
+
+export function recoverTranscriptHistory(
+  document: SessionTranscriptDocument | undefined,
+  options?: TranscriptRecoveryOptions,
+): readonly LLMMessage[] {
+  return recoverTranscriptState(document, options).history;
 }
 
 export function createTranscriptMessageEvent(params: {

@@ -31,6 +31,7 @@
 
 import { injectContext } from "./chat-executor-context-injection.js";
 import { compactHistory } from "./chat-executor-history-compaction.js";
+import { renderArtifactContextPrompt } from "./context-compaction.js";
 import {
   pushMessage,
   setStopReason,
@@ -316,6 +317,24 @@ export async function initializeExecutionContext(
 
   // Build messages array with explicit section tags for prompt budgeting.
   pushMessage(ctx, { role: "system", content: ctx.systemPrompt }, "system_anchor");
+  if (
+    ctx.stateful?.sessionStartContextMessages &&
+    ctx.stateful.sessionStartContextMessages.length > 0
+  ) {
+    for (const message of ctx.stateful.sessionStartContextMessages) {
+      pushMessage(ctx, message, "system_runtime");
+    }
+  }
+  if (ctx.stateful?.artifactContext) {
+    pushMessage(
+      ctx,
+      {
+        role: "system",
+        content: renderArtifactContextPrompt(ctx.stateful.artifactContext),
+      },
+      "system_runtime",
+    );
+  }
 
   const isConcordiaTurn = isConcordiaTurnMessage;
   const enableSkillContext =

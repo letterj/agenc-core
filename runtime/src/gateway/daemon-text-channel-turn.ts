@@ -34,6 +34,7 @@ import {
   buildSessionStatefulOptions,
   enrichRuntimeContractSnapshotForSession,
   persistSessionActiveTaskContext,
+  persistSessionStartContextMessages,
   persistSessionRuntimeContractSnapshot,
   persistSessionRuntimeContractStatusSnapshot,
   persistSessionStatefulContinuation,
@@ -484,6 +485,7 @@ export async function executeTextChannelTurn(
 
   persistSessionStatefulContinuation(session, result);
   persistSessionActiveTaskContext(session, result);
+  persistSessionStartContextMessages(session, result);
   sessionMgr.appendMessage(session.id, {
     role: "user",
     content: msg.content,
@@ -492,6 +494,10 @@ export async function executeTextChannelTurn(
     role: "assistant",
     content: result.content,
   });
+  const overflowCompaction =
+    typeof sessionMgr.flushPendingCompaction === "function"
+      ? await sessionMgr.flushPendingCompaction(session.id)
+      : null;
   if (memoryBackend) {
     await appendTranscriptBatch(memoryBackend, msg.sessionId, [
       createTranscriptMessageEvent({
@@ -505,7 +511,7 @@ export async function executeTextChannelTurn(
         value: session.metadata,
         dedupeKey: `${channelName}:metadata:${turnTraceId}`,
       }),
-      ...(result.compacted
+      ...(result.compacted || (overflowCompaction?.messagesRemoved ?? 0) > 0
         ? [
             createTranscriptHistorySnapshotEvent({
               surface: "text",

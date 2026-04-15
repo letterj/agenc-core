@@ -2092,6 +2092,7 @@ export async function executeToolCallLoop(
       collectRecentConsecutiveFailedToolCalls(ctx.allToolCalls),
     );
     const shouldForceFailureRecovery =
+      ctx.effectiveFailureBudget > 0 &&
       !forcedFailureRecoveryUsed &&
       consecutiveFailedToolCalls >= FAILED_TOOL_RECOVERY_STREAK;
 

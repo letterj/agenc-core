@@ -175,7 +175,7 @@ import { createMemoryBackend } from "./memory-backend-factory.js";
 import {
   deleteTranscript,
   loadTranscript,
-  recoverTranscriptHistory,
+  recoverTranscriptState,
 } from "./session-transcript.js";
 // loadWallet moved to ./daemon-tool-registry.ts and ./daemon-feature-wiring.ts
 import {
@@ -4168,7 +4168,8 @@ export class DaemonManager {
         return undefined;
       },
     );
-    const transcriptHistory = recoverTranscriptHistory(transcript);
+    const transcriptRecovery = recoverTranscriptState(transcript);
+    const transcriptHistory = transcriptRecovery.history;
     const replayContext =
       transcriptHistory.length > 0
         ? undefined
@@ -4203,6 +4204,12 @@ export class DaemonManager {
       });
     if (!historiesMatch) {
       sessionMgr.replaceHistory(historySessionId, history);
+    }
+    if (transcriptRecovery.metadata) {
+      session.metadata = {
+        ...session.metadata,
+        ...transcriptRecovery.metadata,
+      };
     }
     await hydrateWebSessionReplayState(memoryBackend, webSessionId, session);
   }

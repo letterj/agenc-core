@@ -4,7 +4,6 @@ import type { LLMMessage } from "./types.js";
 import { extractToolFailureTextFromResult } from "./chat-executor-tool-utils.js";
 import {
   findToolTurnValidationIssue,
-  repairToolTurnSequence,
 } from "./tool-turn-validator.js";
 import { collectPreservedMessages } from "./compact/attachments.js";
 import type {
@@ -60,6 +59,10 @@ interface ArtifactCompactionOutput {
   readonly state: ArtifactCompactionState;
   readonly records: readonly ContextArtifactRecord[];
   readonly summaryText: string;
+}
+
+function cloneMessage(message: LLMMessage): LLMMessage {
+  return JSON.parse(JSON.stringify(message)) as LLMMessage;
 }
 
 export function createCompactBoundaryMessage(params: {
@@ -350,6 +353,45 @@ function renderSummaryText(state: ArtifactCompactionState): string {
   return lines.join("\n");
 }
 
+function renderArtifactRefsForPrompt(
+  state: ArtifactCompactionState,
+): readonly string[] {
+  return state.artifactRefs
+    .slice(0, 8)
+    .map((artifact) =>
+      `- ${artifact.kind}: ${artifact.title} :: ${artifact.summary}`
+    );
+}
+
+export function renderArtifactContextPrompt(
+  state: ArtifactCompactionState,
+): string {
+  const lines = [renderSummaryText(state)];
+  const artifactLines = renderArtifactRefsForPrompt(state);
+  if (artifactLines.length > 0) {
+    lines.push("Artifact refs:");
+    lines.push(...artifactLines);
+  }
+  return lines.join("\n");
+}
+
+export function buildCompactedHistoryFromState(params: {
+  readonly state: ArtifactCompactionState;
+  readonly retainedTail: readonly LLMMessage[];
+}): readonly LLMMessage[] {
+  const boundaryMessage = createCompactBoundaryMessage({
+    boundaryId: params.state.snapshotId,
+    source: params.state.source,
+    sourceMessageCount: params.state.sourceMessageCount,
+    retainedTailCount: params.retainedTail.length,
+    summaryText: renderSummaryText(params.state),
+  });
+  return [
+    boundaryMessage,
+    ...params.retainedTail.map((message) => cloneMessage(message)),
+  ];
+}
+
 function latestRecordTimestampMatching(
   records: readonly ContextArtifactRecord[],
   predicate: (record: ContextArtifactRecord) => boolean,
@@ -433,9 +475,7 @@ function findSafeRetainedTailStartIndex(
           }
         : message,
     );
-    const issue = findToolTurnValidationIssue(
-      repairToolTurnSequence(candidate),
-    );
+    const issue = findToolTurnValidationIssue(candidate);
     if (!issue) {
       return startIndex;
     }

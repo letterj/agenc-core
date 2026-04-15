@@ -2123,7 +2123,7 @@ describe("WebChatChannel", () => {
         expect(
           await loadPersistedSessionRuntimeState(memoryBackend, targetSessionId),
         ).toMatchObject({
-          version: 1,
+          version: 2,
           snapshot: {
             shellProfile: "research",
             workflowState: expect.objectContaining({
