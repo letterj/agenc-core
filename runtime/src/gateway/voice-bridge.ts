@@ -50,6 +50,10 @@ import {
 import type { ResolvedTraceLoggingConfig } from "./daemon-trace.js";
 import { normalizeToolCallArguments } from "../llm/chat-executor-tool-utils.js";
 import { toErrorMessage } from "../utils/async.js";
+import {
+  appendTranscriptBatch,
+  createTranscriptMessageEvent,
+} from "./session-transcript.js";
 
 const DEFAULT_MAX_SESSIONS = 10;
 
@@ -760,6 +764,15 @@ export class VoiceBridge {
       const delegationToolHandler = this.buildSessionToolHandler(sessionId, send);
 
       const chatExecutor = this.requireChatExecutor();
+      if (this.config.memoryBackend) {
+        await appendTranscriptBatch(this.config.memoryBackend, sessionId, [
+          createTranscriptMessageEvent({
+            surface: "voice",
+            message: { role: "user", content: task },
+            dedupeKey: `voice:user:${traceId}`,
+          }),
+        ]);
+      }
       const providerTrace =
         this.config.traceProviderPayloads === true && this.logger
           ? {
@@ -808,6 +821,15 @@ export class VoiceBridge {
         task,
         result.content,
       );
+      if (this.config.memoryBackend) {
+        await appendTranscriptBatch(this.config.memoryBackend, sessionId, [
+          createTranscriptMessageEvent({
+            surface: "voice",
+            message: { role: "assistant", content: result.content },
+            dedupeKey: `voice:assistant:${traceId}`,
+          }),
+        ]);
+      }
 
       // Dispatch outbound hook
       if (this.config.hooks) {

@@ -167,6 +167,11 @@ import {
 import type { MemoryBackend } from "../memory/types.js";
 import { createMemoryRetrievers } from "./memory-retriever-factory.js";
 import { createMemoryBackend } from "./memory-backend-factory.js";
+import {
+  deleteTranscript,
+  historyFromTranscript,
+  loadTranscript,
+} from "./session-transcript.js";
 // loadWallet moved to ./daemon-tool-registry.ts and ./daemon-feature-wiring.ts
 import {
   clearWebSessionReplayState,
@@ -4093,6 +4098,12 @@ export class DaemonManager {
         error: toErrorMessage(error),
       });
     });
+    await deleteTranscript(memoryBackend, webSessionId).catch((error: unknown) => {
+      this.logger.debug("Failed to delete web session transcript", {
+        sessionId: webSessionId,
+        error: toErrorMessage(error),
+      });
+    });
     await clearWebSessionReplayState(memoryBackend, webSessionId).catch(
       (error: unknown) => {
         this.logger.debug("Failed to delete web session replay state", {
@@ -4128,19 +4139,33 @@ export class DaemonManager {
       scope: "dm",
       workspaceId: "default",
     });
-    const replayContext = await loadPersistedSessionReplayContext(
-      memoryBackend,
-      webSessionId,
-    ).catch((error) => {
-      this.logger.debug("Failed to hydrate web session from replay state", {
-        sessionId: webSessionId,
-        error: toErrorMessage(error),
-      });
-      return {
-        history: [],
-      };
-    });
-    const history = replayContext.history;
+    const transcript = await loadTranscript(memoryBackend, webSessionId).catch(
+      (error) => {
+        this.logger.debug("Failed to hydrate web session transcript", {
+          sessionId: webSessionId,
+          error: toErrorMessage(error),
+        });
+        return undefined;
+      },
+    );
+    const transcriptHistory = historyFromTranscript(transcript);
+    const replayContext =
+      transcriptHistory.length > 0
+        ? undefined
+        : await loadPersistedSessionReplayContext(
+            memoryBackend,
+            webSessionId,
+          ).catch((error) => {
+            this.logger.debug("Failed to hydrate web session from replay state", {
+              sessionId: webSessionId,
+              error: toErrorMessage(error),
+            });
+            return {
+              history: [],
+            };
+          });
+    const history =
+      transcriptHistory.length > 0 ? transcriptHistory : replayContext?.history ?? [];
     const historiesMatch =
       session.history.length === history.length &&
       session.history.every((message, index) => {

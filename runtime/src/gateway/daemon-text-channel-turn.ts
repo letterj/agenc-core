@@ -38,6 +38,12 @@ import {
   persistSessionRuntimeContractStatusSnapshot,
   persistSessionStatefulContinuation,
 } from "./daemon-session-state.js";
+import {
+  appendTranscriptBatch,
+  createTranscriptHistorySnapshotEvent,
+  createTranscriptMessageEvent,
+  createTranscriptMetadataProjectionEvent,
+} from "./session-transcript.js";
 import type { AgentDefinition } from "./agent-loader.js";
 import type { DelegationVerifierService } from "./delegation-runtime.js";
 import type { PersistentWorkerManager } from "./persistent-worker-manager.js";
@@ -172,6 +178,15 @@ export async function executeTextChannelTurn(
     msg.content,
     session.history,
   );
+  if (memoryBackend) {
+    await appendTranscriptBatch(memoryBackend, msg.sessionId, [
+      createTranscriptMessageEvent({
+        surface: "text",
+        message: { role: "user", content: msg.content },
+        dedupeKey: `${channelName}:user:${turnTraceId}`,
+      }),
+    ]);
+  }
   const profileAwareSystemPrompt = appendShellProfilePromptSection({
     systemPrompt,
     profile: resolveSessionShellProfile(session.metadata),
@@ -477,6 +492,31 @@ export async function executeTextChannelTurn(
     role: "assistant",
     content: result.content,
   });
+  if (memoryBackend) {
+    await appendTranscriptBatch(memoryBackend, msg.sessionId, [
+      createTranscriptMessageEvent({
+        surface: "text",
+        message: { role: "assistant", content: result.content },
+        dedupeKey: `${channelName}:assistant:${turnTraceId}`,
+      }),
+      createTranscriptMetadataProjectionEvent({
+        surface: "text",
+        key: "session.metadata",
+        value: session.metadata,
+        dedupeKey: `${channelName}:metadata:${turnTraceId}`,
+      }),
+      ...(result.compacted
+        ? [
+            createTranscriptHistorySnapshotEvent({
+              surface: "text",
+              history: session.history,
+              reason: "compaction",
+              dedupeKey: `${channelName}:snapshot:${turnTraceId}`,
+            }),
+          ]
+        : []),
+    ]);
+  }
 
   if (memoryBackend && persistToDaemonMemory) {
     const persistenceOptions = buildDaemonMemoryEntryOptions(

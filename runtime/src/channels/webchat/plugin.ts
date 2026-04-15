@@ -41,8 +41,14 @@ import {
   type PersistedSessionReplayState,
 } from "../../gateway/daemon-session-state.js";
 import type { ActiveTaskContext } from "../../llm/turn-execution-contract-types.js";
+import type { LLMMessage } from "../../llm/types.js";
 import { safeStringify } from "../../tools/types.js";
 import { summarizeTracePayloadForPreview } from "../../utils/trace-payload-serialization.js";
+import {
+  forkTranscript,
+  historyFromTranscript,
+  loadTranscript,
+} from "../../gateway/session-transcript.js";
 import type {
   WebChatHandler,
   WebChatDeps,
@@ -84,6 +90,43 @@ function compactPreview(content: string, maxChars = 140): string | undefined {
   const compact = content.replace(/\s+/g, " ").trim();
   if (compact.length === 0) return undefined;
   return compact.slice(0, maxChars);
+}
+
+function stringifyHistoryContent(content: LLMMessage["content"]): string {
+  return typeof content === "string" ? content : JSON.stringify(content);
+}
+
+function transcriptMessageToHistoryItem(
+  message: LLMMessage,
+): SessionHistoryItem | undefined {
+  if (message.role !== "user" && message.role !== "assistant" && message.role !== "tool") {
+    return undefined;
+  }
+  return {
+    content: stringifyHistoryContent(message.content),
+    sender:
+      message.role === "assistant"
+        ? "agent"
+        : message.role === "tool"
+          ? "tool"
+          : "user",
+    timestamp: Date.now(),
+    ...(message.toolName ? { toolName: message.toolName } : {}),
+  };
+}
+
+function transcriptMessagesToHistoryItems(
+  messages: readonly LLMMessage[],
+  options?: {
+    includeTools?: boolean;
+  },
+): SessionHistoryItem[] {
+  return messages
+    .map((message) => transcriptMessageToHistoryItem(message))
+    .filter((item): item is SessionHistoryItem => {
+      if (!item) return false;
+      return options?.includeTools === true || item.sender !== "tool";
+    });
 }
 
 async function resolveGitSnapshot(
@@ -2104,15 +2147,29 @@ export class WebChatChannel
     );
 
     await Promise.resolve(this.deps.hydrateSessionContext?.(targetSessionId));
+    const continuityHistory = await this.loadSessionHistory(
+      targetSessionId,
+      undefined,
+      {
+        includeTools: false,
+      },
+    );
     const replayContext = this.deps.memoryBackend
       ? await loadPersistedSessionReplayContext(
           this.deps.memoryBackend,
           targetSessionId,
         )
       : undefined;
+    const persistedMessageCount = persisted?.messageCount ?? 0;
+    const resolvedMessageCount =
+      persistedMessageCount > 0
+        ? persistedMessageCount
+        : continuityHistory.length > 0
+          ? continuityHistory.length
+          : replayContext?.history.length ?? 0;
     return {
       sessionId: targetSessionId,
-      messageCount: replayContext?.history.length ?? 0,
+      messageCount: resolvedMessageCount,
       ...(workspaceRoot ? { workspaceRoot } : {}),
       ...(replayContext?.state?.snapshot.shellProfile
         ? { shellProfile: replayContext.state.snapshot.shellProfile }
@@ -2255,12 +2312,16 @@ export class WebChatChannel
           session.sessionId,
         )
       : undefined;
+    const continuityHistory = await this.loadSessionHistory(session.sessionId, undefined, {
+      includeTools: false,
+    });
     const workspaceRoot = session.metadata?.workspaceRoot;
     const { repoRoot, branch, head } = await resolveGitSnapshot(workspaceRoot);
     const runtimeStatus = runtimeState?.snapshot.runtimeContractStatusSnapshot as
       | unknown
       | undefined;
     const pendingApprovalCount = this.countPendingApprovals(session.sessionId);
+    const storedMessageCount = session.messageCount;
     const preview =
       runtimeState?.snapshot.workflowState?.objective ??
       session.label ??
@@ -2271,7 +2332,12 @@ export class WebChatChannel
       sessionId: session.sessionId,
       label: session.label,
       preview: compactPreview(preview) ?? session.label,
-      messageCount: session.messageCount,
+      messageCount:
+        storedMessageCount > 0
+          ? storedMessageCount
+          : continuityHistory.length > 0
+            ? continuityHistory.length
+            : 0,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       lastActiveAt: session.lastActiveAt,
@@ -2279,7 +2345,12 @@ export class WebChatChannel
       resumabilityState: this.resolveResumabilityState({
         connected,
         workspaceRoot,
-        messageCount: session.messageCount,
+        messageCount:
+          storedMessageCount > 0
+            ? storedMessageCount
+            : continuityHistory.length > 0
+              ? continuityHistory.length
+              : 0,
         runtimeState,
       }),
       shellProfile: runtimeState?.snapshot.shellProfile ?? "general",
@@ -2458,7 +2529,18 @@ export class WebChatChannel
       }
     }
 
-    if (!forkSource && this.deps.memoryBackend) {
+    if (this.deps.memoryBackend) {
+      const forkedTranscript = await forkTranscript(
+        this.deps.memoryBackend,
+        sourceSessionId,
+        targetSessionId,
+      );
+      if (forkedTranscript) {
+        forkSource = "history";
+      }
+    }
+
+    if (this.deps.memoryBackend) {
       const forkedRuntimeState = await forkSessionReplayState(
         this.deps.memoryBackend,
         {
@@ -2467,10 +2549,10 @@ export class WebChatChannel
           ...(params?.shellProfile ? { shellProfile: params.shellProfile } : {}),
           ...(params?.objective
             ? { workflowState: { objective: params.objective } }
-            : {}),
+          : {}),
         },
       );
-      if (forkedRuntimeState) {
+      if (forkedRuntimeState && !forkSource) {
         forkSource = "runtime_state";
       }
     }
@@ -2564,6 +2646,54 @@ export class WebChatChannel
     },
   ): Promise<SessionHistoryItem[]> {
     if (this.deps.memoryBackend) {
+      const transcript = await loadTranscript(this.deps.memoryBackend, sessionId).catch(
+        () => undefined,
+      );
+      const transcriptHistory = transcript
+        ? transcriptMessagesToHistoryItems(
+            historyFromTranscript(transcript),
+            options,
+          )
+        : [];
+      if (transcriptHistory.length > 0) {
+        const nonToolHistory = transcriptHistory
+          .filter((entry) => entry.sender !== "tool")
+          .map((entry) => ({
+            content: entry.content,
+            sender: entry.sender === "agent" ? ("agent" as const) : ("user" as const),
+            timestamp: entry.timestamp,
+          }));
+        if (nonToolHistory.length > 0) {
+          this.sessionHistory.set(sessionId, nonToolHistory);
+        }
+        return typeof limit === "number" && limit > 0
+          ? transcriptHistory.slice(-limit)
+          : transcriptHistory;
+      }
+
+      const replayContext = await loadPersistedSessionReplayContext(
+        this.deps.memoryBackend,
+        sessionId,
+      ).catch(() => undefined);
+      const replayHistory = replayContext
+        ? transcriptMessagesToHistoryItems(replayContext.history, options)
+        : [];
+      if (replayHistory.length > 0) {
+        const nonToolHistory = replayHistory
+          .filter((entry) => entry.sender !== "tool")
+          .map((entry) => ({
+            content: entry.content,
+            sender: entry.sender === "agent" ? ("agent" as const) : ("user" as const),
+            timestamp: entry.timestamp,
+          }));
+        if (nonToolHistory.length > 0) {
+          this.sessionHistory.set(sessionId, nonToolHistory);
+        }
+        return typeof limit === "number" && limit > 0
+          ? replayHistory.slice(-limit)
+          : replayHistory;
+      }
+
       const entries = await this.deps.memoryBackend.getThread(sessionId, limit);
       const history = entries
         .filter((entry) =>

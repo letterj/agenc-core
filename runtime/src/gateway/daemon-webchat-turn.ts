@@ -28,6 +28,12 @@ import {
   persistSessionStatefulContinuation,
   persistWebSessionRuntimeState,
 } from "./daemon-session-state.js";
+import {
+  appendTranscriptBatch,
+  createTranscriptHistorySnapshotEvent,
+  createTranscriptMessageEvent,
+  createTranscriptMetadataProjectionEvent,
+} from "./session-transcript.js";
 import { filterSystemPromptForToolRouting } from "./system-prompt-routing.js";
 import {
   buildRuntimeContractSessionTraceId,
@@ -180,6 +186,13 @@ export async function executeWebChatConversationTurn(
       msg.content,
       session.history,
     );
+    await appendTranscriptBatch(memoryBackend, msg.sessionId, [
+      createTranscriptMessageEvent({
+        surface: "webchat",
+        message: { role: "user", content: msg.content },
+        dedupeKey: `webchat:user:${turnTraceId}`,
+      }),
+    ]);
     const profileAwareSystemPrompt = appendShellProfilePromptSection({
       systemPrompt: getSystemPrompt(),
       profile: resolveSessionShellProfile(session.metadata),
@@ -509,6 +522,29 @@ export async function executeWebChatConversationTurn(
       role: "assistant",
       content: result.content,
     });
+    await appendTranscriptBatch(memoryBackend, msg.sessionId, [
+      createTranscriptMessageEvent({
+        surface: "webchat",
+        message: { role: "assistant", content: result.content },
+        dedupeKey: `webchat:assistant:${turnTraceId}`,
+      }),
+      createTranscriptMetadataProjectionEvent({
+        surface: "webchat",
+        key: "session.metadata",
+        value: session.metadata,
+        dedupeKey: `webchat:metadata:${turnTraceId}`,
+      }),
+      ...(result.compacted
+        ? [
+            createTranscriptHistorySnapshotEvent({
+              surface: "webchat",
+              history: session.history,
+              reason: "compaction",
+              dedupeKey: `webchat:snapshot:${turnTraceId}`,
+            }),
+          ]
+        : []),
+    ]);
 
     await webChat.send({
       sessionId: msg.sessionId,
