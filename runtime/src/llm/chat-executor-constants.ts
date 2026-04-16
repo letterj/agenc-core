@@ -137,7 +137,6 @@ export const SAFE_TOOL_RETRY_PREFIXES = [
 export const SAFE_TOOL_RETRY_TOOLS = new Set([
   "system.listFiles",
   "system.readFile",
-  "system.readFileRange",
   "system.grep",
   "system.glob",
   "system.searchFiles",

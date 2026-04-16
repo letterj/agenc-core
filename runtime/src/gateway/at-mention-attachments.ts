@@ -167,11 +167,11 @@ export async function resolveAtMentionAttachments(params: {
       historyPrelude.push(
         ...buildToolPrelude({
           toolCallId,
-          toolName: "system.readFileRange",
+          toolName: "system.readFile",
           toolArgs: {
             path: canonicalPath,
-            startLine,
-            endLine,
+            offset: startLine,
+            limit: Math.max(1, endLine - startLine + 1),
           },
           toolResult: {
             path: canonicalPath,

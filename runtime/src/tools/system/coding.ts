@@ -1425,54 +1425,6 @@ export function createCodingTools(config: CodingToolConfig): readonly Tool[] {
     },
   };
 
-  const readFileRangeTool: Tool = {
-    name: "system.readFileRange",
-    description:
-      "Read a bounded line range from a text file and record the file as read for later safe mutations.",
-    metadata: metadata("system.readFileRange"),
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string" },
-        startLine: { type: "integer", minimum: 1 },
-        endLine: { type: "integer", minimum: 1 },
-      },
-      required: ["path"],
-      additionalProperties: false,
-    },
-    async execute(args) {
-      const path = toOptionalString(args.path);
-      if (!path) return errorResult("path must be a non-empty string");
-      const allowedPaths = resolveToolAllowedPaths(config.allowedPaths, args);
-      const safe = await safePath(path, allowedPaths);
-      if (!safe.safe) return errorResult(safe.reason ?? "Path is outside allowed directories");
-      const text = await readTextFile(safe.resolved);
-      if (text === undefined) {
-        return errorResult(`Unable to read text file: ${path}`);
-      }
-      const lines = text.split(/\r?\n/);
-      const startLine = normalizePositiveInteger(args.startLine, 1, lines.length || 1);
-      const endLine = Math.max(
-        startLine,
-        normalizePositiveInteger(args.endLine, startLine + 50, lines.length || startLine),
-      );
-      const selected = lines.slice(startLine - 1, endLine);
-      recordSessionRead(resolveSessionId(args), safe.resolved, {
-        content: selected.join("\n"),
-        viewKind: "partial",
-      });
-      return okResult({
-        path: safe.resolved,
-        startLine,
-        endLine,
-        lines: selected.map((text, index) => ({
-          line: startLine + index,
-          text,
-        })),
-      });
-    },
-  };
-
   const applyPatchTool: Tool = {
     name: "system.applyPatch",
     description:
@@ -1764,7 +1716,6 @@ export function createCodingTools(config: CodingToolConfig): readonly Tool[] {
     gitWorktreeCreateTool,
     gitWorktreeRemoveTool,
     gitWorktreeStatusTool,
-    readFileRangeTool,
     applyPatchTool,
     symbolSearchTool,
     symbolDefinitionTool,

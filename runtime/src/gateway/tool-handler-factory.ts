@@ -97,8 +97,6 @@ const TOOL_DEFAULT_CWD_NAMES = new Set([
   "desktop.bash",
   "system.processStart",
   "system.serverStart",
-  "verification.listProbes",
-  "verification.runProbe",
   "system.grep",
   "system.glob",
   "system.searchFiles",
@@ -117,7 +115,6 @@ const TOOL_DEFAULT_CWD_NAMES = new Set([
 ]);
 const SESSION_ALLOWED_ROOT_TOOL_NAMES = new Set([
   "system.readFile",
-  "system.readFileRange",
   "system.writeFile",
   "system.appendFile",
   "system.editFile",
@@ -168,7 +165,6 @@ const SESSION_ALLOWED_ROOT_TOOL_NAMES = new Set([
 const SESSION_ID_TOOL_NAMES = new Set([
   "desktop.text_editor",
   "system.readFile",
-  "system.readFileRange",
   "system.writeFile",
   "system.appendFile",
   "system.editFile",
@@ -177,7 +173,6 @@ const SESSION_ID_TOOL_NAMES = new Set([
 const TOOL_PATH_ARG_KEYS: Readonly<Record<string, readonly string[]>> = {
   "desktop.text_editor": ["path"],
   "system.readFile": ["path"],
-  "system.readFileRange": ["path"],
   "system.writeFile": ["path"],
   "system.appendFile": ["path"],
   "system.editFile": ["path"],

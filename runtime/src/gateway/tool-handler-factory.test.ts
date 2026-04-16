@@ -3469,54 +3469,6 @@ describe("createSessionToolHandler", () => {
     });
   });
 
-  it("pins delegated verification workspaceRoot to the child workspace when the model passes '.'", async () => {
-    const baseHandler = vi.fn(async () => JSON.stringify({ ok: true }));
-    const workspaceRoot = "/home/tetsuo/git/stream-test/agenc-shell";
-    const subAgentManager = {
-      getInfo: vi.fn(() => ({
-        sessionId: "subagent:verify-child",
-        parentSessionId: "session-parent",
-        depth: 1,
-        status: "running",
-        startedAt: Date.now() - 100,
-        task: "Verify the shell workspace",
-      })),
-      getExecutionContext: vi.fn(() => ({
-        version: "v1",
-        workspaceRoot,
-        allowedReadRoots: [workspaceRoot],
-        allowedWriteRoots: ["/tmp"],
-        targetArtifacts: [join(workspaceRoot, "src", "app", "main.c")],
-      })),
-    };
-
-    const handler = createSessionToolHandler({
-      sessionId: "subagent:verify-child",
-      baseHandler,
-      availableToolNames: ["verification.listProbes"],
-      routerId: "router-a",
-      send: vi.fn(),
-      defaultWorkingDirectory: workspaceRoot,
-      delegation: () => ({
-        subAgentManager: subAgentManager as any,
-        policyEngine: null,
-        verifier: null,
-        lifecycleEmitter: null,
-      }),
-    });
-
-    await handler("verification.listProbes", {
-      workspaceRoot: ".",
-      profiles: ["generic"],
-    });
-
-    expect(baseHandler).toHaveBeenCalledWith("verification.listProbes", {
-      workspaceRoot,
-      profiles: ["generic"],
-      cwd: workspaceRoot,
-    });
-  });
-
   it("does not infer delegated working directory from the most recently read file when local-file delegation omits executionContext", async () => {
     const workspaceRoot = createTempDir("agenc-delegation-context-");
     const planPath = join(workspaceRoot, "PLAN.md");

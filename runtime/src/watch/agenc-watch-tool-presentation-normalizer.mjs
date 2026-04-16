@@ -183,7 +183,6 @@ export function createWatchToolPresentationNormalizer(dependencies = {}) {
     }
     switch (toolName) {
       case "system.readFile":
-      case "system.readFileRange":
       case "system.grep":
       case "system.searchFiles":
       case "system.glob":

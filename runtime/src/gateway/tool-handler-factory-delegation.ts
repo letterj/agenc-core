@@ -81,7 +81,6 @@ const MUTATING_CHILD_TOOL_NAMES = new Set([
 const LOCAL_INSPECTION_TOOL_NAMES = new Set([
   "desktop.text_editor",
   "system.readFile",
-  "system.readFileRange",
   "system.listDir",
   "system.searchFiles",
   "system.grep",

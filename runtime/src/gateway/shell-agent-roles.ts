@@ -320,7 +320,6 @@ function resolveToolBundleToolNames(params: {
         }),
         ...collectNamedTools(availableToolNames, [
           "system.readFile",
-          "system.readFileRange",
           "system.writeFile",
           "system.appendFile",
           "system.editFile",
@@ -341,7 +340,6 @@ function resolveToolBundleToolNames(params: {
         }),
         ...collectNamedTools(availableToolNames, [
           "system.readFile",
-          "system.readFileRange",
           "system.listDir",
           "system.searchFiles",
           "system.grep",
@@ -358,13 +356,10 @@ function resolveToolBundleToolNames(params: {
       availableToolNames,
       [
         "system.readFile",
-        "system.readFileRange",
         "system.listDir",
         "system.stat",
         "system.searchFiles",
         "system.grep",
-        "verification.listProbes",
-        "verification.runProbe",
         "task.list",
         "task.get",
         "system.searchTools",
@@ -393,7 +388,6 @@ function resolveToolBundleToolNames(params: {
       availableToolNames,
       [
         "system.readFile",
-        "system.readFileRange",
         "system.listDir",
         "system.searchFiles",
         "system.grep",
@@ -407,7 +401,6 @@ function resolveToolBundleToolNames(params: {
       availableToolNames,
       [
         "system.readFile",
-        "system.readFileRange",
         "system.listDir",
         "system.searchFiles",
         "system.grep",

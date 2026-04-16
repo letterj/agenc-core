@@ -106,18 +106,22 @@ describe("createCodingTools", () => {
       persistenceRootDir: root,
     });
 
-    const readRange = tools.find(byName("system.readFileRange"));
     const applyPatch = tools.find(byName("system.applyPatch"));
-    expect(readRange).toBeDefined();
     expect(applyPatch).toBeDefined();
 
-    const before = await readRange!.execute({
-      path: join(root, "src", "app.ts"),
-      startLine: 1,
-      endLine: 4,
-      __agencSessionId: "session-1",
-    });
-    expect(before.isError).not.toBe(true);
+    // Seed a *partial* read snapshot (startLine..endLine subset) to
+    // stand in for system.readFile(offset:1, limit:4). The gate must
+    // still reject applyPatch because a partial view is not a full
+    // read.
+    const sourceText = await readFile(join(root, "src", "app.ts"), "utf8");
+    const partialContent = sourceText.split(/\r?\n/).slice(0, 4).join("\n");
+    seedSessionReadState("session-1", [
+      {
+        path: join(root, "src", "app.ts"),
+        content: partialContent,
+        viewKind: "partial",
+      },
+    ]);
 
     const blocked = await applyPatch!.execute({
       path: root,

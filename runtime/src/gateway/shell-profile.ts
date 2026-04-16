@@ -12,7 +12,6 @@ export const DEFAULT_SESSION_SHELL_PROFILE: SessionShellProfile = "general";
 
 const GENERAL_DEFAULT_TOOL_NAMES = [
   "system.readFile",
-  "system.readFileRange",
   "system.writeFile",
   "system.appendFile",
   "system.editFile",
@@ -44,8 +43,6 @@ const GENERAL_DEFAULT_TOOL_NAMES = [
   "system.browse",
   "system.extractLinks",
   "system.htmlToMarkdown",
-  "verification.listProbes",
-  "verification.runProbe",
   "task.create",
   "task.list",
   "task.get",
@@ -125,7 +122,6 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
     toolPrefixes: ["task.", "verification."],
     exactToolNames: [
       "system.readFile",
-      "system.readFileRange",
       "system.writeFile",
       "system.appendFile",
       "system.editFile",
