@@ -237,24 +237,24 @@ export async function executeRequest(
     }
   }
 
-  const computeVerificationRequirement = (terminal: ToolLoopTerminalResult): boolean =>
-    terminal.runtimeContractSnapshot.verifierStages.runtimeRequired === true;
-
   try {
     const terminal = await helpers.executeToolCallLoop(ctx);
 
     checkRequestTimeout(ctx, "finalization");
 
-    const requiresVerification = computeVerificationRequirement(terminal);
-    const verificationSatisfied = false;
+    // Post-refactor: the runtime verifier has been removed, so the
+    // tool loop permanently forces verifierStages.runtimeRequired=false.
+    // requiresVerification/verificationSatisfied both collapse to false,
+    // which makes the verifier branch in resolveWorkflowCompletionState
+    // unreachable. Pass false constants directly.
     const completionState =
       terminal.completionState ??
       resolveWorkflowCompletionState({
         stopReason: terminal.stopReason,
         toolCalls: ctx.allToolCalls,
         validationCode: terminal.validationCode,
-        requiresVerification,
-        verificationSatisfied,
+        requiresVerification: false,
+        verificationSatisfied: false,
       });
 
     const durationMs = Date.now() - ctx.startTime;
