@@ -91,33 +91,47 @@ export async function createAnsiArtRenderer({ imagePath, ramp, invert } = {}) {
     const key = `${targetCols}:${targetRows}:${targetAspect}`;
     if (key === cacheKey && cacheRows !== null) return cacheRows;
 
-    // Match ansi_art.py resize: fit width to cols, derive height from
-    // source aspect * char-aspect, then clamp to targetRows so the
-    // right-panel overlay never scrolls past the available terminal
-    // lines.
-    const ratio = sourceHeight / sourceWidth;
-    const naturalRows = Math.max(
-      1,
-      Math.round(ratio * targetCols * targetAspect),
-    );
-    const renderRows = Math.min(targetRows, naturalRows);
-
+    // Stretch-to-fill: resize the source directly to the strip's
+    // target dimensions regardless of source aspect. Landscape
+    // images like aura.jpeg get vertically stretched to cover the
+    // full body top-to-bottom; portrait/square images look the
+    // same as before. No cropping — the full source frame is
+    // preserved horizontally and vertically, just scaled to fit.
+    const renderRows = targetRows;
+    const superCols = targetCols * 2;
+    const superRows = renderRows * 2;
     const clone = decoded.clone();
+    clone.contrast(0.15);
     clone.resize({
-      w: targetCols,
-      h: renderRows,
-      mode: ResizeStrategy.BILINEAR,
+      w: superCols,
+      h: superRows,
+      mode: ResizeStrategy.BICUBIC,
     });
     const { width: imgW, height: imgH, data } = clone.bitmap;
     const out = [];
-    for (let y = 0; y < imgH; y += 1) {
+    for (let y = 0; y < renderRows; y += 1) {
       let row = "";
       let lastColor = "";
-      for (let x = 0; x < imgW; x += 1) {
-        const offset = (y * imgW + x) * 4;
-        const r = data[offset];
-        const g = data[offset + 1];
-        const b = data[offset + 2];
+      for (let x = 0; x < targetCols; x += 1) {
+        // Average the 2×2 super-block covering this terminal cell.
+        const sx = x * 2;
+        const sy = y * 2;
+        let rSum = 0;
+        let gSum = 0;
+        let bSum = 0;
+        let count = 0;
+        for (let dy = 0; dy < 2 && sy + dy < imgH; dy += 1) {
+          for (let dx = 0; dx < 2 && sx + dx < imgW; dx += 1) {
+            const offset = ((sy + dy) * imgW + (sx + dx)) * 4;
+            rSum += data[offset];
+            gSum += data[offset + 1];
+            bSum += data[offset + 2];
+            count += 1;
+          }
+        }
+        const r = count > 0 ? Math.round(rSum / count) : 0;
+        const g = count > 0 ? Math.round(gSum / count) : 0;
+        const b = count > 0 ? Math.round(bSum / count) : 0;
         const lum = luminance(r, g, b);
         const ch = pickChar(rampString, lum, invertFlag);
         const color = fg24(r, g, b);

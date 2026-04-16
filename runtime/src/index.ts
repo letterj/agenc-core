@@ -532,9 +532,6 @@ export {
   responseToOutput,
   // Utilities
   validateToolCall,
-  // LLM Task Executor
-  LLMTaskExecutor,
-  type LLMTaskExecutorConfig,
   // Fallback provider
   FallbackLLMProvider,
   type FallbackChainConfig,
@@ -553,19 +550,6 @@ export {
   OllamaProvider,
   type OllamaProviderConfig,
 } from "./llm/index.js";
-
-// Autonomous Agent System
-export {
-  TaskScanner,
-  type TaskScannerConfig,
-  type Task,
-  TaskStatus as AutonomousTaskStatus,
-  type TaskFilter,
-  type ClaimStrategy,
-  type AutonomousTaskExecutor,
-  type DiscoveryMode,
-  DefaultClaimStrategy,
-} from "./autonomous/index.js";
 
 // Eval and deterministic replay
 export {
@@ -1962,46 +1946,3 @@ export {
   MCPManager,
 } from "./mcp-client/index.js";
 
-// Desktop Awareness (Autonomous desktop monitoring)
-export {
-  type DesktopAwarenessConfig,
-  createDesktopAwarenessAction,
-} from "./autonomous/desktop-awareness.js";
-
-// Desktop Executor (Autonomous see-think-act-verify loop)
-export {
-  DesktopExecutor,
-  type DesktopExecutorConfig,
-  type DesktopExecutorResult,
-  type GoalStatus,
-  type ExecutionStep,
-} from "./autonomous/desktop-executor.js";
-
-// Goal Manager (Autonomous goal lifecycle)
-export {
-  GoalStore,
-  type GoalStoreInput,
-  type StrategicGoalRecord,
-  type StrategicGoalStatus,
-  type StrategicExecutionSummary,
-  type StrategicWorkingNote,
-} from "./autonomous/goal-store.js";
-export { StrategicMemory } from "./autonomous/strategic-memory.js";
-export {
-  GoalManager,
-  type GoalManagerConfig,
-  type ManagedGoal,
-} from "./autonomous/goal-manager.js";
-
-// Awareness Goal Bridge (Desktop awareness → goal generation)
-export {
-  createAwarenessGoalBridge,
-  type AwarenessPattern,
-  type AwarenessGoalBridgeConfig,
-} from "./autonomous/awareness-goal-bridge.js";
-
-// Goal Executor Action (Heartbeat-driven goal execution)
-export {
-  createGoalExecutorAction,
-  type GoalExecutorActionConfig,
-} from "./autonomous/goal-executor-action.js";

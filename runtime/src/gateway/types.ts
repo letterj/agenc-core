@@ -14,6 +14,7 @@ import type { DesktopSandboxConfig } from "../desktop/types.js";
 import type { SocialPeerDirectoryEntry } from "../social/types.js";
 import type { LLMXaiCapabilitySurface } from "../llm/types.js";
 import type { StopHookRuntimeConfig } from "../llm/hooks/stop-hooks.js";
+import type { UserHooksSettings } from "../llm/hooks/user-config.js";
 
 // ============================================================================
 // Gateway Configuration
@@ -127,6 +128,14 @@ export interface GatewayLLMConfig extends LLMXaiCapabilitySurface {
   runtimeContractV2?: boolean;
   /** Runtime-owned stop-hook chain controls. */
   stopHooks?: StopHookRuntimeConfig;
+  /**
+   * User-facing lifecycle hooks keyed by event name
+   * (`PreToolUse` / `PostToolUse` / `Stop` / etc). Mirrors the
+   * reference runtime's settings-file schema: each event maps to an
+   * array of matcher groups, and each matcher group carries a list of
+   * `command` or `http` handler entries.
+   */
+  hooks?: UserHooksSettings;
   /** Async task-handle runtime controls. */
   asyncTasks?: {
     enabled?: boolean;

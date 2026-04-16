@@ -122,13 +122,14 @@ function buildProviderDescriptor(
   );
   const model = config?.model;
   // xAI exposes structured outputs on all Grok models, but structured
-  // outputs combined with tools are Grok-4 family only. Treating every
-  // "grok" descriptor as capable caused the router to route tool-using
-  // structured-output calls to grok-code-fast-1, where the adapter's
-  // fail-closed boundary would then reject the request and the runtime
-  // would bake the provider error into conversation history. Check the
-  // model family here so prioritizeStructuredOutputProviders() actually
-  // reorders capable Grok-4 models ahead of incompatible ones.
+  // outputs combined with tools are Grok-4 family only. The routing
+  // policy no longer silently swaps to a capable grok-4 model when
+  // tools + structured output are both requested — the adapter's
+  // fail-closed boundary (`assertXaiStructuredOutputToolCompatibility`)
+  // throws an LLMProviderError instead, which gives callers a clean
+  // signal to drop tools or pick a different session model. Keep this
+  // field populated so diagnostics and config validators can still
+  // inspect per-provider capability.
   const supportsStructuredOutputWithTools =
     provider.name === "grok"
       ? supportsXaiStructuredOutputsWithTools(model)
@@ -205,21 +206,6 @@ export function resolveParallelToolCallPolicy(params: {
   return descriptor.parallelToolCallsConfigured;
 }
 
-function prioritizeStructuredOutputProviders(
-  descriptors: readonly ProviderRouteDescriptor[],
-): readonly ProviderRouteDescriptor[] {
-  const preferred = descriptors.filter(
-    (descriptor) => descriptor.supportsStructuredOutputWithTools,
-  );
-  if (preferred.length === 0 || preferred.length === descriptors.length) {
-    return descriptors;
-  }
-  const deferred = descriptors.filter(
-    (descriptor) => !descriptor.supportsStructuredOutputWithTools,
-  );
-  return [...preferred, ...deferred];
-}
-
 function prioritizeHealthyProviders(
   descriptors: readonly ProviderRouteDescriptor[],
   degradedProviderNames: readonly string[] | undefined,
@@ -250,17 +236,17 @@ export function resolveModelRoute(params: {
   readonly requirements?: ModelRouteRequirements;
   readonly requiredCapabilities?: readonly string[];
 }): ModelRouteDecision {
+  // Model is pinned to the session's primary provider for the session's
+  // lifetime. Structured-output-with-tools compatibility is a hard
+  // constraint enforced by `assertXaiStructuredOutputToolCompatibility`
+  // at request-build time — the runtime fails closed with an
+  // LLMProviderError instead of silently swapping to a different
+  // variant, so one request never sees two model identities. Only
+  // degraded-provider fallback is allowed to reorder, because that's
+  // the legitimate "primary is unreachable" path.
   const baseline = params.policy.providers;
   let ordered = baseline;
   let reason = "default";
-
-  if (params.requirements?.structuredOutputRequired) {
-    const prioritized = prioritizeStructuredOutputProviders(ordered);
-    if (prioritized[0]?.routeKey !== ordered[0]?.routeKey) {
-      ordered = prioritized;
-      reason = "structured_output_capability";
-    }
-  }
 
   const healthyFirst = prioritizeHealthyProviders(
     ordered,

@@ -403,12 +403,10 @@ export {
 
 // Heartbeat actions (Phase 2.2)
 export {
-  createTaskScanAction,
   createSummaryAction,
   createPortfolioAction,
   createPollingAction,
   createDefaultHeartbeatActions,
-  type TaskScanActionConfig,
   type SummaryActionConfig,
   type PortfolioActionConfig,
   type PollingActionConfig,

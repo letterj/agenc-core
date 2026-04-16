@@ -1775,11 +1775,6 @@ describe("createSessionToolHandler", () => {
     expect(lifecycleEmitter.emit).toHaveBeenCalledTimes(2);
     expect(lifecycleEvents[0].type).toBe("subagents.tool.executing");
     expect(lifecycleEvents[1].type).toBe("subagents.tool.result");
-    expect(
-      (lifecycleEvents[1].payload as {
-        verifierRequirement?: { required?: boolean };
-      }).verifierRequirement?.required,
-    ).toBe(true);
 
     const executingCount = sentMessages.filter((m) => m.type === "tools.executing").length;
     const resultCount = sentMessages.filter((m) => m.type === "tools.result").length;
@@ -1982,11 +1977,6 @@ describe("createSessionToolHandler", () => {
           updatedAt: 1_700_000_000_000,
         },
         stopReason: "completed",
-        verifierSnapshot: {
-          performed: true,
-          overall: "pass",
-          summary: "Build probe passed.",
-        },
         durationMs: 42,
         toolCalls: [
           {
@@ -2094,7 +2084,6 @@ describe("createSessionToolHandler", () => {
     expect(parsed.runtimeResult).toMatchObject({
       status: "completed",
       completionState: "completed",
-      verifierVerdict: { overall: "pass" },
       continuationSessionId: "subagent:child-1",
     });
 
@@ -3466,54 +3455,6 @@ describe("createSessionToolHandler", () => {
       content: "int main(void) { return 0; }\n",
       [SESSION_ALLOWED_ROOTS_ARG]: ["/tmp/shell-workspace"],
       [SESSION_ID_ARG]: "subagent:child-2",
-    });
-  });
-
-  it("pins delegated verification workspaceRoot to the child workspace when the model passes '.'", async () => {
-    const baseHandler = vi.fn(async () => JSON.stringify({ ok: true }));
-    const workspaceRoot = "/home/tetsuo/git/stream-test/agenc-shell";
-    const subAgentManager = {
-      getInfo: vi.fn(() => ({
-        sessionId: "subagent:verify-child",
-        parentSessionId: "session-parent",
-        depth: 1,
-        status: "running",
-        startedAt: Date.now() - 100,
-        task: "Verify the shell workspace",
-      })),
-      getExecutionContext: vi.fn(() => ({
-        version: "v1",
-        workspaceRoot,
-        allowedReadRoots: [workspaceRoot],
-        allowedWriteRoots: ["/tmp"],
-        targetArtifacts: [join(workspaceRoot, "src", "app", "main.c")],
-      })),
-    };
-
-    const handler = createSessionToolHandler({
-      sessionId: "subagent:verify-child",
-      baseHandler,
-      availableToolNames: ["verification.listProbes"],
-      routerId: "router-a",
-      send: vi.fn(),
-      defaultWorkingDirectory: workspaceRoot,
-      delegation: () => ({
-        subAgentManager: subAgentManager as any,
-        policyEngine: null,
-        verifier: null,
-        lifecycleEmitter: null,
-      }),
-    });
-
-    await handler("verification.listProbes", {
-      workspaceRoot: ".",
-      profiles: ["generic"],
-    });
-
-    expect(baseHandler).toHaveBeenCalledWith("verification.listProbes", {
-      workspaceRoot,
-      profiles: ["generic"],
-      cwd: workspaceRoot,
     });
   });
 

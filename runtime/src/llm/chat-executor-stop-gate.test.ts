@@ -1011,20 +1011,6 @@ describe("evaluateTurnEndStopGate — false_success_after_failed_verification", 
     expect(decision.shouldIntervene).toBe(false);
   });
 
-  it("fires when the latest verification result is only a weak pass but the reply claims full completion", () => {
-    const decision = evaluateTurnEndStopGate({
-      finalContent:
-        "Implementation of Agenc Shell per PLAN.md is complete and fully verified.",
-      allToolCalls: [
-        successfulWrite("/tmp/workspace/tests/CMakeLists.txt", "add_test(NAME smoke COMMAND smoke)\n"),
-        verificationWeakPass(),
-      ],
-    });
-
-    expect(decision.shouldIntervene).toBe(true);
-    expect(decision.reason).toBe("false_success_after_failed_verification");
-    expect(decision.evidence.failedVerificationCallCount).toBe(1);
-  });
 });
 
 // ---------------------------------------------------------------------------

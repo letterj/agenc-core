@@ -8,7 +8,7 @@ import {
   marketTaskBrowserLoadingLabel,
 } from "../marketplace/surfaces.mjs";
 import { createWatchSplashRenderer } from "./agenc-watch-splash.mjs";
-import { padAnsi, visibleLength, wrapBlock } from "./agenc-watch-text-utils.mjs";
+import { visibleLength, wrapBlock } from "./agenc-watch-text-utils.mjs";
 
 export function createWatchFrameController(dependencies = {}) {
   const {
@@ -119,6 +119,86 @@ export function createWatchFrameController(dependencies = {}) {
     lastRenderedFrameWidth: 0,
     lastRenderedFrameHeight: 0,
   };
+
+  // Split an ANSI-colored row into an array of per-cell entries
+  // `{sgr, char}` up to `width` columns. `sgr` is the FULL active
+  // SGR state at that cell — the accumulated escape sequences since
+  // the last reset (`\x1b[0m` / `\x1b[m`). This way a run of
+  // identically-colored cells all carry the same sgr string and the
+  // compositor can safely emit the state once per change rather
+  // than losing the bg color after the first cell. Short rows are
+  // padded with blank cells so the compositor can index any column
+  // without bounds checks.
+  function splitAnsiCells(row, width) {
+    const cells = new Array(width);
+    let index = 0;
+    let activeSgr = "";
+    let col = 0;
+    while (index < row.length && col < width) {
+      if (row[index] === "\x1b") {
+        const match = row.slice(index).match(/^\x1b\[[0-9;]*m/);
+        if (match) {
+          if (match[0] === "\x1b[0m" || match[0] === "\x1b[m") {
+            activeSgr = "";
+          } else {
+            activeSgr += match[0];
+          }
+          index += match[0].length;
+          continue;
+        }
+      }
+      cells[col] = { sgr: activeSgr, char: row[index] };
+      index += 1;
+      col += 1;
+    }
+    while (col < width) {
+      cells[col] = { sgr: "", char: " " };
+      col += 1;
+    }
+    return cells;
+  }
+
+  // Composite a TUI row with a right-side ANSI art strip: the left
+  // `width - artCols` columns are preserved exactly (chat area stays
+  // clean and readable). Only the rightmost `artCols` columns are
+  // composited — TUI cells carrying a visible non-space character
+  // stay on top; space cells fall through to the art pixel at that
+  // column. Art is pinned to the right edge; when chat content
+  // scrolls in the left region the art stays in place visually
+  // because it's re-applied on every frame.
+  function compositeRowWithArt(tuiRow, artRow, width, artCols) {
+    if (artCols <= 0 || artCols > width) return tuiRow;
+    const leftCols = Math.max(0, width - artCols);
+    const tuiCells = splitAnsiCells(tuiRow, width);
+    const artCells = splitAnsiCells(artRow, artCols);
+    let output = "";
+    let activeSgr = "";
+    for (let col = 0; col < width; col += 1) {
+      const tuiCell = tuiCells[col] ?? { sgr: "", char: " " };
+      if (col < leftCols) {
+        if (tuiCell.sgr !== activeSgr) {
+          output += "\x1b[0m" + tuiCell.sgr;
+          activeSgr = tuiCell.sgr;
+        }
+        output += tuiCell.char;
+        continue;
+      }
+      const artCol = col - leftCols;
+      const artCell = artCells[artCol] ?? { sgr: "", char: " " };
+      const source =
+        tuiCell.char !== " " && tuiCell.char !== "\u00a0"
+          ? tuiCell
+          : artCell;
+      if (source.sgr !== activeSgr) {
+        output += "\x1b[0m" + source.sgr;
+        activeSgr = source.sgr;
+      }
+      output += source.char;
+    }
+    output += "\x1b[0m";
+    return output;
+  }
+
   const splashRenderer = createWatchSplashRenderer({
     watchState,
     transportState,
@@ -3709,12 +3789,15 @@ export function createWatchFrameController(dependencies = {}) {
     const composerBandRows = composerBand.length;
     const contentRows = Math.max(4, height - popup.length - composerBandRows);
 
-    if (splashRenderer.shouldShowSplash()) {
+    let headerRowCount = 0;
+    const isSplashShown = splashRenderer.shouldShowSplash();
+    if (isSplashShown) {
       frame = contentRows >= 14
         ? splashRenderer.renderSplash(width, contentRows)
         : splashRenderer.renderCompactSplash(width, contentRows);
     } else {
       const header = headerLines(width);
+      headerRowCount = header.length;
       const {
         useSidebar,
         sidebarWidth,
@@ -3770,6 +3853,14 @@ export function createWatchFrameController(dependencies = {}) {
     for (const line of frame.slice(0, contentRows)) {
       nextFrameLines.push(paintSurface(line ?? "", width, color.panelBg));
     }
+    // Pin the composer + popup to the bottom by padding the body
+    // before them. This gives the right-side art strip a body region
+    // that always spans from below the header down to the composer
+    // regardless of how short the transcript is, so the art doesn't
+    // collapse to a sliver when the chat is near-empty.
+    while (nextFrameLines.length < contentRows) {
+      nextFrameLines.push(paintSurface("", width, color.panelBg));
+    }
     const composerStartRow = nextFrameLines.length + 1;
     const composerInputOffsetRows = statusLines.length + 1;
     for (const cLine of composerBand) {
@@ -3786,29 +3877,52 @@ export function createWatchFrameController(dependencies = {}) {
       Math.min(height, composerStartRow + composerInputOffsetRows + (composer.cursorRow ?? 0)),
     );
 
-    // Right-side ANSI art panel overlay. When `watchState.artPanelRows`
-    // is populated (rasterized by the art controller in
-    // agenc-watch-app.mjs and refreshed on terminal resize), replace
-    // the right strip of each rendered row with the matching art
-    // line. The controller sizes the art to `artPanelCols`, so
-    // `leftCols + artPanelCols === width` by construction.
+    // Right-side ANSI art wallpaper compositing, confined to the
+    // BODY region of the frame: rows strictly between the cockpit
+    // header (first `headerRowCount` rows) and the composer/popup
+    // footer band (starts at `composerStartRow - 1`). Header and
+    // footer render cleanly without any art intrusion. Splash
+    // screen disables the compositor entirely. Within body rows,
+    // TUI non-space cells stay opaque and space cells fall through
+    // to the art pixel at that column.
     const artPanelRows = Array.isArray(watchState.artPanelRows)
       ? watchState.artPanelRows
       : null;
     const artPanelCols = Number.isFinite(Number(watchState.artPanelCols))
       ? Math.max(0, Math.floor(Number(watchState.artPanelCols)))
       : 0;
+    const bodyStart = headerRowCount;
+    const bodyEndExclusive = Math.max(bodyStart, composerStartRow - 1);
+    const measuredBodyHeight = Math.max(0, bodyEndExclusive - bodyStart);
+    // Publish the exact body dimensions every frame so refreshArtPanel
+    // can size the art to match. A change in body dimensions (resize,
+    // popup show/hide, composer band growth) bumps the revision
+    // counter so the art controller can detect the mismatch and
+    // request a re-render asynchronously.
     if (
+      watchState.currentBodyWidth !== width ||
+      watchState.currentBodyHeight !== measuredBodyHeight
+    ) {
+      watchState.currentBodyWidth = width;
+      watchState.currentBodyHeight = measuredBodyHeight;
+      watchState.currentBodyRevision =
+        (Number(watchState.currentBodyRevision) || 0) + 1;
+    }
+    if (
+      !isSplashShown &&
       artPanelRows &&
       artPanelRows.length > 0 &&
       artPanelCols > 0 &&
-      artPanelCols < width
+      artPanelCols <= width
     ) {
-      const leftCols = width - artPanelCols;
-      for (let rowIndex = 0; rowIndex < nextFrameLines.length; rowIndex += 1) {
-        const leftPart = padAnsi(String(nextFrameLines[rowIndex] ?? ""), leftCols);
-        const artRow = artPanelRows[rowIndex] ?? "";
-        nextFrameLines[rowIndex] = leftPart + artRow;
+      for (let rowIndex = bodyStart; rowIndex < bodyEndExclusive; rowIndex += 1) {
+        const artRowIdx = rowIndex - bodyStart;
+        nextFrameLines[rowIndex] = compositeRowWithArt(
+          String(nextFrameLines[rowIndex] ?? ""),
+          artPanelRows[artRowIdx] ?? "",
+          width,
+          artPanelCols,
+        );
       }
     }
 

@@ -57,6 +57,12 @@ interface HookContextBase {
   readonly sessionId: string;
   readonly chainId?: string;
   readonly depth?: number;
+  /** Absolute path to the session transcript for hook stdin payloads. */
+  readonly transcriptPath?: string;
+  /** Current working directory reported to hook subprocesses. */
+  readonly cwd?: string;
+  /** Optional permission mode surfaced to matcher-aware hooks. */
+  readonly permissionMode?: string;
 }
 
 interface HookFailureContext {
@@ -73,6 +79,8 @@ interface HookFailureContext {
 interface PreToolUseContext extends HookContextBase {
   readonly event: "PreToolUse";
   readonly toolCall: LLMToolCall;
+  /** Pre-parsed tool args surfaced to hook stdin as `tool_input`. */
+  readonly parsedInput?: Record<string, unknown>;
 }
 
 interface PostToolUseContext extends HookContextBase {
@@ -80,12 +88,15 @@ interface PostToolUseContext extends HookContextBase {
   readonly toolCall: LLMToolCall;
   readonly result: string;
   readonly isError?: boolean;
+  readonly parsedInput?: Record<string, unknown>;
 }
 
 interface PostToolUseFailureContext extends HookContextBase {
   readonly event: "PostToolUseFailure";
   readonly toolCall: LLMToolCall;
   readonly errorMessage: string;
+  readonly parsedInput?: Record<string, unknown>;
+  readonly isInterrupt?: boolean;
 }
 
 interface SessionLifecycleContext extends HookContextBase {

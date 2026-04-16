@@ -2010,6 +2010,15 @@ function render() {
 
 function scheduleRender() {
   watchFrameController?.scheduleRender();
+  // If the frame controller's last measured body dimensions have
+  // changed since the art was last rasterized, request a refresh so
+  // the art re-stretches to the new body size. No-op if dimensions
+  // match.
+  const currentRev = Number(watchState.currentBodyRevision) || 0;
+  const lastArtRev = Number(watchState.artPanelBodyRevision) || 0;
+  if (currentRev !== lastArtRev) {
+    void refreshArtPanel();
+  }
 }
 
 // Right-side ANSI art panel: loads the configured image once, then
@@ -2066,21 +2075,36 @@ async function refreshArtPanel() {
     }
     const width = termWidth();
     const height = termHeight();
-    const artCols = Math.max(
-      10,
-      Math.min(
-        Math.floor(width * 0.6),
-        Math.floor(width * cfg.widthFraction),
-      ),
-    );
-    if (artCols >= width) {
-      watchState.artPanelRows = null;
-      watchState.artPanelCols = 0;
-      return;
-    }
-    const rows = await artRenderer.render({ cols: artCols, rows: height });
+    // Full-terminal art: render at the exact terminal dimensions and
+    // let the compositor decide which cells show art (space cells in
+    // body rows) vs TUI chars (non-space cells, and everything in
+    // header + composer bands which the frame compositor skips).
+    // `watch.art.cols` and `widthFraction` are still respected when
+    // present so the strip can be narrowed by config; default is
+    // full width.
+    const cfgCols = Number(cfg.cols);
+    const cfgFraction = Number(cfg.widthFraction);
+    const hasExplicitCols = Number.isFinite(cfgCols) && cfgCols > 0;
+    const hasExplicitFraction =
+      Number.isFinite(cfgFraction) && cfgFraction > 0 && cfgFraction < 1;
+    const desiredCols = hasExplicitCols
+      ? Math.floor(cfgCols)
+      : hasExplicitFraction
+        ? Math.max(20, Math.floor(width * cfgFraction))
+        : width;
+    const artCols = Math.max(1, Math.min(width, desiredCols));
+    // Use the actual measured body dimensions published by the frame
+    // controller after it last rendered. Falls back to a conservative
+    // estimate on first boot before any frame has rendered.
+    const measuredBodyHeight = Number(watchState.currentBodyHeight);
+    const bodyHeight =
+      Number.isFinite(measuredBodyHeight) && measuredBodyHeight > 0
+        ? Math.floor(measuredBodyHeight)
+        : Math.max(10, height - 12);
+    const rows = await artRenderer.render({ cols: artCols, rows: bodyHeight });
     watchState.artPanelRows = rows;
     watchState.artPanelCols = artCols;
+    watchState.artPanelBodyRevision = Number(watchState.currentBodyRevision) || 0;
     scheduleRender();
   } catch {
     watchState.artPanelRows = null;

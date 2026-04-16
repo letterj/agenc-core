@@ -1,5 +1,5 @@
 /**
- * Feature wiring for the daemon: social and autonomous features.
+ * Feature wiring for the daemon: social module.
  *
  * Extracted from daemon.ts to reduce file size.
  *
@@ -7,20 +7,12 @@
  */
 
 import type { Logger } from "../utils/logger.js";
-import { toErrorMessage } from "../utils/async.js";
 import type { GatewayConfig } from "./types.js";
 import type { MemoryBackend } from "../memory/types.js";
 import type { ChannelPlugin } from "./channel.js";
 import type { ChatExecutor } from "../llm/chat-executor.js";
 import type { ToolHandler, LLMProvider } from "../llm/types.js";
-import { createPromptEnvelope } from "../llm/prompt-envelope.js";
-import type { Tool } from "../tools/types.js";
 import { loadWallet } from "./wallet-loader.js";
-import { WorkspaceLoader } from "./workspace-files.js";
-import { deriveCuriosityInterestsFromWorkspaceFiles } from "../autonomous/curiosity-interests.js";
-import {
-  resolveTraceLoggingConfig,
-} from "./daemon-trace.js";
 
 // ============================================================================
 // Context bag for feature wiring
@@ -37,7 +29,7 @@ export interface FeatureWiringContext {
   agentFeed: import("../social/feed.js").AgentFeed | null;
   reputationScorer: import("../social/reputation.js").ReputationScorer | null;
   collaborationProtocol: import("../social/collaboration.js").CollaborationProtocol | null;
-  // Autonomous
+  // Shared runtime surfaces
   chatExecutor: ChatExecutor | null;
   memoryBackend: MemoryBackend | null;
   baseToolHandler: ToolHandler | null;
@@ -45,8 +37,6 @@ export interface FeatureWiringContext {
   proactiveCommunicator: import("./proactive.js").ProactiveCommunicator | null;
   heartbeatScheduler: import("./heartbeat.js").HeartbeatScheduler | null;
   cronScheduler: import("./scheduler.js").CronScheduler | null;
-  goalManager: import("../autonomous/goal-manager.js").GoalManager | null;
-  desktopExecutor: import("../autonomous/desktop-executor.js").DesktopExecutor | null;
   mcpManager: import("../mcp-client/manager.js").MCPManager | null;
   // External channels for ProactiveCommunicator
   externalChannels: Map<string, ChannelPlugin>;
@@ -229,301 +219,4 @@ export async function wireSocial(
     ctx.collaborationProtocol,
   ].filter(Boolean).length;
   ctx.logger.info(`Social module wired with ${wiredCount}/5 components`);
-}
-
-// ============================================================================
-// wireAutonomousFeatures
-// ============================================================================
-
-/** Cron schedule expressions for autonomous features. */
-const CRON_SCHEDULES = {
-  CURIOSITY: "0 */2 * * *",
-  SELF_LEARNING: "0 */6 * * *",
-} as const;
-
-export async function wireAutonomousFeatures(
-  config: GatewayConfig,
-  ctx: FeatureWiringContext,
-): Promise<void> {
-  const heartbeatConfig = (config as unknown as Record<string, unknown>)
-    .heartbeat as {
-      enabled?: boolean;
-      intervalMs?: number;
-      autonomousActionsEnabled?: boolean;
-    } | undefined;
-  if (heartbeatConfig?.enabled === false) return;
-  if (!ctx.chatExecutor || !ctx.memoryBackend) return;
-
-  const intervalMs = heartbeatConfig?.intervalMs ?? 300_000; // default 5 min
-  const heartbeatAutonomousActionsEnabled =
-    heartbeatConfig?.autonomousActionsEnabled === true;
-
-  // Build active channels map for ProactiveCommunicator
-  const activeChannels = new Map(ctx.externalChannels);
-
-  // ProactiveCommunicator works fine with no channels — it just won't broadcast.
-  // Don't block autonomous features for channel-less configurations.
-
-  try {
-    const traceConfig = resolveTraceLoggingConfig(ctx.gatewayLogging);
-    const traceProviderPayloads =
-      traceConfig.enabled && traceConfig.includeProviderPayloads;
-    const { ProactiveCommunicator: ProactiveComm } =
-      await import("./proactive.js");
-    const communicator = new ProactiveComm({
-      channels: activeChannels,
-      logger: ctx.logger,
-      defaultTargets: {},
-    });
-    ctx.proactiveCommunicator = communicator;
-
-    // Import autonomous action factories
-    const [
-      { createCuriosityAction },
-      { createSelfLearningAction },
-      { createMetaPlannerAction },
-      { createProactiveCommsAction },
-    ] = await Promise.all([
-      import("../autonomous/curiosity.js"),
-      import("../autonomous/self-learning.js"),
-      import("../autonomous/meta-planner.js"),
-      import("./heartbeat-actions.js"),
-    ]);
-
-    // Get a provider for actions that need direct LLM access
-    const llm = ctx.llmProviders[0];
-    if (!llm) {
-      ctx.logger.warn?.("No LLM provider — skipping autonomous features");
-      return;
-    }
-
-    // Create GoalManager early so actions can reference it
-    const [{ GoalManager }, { StrategicMemory }] = await Promise.all([
-      import("../autonomous/goal-manager.js"),
-      import("../autonomous/strategic-memory.js"),
-    ]);
-    const strategicMemory = new StrategicMemory({ memory: ctx.memoryBackend! });
-    ctx.goalManager = new GoalManager({ goalStore: strategicMemory.goalStore });
-    const workspaceFiles = await new WorkspaceLoader(
-      ctx.resolveActiveHostWorkspacePath(config),
-    ).load();
-    const curiosityInterests = deriveCuriosityInterestsFromWorkspaceFiles(
-      workspaceFiles,
-    );
-
-    const curiosityAction = createCuriosityAction({
-      interests: [...curiosityInterests],
-      chatExecutor: ctx.chatExecutor!,
-      toolHandler: ctx.baseToolHandler!,
-      memory: ctx.memoryBackend!,
-      promptEnvelope: createPromptEnvelope(
-        "You are an autonomous AI research agent.",
-      ),
-      communicator,
-      goalManager: ctx.goalManager,
-      traceProviderPayloads,
-    });
-    // Phase 2B: scope learning KV keys by workspace to prevent cross-workspace
-    // information leakage (BUG-2 in TODO: learning records are global).
-    // Security finding C-1: User A's learned preferences were injected into User B's context.
-    const workspacePath = ctx.resolveActiveHostWorkspacePath(
-      ctx.gatewayLogging as unknown as GatewayConfig,
-    );
-    const learningKeyPrefix = workspacePath
-      ? `${workspacePath}:learning:`
-      : "learning:";
-    const selfLearningAction = createSelfLearningAction({
-      llm,
-      memory: ctx.memoryBackend!,
-      keyPrefix: learningKeyPrefix,
-      traceProviderPayloads,
-    });
-    const metaPlannerAction = createMetaPlannerAction({
-      llm,
-      memory: ctx.memoryBackend!,
-      strategicMemory,
-      traceProviderPayloads,
-    });
-    let setBridgeCallback:
-      | ((cb: (text: string) => Promise<unknown>) => void)
-      | null = null;
-    let heartbeatScheduler: import("./heartbeat.js").HeartbeatScheduler | null =
-      null;
-    if (heartbeatAutonomousActionsEnabled) {
-      const proactiveCommsAction = createProactiveCommsAction({
-        llm,
-        memory: ctx.memoryBackend!,
-        communicator,
-        traceProviderPayloads,
-      });
-
-      // --- HeartbeatScheduler for short-cycle actions ---
-      const { HeartbeatScheduler } = await import("./heartbeat.js");
-      heartbeatScheduler = new HeartbeatScheduler(
-        { enabled: true, intervalMs, timeoutMs: 180_000 },
-        { logger: ctx.logger },
-      );
-      heartbeatScheduler.registerAction(metaPlannerAction);
-      heartbeatScheduler.registerAction(proactiveCommsAction);
-    }
-
-    // Desktop awareness: register only when the interactive heartbeat action
-    // lane is explicitly enabled. The source runtime does not run model-backed
-    // heartbeat work during normal interactive sessions.
-    if (heartbeatAutonomousActionsEnabled && ctx.mcpManager && heartbeatScheduler) {
-      const screenshotTool = ctx.mcpManager
-        .getToolsByServer("peekaboo")
-        .find((t: Tool) => t.name.includes("takeScreenshot"));
-      if (screenshotTool) {
-        const { createDesktopAwarenessAction } =
-          await import("../autonomous/desktop-awareness.js");
-        const awarenessAction = createDesktopAwarenessAction({
-          screenshotTool,
-          llm,
-          memory: ctx.memoryBackend!,
-          traceProviderPayloads,
-        });
-
-        // Wrap awareness to pipe noteworthy output through goal bridge (attached below)
-        let awarenessBridgeCallback:
-          | ((text: string) => Promise<unknown>)
-          | null = null;
-        const daemonLogger = ctx.logger;
-        const originalAwarenessExecute =
-          awarenessAction.execute.bind(awarenessAction);
-        const wrappedAwareness: typeof awarenessAction = {
-          name: awarenessAction.name,
-          enabled: awarenessAction.enabled,
-          async execute(execCtx) {
-            const result = await originalAwarenessExecute(execCtx);
-            if (
-              result.hasOutput &&
-              result.output &&
-              awarenessBridgeCallback
-            ) {
-              await awarenessBridgeCallback(result.output).catch((error) => {
-                daemonLogger.debug("Awareness bridge callback failed", {
-                  error: toErrorMessage(error),
-                });
-              });
-            }
-            return result;
-          },
-        };
-        // Store setter in closure-accessible variable for GoalManager to connect
-        setBridgeCallback = (cb) => {
-          awarenessBridgeCallback = cb;
-        };
-
-        heartbeatScheduler.registerAction(wrappedAwareness);
-        ctx.logger.info(
-          "Desktop awareness action registered (Peekaboo available)",
-        );
-      }
-
-      // Desktop executor: instantiate if Peekaboo + action tools available
-      const peekabooTools = ctx.mcpManager.getToolsByServer("peekaboo");
-      const screenshotToolForExec = peekabooTools.find((t: Tool) =>
-        t.name.includes("takeScreenshot"),
-      );
-      const hasActionTools = peekabooTools.some(
-        (t: Tool) => t.name.includes("click") || t.name.includes("type"),
-      );
-
-      if (screenshotToolForExec && hasActionTools) {
-        const { DesktopExecutor } =
-          await import("../autonomous/desktop-executor.js");
-        ctx.desktopExecutor = new DesktopExecutor({
-          chatExecutor: ctx.chatExecutor!,
-          toolHandler: ctx.baseToolHandler!,
-          screenshotTool: screenshotToolForExec,
-          llm,
-          memory: ctx.memoryBackend!,
-          approvalEngine: ctx.approvalEngine ?? undefined,
-          communicator,
-          logger: ctx.logger,
-          traceProviderPayloads,
-        });
-        ctx.logger.info(
-          "Desktop executor ready (Peekaboo action tools available)",
-        );
-      }
-    }
-
-    // Wire awareness → goal bridge
-    if (ctx.goalManager && setBridgeCallback) {
-      const { createAwarenessGoalBridge } =
-        await import("../autonomous/awareness-goal-bridge.js");
-      setBridgeCallback(
-        createAwarenessGoalBridge({
-          goalManager: ctx.goalManager,
-        }),
-      );
-      ctx.logger.info("Awareness → goal bridge connected");
-    }
-
-    // Goal executor: dequeue from GoalManager and execute via DesktopExecutor
-    if (heartbeatScheduler && ctx.desktopExecutor && ctx.goalManager) {
-      const { createGoalExecutorAction } =
-        await import("../autonomous/goal-executor-action.js");
-      heartbeatScheduler.registerAction(
-        createGoalExecutorAction({
-          goalManager: ctx.goalManager,
-          desktopExecutor: ctx.desktopExecutor,
-          memory: ctx.memoryBackend!,
-          logger: ctx.logger,
-        }),
-      );
-    }
-
-    if (heartbeatScheduler) {
-      heartbeatScheduler.start();
-      ctx.heartbeatScheduler = heartbeatScheduler;
-    }
-
-    // --- CronScheduler for long-running research tasks ---
-    const { CronScheduler } = await import("./scheduler.js");
-    const cronScheduler = new CronScheduler({ logger: ctx.logger });
-
-    // Curiosity research every 2 hours
-    cronScheduler.addJob("curiosity", CRON_SCHEDULES.CURIOSITY, {
-      name: curiosityAction.name,
-      execute: async (jobCtx) => {
-        if (!curiosityAction.enabled) return;
-        const result = await curiosityAction.execute({
-          logger: jobCtx.logger,
-          sendToChannels: async () => {},
-        });
-        if (result.hasOutput && !result.quiet) {
-          jobCtx.logger.info(`[cron:curiosity] ${result.output}`);
-        }
-      },
-    });
-
-    // Self-learning analysis every 6 hours
-    cronScheduler.addJob("self-learning", CRON_SCHEDULES.SELF_LEARNING, {
-      name: selfLearningAction.name,
-      execute: async (jobCtx) => {
-        if (!selfLearningAction.enabled) return;
-        const result = await selfLearningAction.execute({
-          logger: jobCtx.logger,
-          sendToChannels: async () => {},
-        });
-        if (result.hasOutput && !result.quiet) {
-          jobCtx.logger.info(`[cron:self-learning] ${result.output}`);
-        }
-      },
-    });
-
-    cronScheduler.start();
-    ctx.cronScheduler = cronScheduler;
-
-    ctx.logger.info(
-      heartbeatScheduler
-        ? `Autonomous features wired: heartbeat (interval=${intervalMs}ms) + cron (curiosity @2h, self-learning @6h)`
-        : "Autonomous features wired: cron only (interactive heartbeat actions disabled by default)",
-    );
-  } catch (err) {
-    ctx.logger.error("Failed to wire autonomous features:", err);
-  }
 }

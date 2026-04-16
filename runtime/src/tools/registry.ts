@@ -253,13 +253,12 @@ function inferToolSource(name: string): ToolSource {
 }
 
 function inferToolFamily(name: string): string {
-  if (name.startsWith("system.git") || name === "system.applyPatch") {
+  if (name.startsWith("system.git")) {
     return "coding";
   }
   if (
     name === "system.grep" ||
     name === "system.glob" ||
-    name === "system.searchFiles" ||
     name === "system.repoInventory" ||
     name === "system.symbolSearch" ||
     name === "system.symbolDefinition" ||

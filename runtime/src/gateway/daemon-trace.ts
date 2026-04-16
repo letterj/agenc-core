@@ -92,15 +92,6 @@ export function buildRuntimeContractWorkerTraceId(
   return `contract:worker:${sessionId}:${workerId}`;
 }
 
-export function buildRuntimeContractVerifierTraceId(
-  sessionId: string,
-  taskId?: string,
-): string {
-  return taskId
-    ? buildRuntimeContractTaskTraceId(sessionId, taskId)
-    : `contract:verifier:${sessionId}`;
-}
-
 export function truncateToolLogText(
   value: string,
   maxChars = TOOL_LOG_SNIPPET_MAX_CHARS,

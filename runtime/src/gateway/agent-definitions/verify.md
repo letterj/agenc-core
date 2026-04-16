@@ -2,7 +2,7 @@
 name: verify
 description: Verifier specialist that tries to break completed implementation work
 model: inherit
-tools: [system.readFile, system.readFileRange, system.listDir, system.stat, system.searchFiles, system.grep, system.bash, system.httpGet, system.httpPost, system.httpFetch, system.browse, system.extractLinks, system.htmlToMarkdown, system.browserAction, system.browserSessionStart, system.browserSessionStatus, system.browserSessionResume, system.browserSessionStop, system.browserSessionArtifacts, system.browserSessionTransfers, system.browserTransferStatus, system.browserTransferCancel, mcp.browser.browser_navigate, mcp.browser.browser_snapshot, playwright.browser_navigate, playwright.browser_snapshot, playwright.browser_click, playwright.browser_type, verification.listProbes, verification.runProbe]
+tools: [system.readFile, system.listDir, system.stat, system.glob, system.grep, system.bash, system.httpGet, system.httpPost, system.httpFetch, system.browse, system.extractLinks, system.htmlToMarkdown, system.browserAction, system.browserSessionStart, system.browserSessionStatus, system.browserSessionResume, system.browserSessionStop, system.browserSessionArtifacts, system.browserSessionTransfers, system.browserTransferStatus, system.browserTransferCancel, mcp.browser.browser_navigate, mcp.browser.browser_snapshot, playwright.browser_navigate, playwright.browser_snapshot, playwright.browser_click, playwright.browser_type]
 maxTurns: 8
 ---
 

@@ -1674,18 +1674,6 @@ export interface CommandRegistryDaemonContext {
   getDesktopBridges(): Map<string, unknown>;
   getPlaywrightBridges(): Map<string, unknown>;
   getContainerMCPBridges(): Map<string, unknown[]>;
-  getGoalManager(): {
-    addGoal(params: {
-      title: string;
-      description: string;
-      priority: string;
-      source: string;
-      maxAttempts: number;
-    }): Promise<{ id: string; title: string }>;
-    getActiveGoals(): Promise<
-      Array<{ priority: string; status: string; title: string }>
-    >;
-  } | null;
   startSlashInit(params: {
     workspaceRoot: string;
     force?: boolean;
@@ -2355,22 +2343,42 @@ export function createDaemonCommandRegistry(
       if (jsonArgs) {
         const query =
           typeof jsonArgs.query === "string" ? jsonArgs.query.trim() : "";
+        if (query.length > 0) {
+          const globArgs: Record<string, unknown> = {
+            pattern: `**/*${query}*`,
+          };
+          if (typeof jsonArgs.path === "string") globArgs.path = jsonArgs.path;
+          if (typeof jsonArgs.maxResults === "number") {
+            globArgs.maxResults = jsonArgs.maxResults;
+          }
+          const result = await executeStructuredTool(
+            baseToolHandler,
+            "system.glob",
+            globArgs,
+          );
+          await cmdCtx.replyResult({
+            text: formatSearchFilesReply(result),
+            viewKind: "files",
+            data: {
+              kind: "files",
+              mode: "search",
+              query,
+              result,
+            },
+          });
+          return;
+        }
         const result = await executeStructuredTool(
           baseToolHandler,
-          query.length > 0 ? "system.searchFiles" : "system.repoInventory",
+          "system.repoInventory",
           jsonArgs,
         );
-        const text =
-          query.length > 0
-            ? formatSearchFilesReply(result)
-            : formatRepoInventoryReply(result);
         await cmdCtx.replyResult({
-          text,
+          text: formatRepoInventoryReply(result),
           viewKind: "files",
           data: {
             kind: "files",
-            mode: query.length > 0 ? "search" : "inventory",
-            ...(query.length > 0 ? { query } : {}),
+            mode: "inventory",
             result,
           },
         });
@@ -2397,17 +2405,17 @@ export function createDaemonCommandRegistry(
         });
         return;
       }
+      const customGlobs = parseCsvFlag(cmdCtx.argv, "glob");
       const result = await executeStructuredTool(
         baseToolHandler,
-        "system.searchFiles",
+        "system.glob",
         {
-          query,
+          pattern:
+            customGlobs && customGlobs.length > 0
+              ? customGlobs[0]!
+              : `**/*${query}*`,
           ...(parseInlineFlag(cmdCtx.argv, "path")
             ? { path: parseInlineFlag(cmdCtx.argv, "path") }
-            : {}),
-          ...(hasInlineFlag(cmdCtx.argv, "regex") ? { regex: true } : {}),
-          ...(parseCsvFlag(cmdCtx.argv, "glob")
-            ? { filePatterns: parseCsvFlag(cmdCtx.argv, "glob") }
             : {}),
           ...(parseIntegerFlag(cmdCtx.argv, "max")
             ? { maxResults: parseIntegerFlag(cmdCtx.argv, "max") }
@@ -3824,11 +3832,6 @@ export function createDaemonCommandRegistry(
       const runtimeStatusSnapshot = buildSessionRuntimeContractStatusSnapshot(
         session.metadata,
       ) as Record<string, unknown> | undefined;
-      const verifierSnapshot =
-        typeof runtimeStatusSnapshot?.verifierStages === "object" &&
-        runtimeStatusSnapshot.verifierStages !== null
-          ? JSON.stringify(runtimeStatusSnapshot.verifierStages, null, 2)
-          : "No runtime verifier snapshot available.";
       const verificationSurface = [
         "Verification surface:",
         formatGitBranchReply(branchInfo),
@@ -3836,9 +3839,6 @@ export function createDaemonCommandRegistry(
         formatGitSummaryReply(summary),
         "",
         formatTaskListReply(tasks),
-        "",
-        "Runtime verifier snapshot:",
-        verifierSnapshot,
       ].join("\n");
       if (!wantsDelegate) {
         const verificationState = updateVerificationSurfaceState(session, {
@@ -6421,49 +6421,6 @@ export function createDaemonCommandRegistry(
       },
     });
   }
-
-  // /goal — create or list goals (lazy access to goalManager via getter)
-  commandRegistry.register({
-    name: "goal",
-    description: "Create or list goals",
-    args: "[description]",
-    global: true,
-    handler: async (cmdCtx) => {
-      const gm = ctx.getGoalManager();
-      if (!gm) {
-        await cmdCtx.reply(
-          "Goal manager not available. Autonomous features may be disabled.",
-        );
-        return;
-      }
-      if (cmdCtx.args) {
-        const goal = await gm.addGoal({
-          title: cmdCtx.args.slice(0, 60),
-          description: cmdCtx.args,
-          priority: "medium",
-          source: "user",
-          maxAttempts: 2,
-        });
-        await cmdCtx.reply(
-          `Goal created [${goal.id.slice(0, 8)}]: ${goal.title}`,
-        );
-      } else {
-        const active = await gm.getActiveGoals();
-        if (active.length === 0) {
-          await cmdCtx.reply(
-            "No active goals. Use /goal <description> to create one.",
-          );
-          return;
-        }
-        const lines = active.map(
-          (g) => `  [${g.priority}/${g.status}] ${g.title}`,
-        );
-        await cmdCtx.reply(
-          `Active goals (${active.length}):\n${lines.join("\n")}`,
-        );
-      }
-    },
-  });
 
   // ---- /memory (Phase 9.1) ----
   commandRegistry.register({

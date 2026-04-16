@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   assertNoSilentToolDropOnFollowup,
+  detectCorruptReasoningSummary,
   DOCUMENTED_XAI_RESPONSES_REQUEST_FIELDS,
   modelIsReasoningVariant,
   modelSupportsFunctionCalling,
@@ -1380,4 +1381,95 @@ describe("post-flight: tightened PROMISE_LANGUAGE_RE", () => {
       ).toBeUndefined();
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Corrupt reasoning summary detector (grok-code-fast-1 //TODO degeneracy)
+// ---------------------------------------------------------------------------
+
+describe("detectCorruptReasoningSummary", () => {
+  // Pattern taken from a real grok-code-fast-1 trace payload captured
+  // 2026-04-16:
+  // ~/.agenc/trace-payloads/background_session_2ab885d9.../
+  //   1776327393138-background_run.provider.response-1920efa8fd22.json
+  // at .payload.payload.output[0].summary[0].text
+  const CORRUPT_SUMMARY_SAMPLE =
+    "//TODO: Fix typo in existing summary if needed, //TODO: Fix typo in existing summary if needed, //TODO: Fix typo in editFile function name typo in existing summary if needed\n\n" +
+    "//TODO: Fix typo in existing summary if Ne\n\n" +
+    "//TODO: editFile -> editFile\n\n" +
+    "//TODO: fix typo in existing summary if needed\n\n" +
+    "//TODO: fix typo \"make\" instead of \"make\"\n\n" +
+    "//TODO: Fix ignored ignored ignored ignored ig\n\n" +
+    "//TODO: ig\n\n" +
+    "//TODO: ig\n\n" +
+    "// junk ignored ignored ignored ig\n";
+
+  it("flags the captured grok-code-fast-1 degenerate summary", () => {
+    const corrupt = detectCorruptReasoningSummary([
+      reasoningBlock(CORRUPT_SUMMARY_SAMPLE),
+    ]);
+    expect(corrupt.length).toBe(1);
+    expect(corrupt[0]?.commentCount).toBeGreaterThanOrEqual(5);
+    expect(corrupt[0]?.itemIndex).toBe(0);
+    expect(corrupt[0]?.entryIndex).toBe(0);
+    expect(corrupt[0]?.preview.startsWith("//TODO:")).toBe(true);
+  });
+
+  it("does NOT flag clean multi-paragraph reasoning summaries", () => {
+    const cleanReasoning =
+      "First, inspect the existing tests in the llm/ directory to understand how the current executor validates tool output.\n\n" +
+      "Then, update chat-executor-tool-loop.ts to accept a new cache option.\n\n" +
+      "Finally, run the targeted tests under runtime/src/llm/ to confirm the change.";
+    const corrupt = detectCorruptReasoningSummary([
+      reasoningBlock(cleanReasoning),
+    ]);
+    expect(corrupt).toEqual([]);
+  });
+
+  it("does NOT flag tool-call argument strings that contain '//' legitimately", () => {
+    const corrupt = detectCorruptReasoningSummary([
+      functionCallBlock(
+        "system.editFile",
+        '{"old_string":"// Simple parameter expansion for $VAR\\n","new_string":"// Updated comment\\n"}',
+      ),
+    ]);
+    expect(corrupt).toEqual([]);
+  });
+
+  it("does NOT flag short summaries that mention '//TODO' legitimately", () => {
+    const substantiveWithTodo =
+      "The existing code has a //TODO comment about refactoring the parser entry point; I will evaluate whether this refactor is in scope for the current task before touching the lexer module.\n\n" +
+      "There is also a //TODO near the shell_state destructor that mentions freeing arg-expansion buffers, but that's out of scope.";
+    const corrupt = detectCorruptReasoningSummary([
+      reasoningBlock(substantiveWithTodo),
+    ]);
+    expect(corrupt).toEqual([]);
+  });
+
+  it("surfaces the anomaly through validateXaiResponsePostFlight as warn severity", () => {
+    const result = validateXaiResponsePostFlight({
+      request: plainTextRequest({ model: "grok-code-fast-1" }),
+      response: responseWith({
+        model: "grok-code-fast-1",
+        output: [reasoningBlock(CORRUPT_SUMMARY_SAMPLE)],
+      }),
+    });
+    const anomaly = result.find(
+      (a) => a.code === "corrupt_reasoning_summary",
+    );
+    expect(anomaly).toBeDefined();
+    expect(anomaly?.severity).toBe("warn");
+    const evidence = anomaly?.evidence as {
+      count?: number;
+      blocks?: Array<Record<string, unknown>>;
+    };
+    expect(evidence?.count).toBe(1);
+    expect(evidence?.blocks?.length).toBe(1);
+  });
+
+  it("does not fire on empty or non-array outputs", () => {
+    expect(detectCorruptReasoningSummary([])).toEqual([]);
+    expect(detectCorruptReasoningSummary(undefined)).toEqual([]);
+    expect(detectCorruptReasoningSummary(null)).toEqual([]);
+  });
 });

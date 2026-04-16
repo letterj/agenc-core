@@ -19,7 +19,6 @@ import type {
 } from "./approvals.js";
 import type { ExecuteWithAgentInput } from "./delegation-tool.js";
 import {
-  mapPlannerVerifierSnapshotToRuntimeVerdict,
   resolveDelegatedTerminalOutcome,
 } from "./delegated-runtime-result.js";
 import type { SubAgentManager } from "./sub-agent.js";
@@ -1905,11 +1904,7 @@ export class PersistentWorkerManager {
   }): Promise<{
     readonly terminalStatus: "completed" | "failed" | "cancelled" | "timed_out";
     readonly failureReason?: string;
-    readonly verifierVerdict?: RuntimeVerifierVerdict;
   }> {
-    const verifierVerdict = mapPlannerVerifierSnapshotToRuntimeVerdict(
-      params.childResult.verifierSnapshot,
-    );
     const terminalOutcome = resolveDelegatedTerminalOutcome({
       surface: "direct_child",
       workerSessionId: params.childSessionId,
@@ -1921,7 +1916,6 @@ export class PersistentWorkerManager {
       validationCode: params.childResult.validationCode,
       reportedStatus: this.subAgentManager.getInfo(params.childSessionId)?.status,
       verifierRequirement: params.assignment.verifierRequirement,
-      verifierVerdict,
       executionLocation: params.executionLocation,
       executionEnvelopeFingerprint:
         params.childResult.contractFingerprint ??
@@ -1940,7 +1934,6 @@ export class PersistentWorkerManager {
         runtimeResult: terminalOutcome.runtimeResult,
         usage:
           params.childResult.tokenUsage as unknown as Record<string, unknown> | undefined,
-        verifierVerdict,
         ownedArtifacts: params.assignment.ownedArtifacts,
         workingDirectory: params.assignment.workingDirectory,
         isolation:
@@ -1965,7 +1958,6 @@ export class PersistentWorkerManager {
       });
       return {
         terminalStatus: "completed",
-        verifierVerdict,
       };
     }
 
@@ -1983,7 +1975,6 @@ export class PersistentWorkerManager {
       runtimeResult: terminalOutcome.runtimeResult,
       usage:
         params.childResult.tokenUsage as unknown as Record<string, unknown> | undefined,
-      verifierVerdict,
       ownedArtifacts: params.assignment.ownedArtifacts,
       workingDirectory: params.assignment.workingDirectory,
       isolation:
@@ -2009,7 +2000,6 @@ export class PersistentWorkerManager {
     return {
       terminalStatus: terminalOutcome.terminalStatus,
       failureReason: summary,
-      verifierVerdict,
     };
   }
 
@@ -2235,27 +2225,6 @@ export class PersistentWorkerManager {
           params.parentSessionId,
           params.workerId,
         ))?.state ?? "idle";
-        if (finalized.verifierVerdict) {
-          await this.emitTraceEvent({
-            type: "verifier_result",
-            parentSessionId: params.parentSessionId,
-            workerId: params.workerId,
-            taskId: params.task.id,
-            workerState:
-              finalized.terminalStatus === "cancelled" ? "cancelled" : finalState,
-            verifierVerdict: finalized.verifierVerdict.overall,
-            summary: finalized.verifierVerdict.summary,
-            executionLocation,
-          });
-          await this.emitMailboxMessage({
-            type: "verifier_result",
-            parentSessionId: params.parentSessionId,
-            workerId: params.workerId,
-            overall: finalized.verifierVerdict.overall,
-            summary: finalized.verifierVerdict.summary,
-            taskId: params.task.id,
-          });
-        }
         let finalSummary = (await this.getWorkerRecord(
           params.parentSessionId,
           params.workerId,

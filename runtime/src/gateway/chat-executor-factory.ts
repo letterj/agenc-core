@@ -27,7 +27,16 @@ import {
 } from "../policy/tool-permission-evaluator.js";
 import { BudgetStateService } from "../policy/budget-state.js";
 import { resolveRuntimeContractFlags } from "../runtime-contract/flags.js";
-import { buildStopHookRuntime } from "../llm/hooks/stop-hooks.js";
+import {
+  buildStopHookRuntime,
+  type StopHookHandlerConfig,
+  type StopHookRuntimeConfig,
+} from "../llm/hooks/stop-hooks.js";
+import {
+  HookRegistry,
+  buildUserHookDefinitions,
+  type HookDefinition,
+} from "../llm/hooks/index.js";
 
 /**
  * Cut 7: convert a gateway config tool allow/deny list into the
@@ -107,8 +116,6 @@ interface CreateChatExecutorParams {
   permissionRules?: readonly ToolRule[];
   /** Optional cap on tool call rate per minute (used by the budget service). */
   maxToolCallRatePerMinute?: number;
-  /** Optional runtime completion-validation services. */
-  completionValidation?: ChatExecutorConfig["completionValidation"];
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +168,20 @@ export function createChatExecutor(
     return evaluatorToCanUseTool(evaluator);
   })();
   const runtimeContractFlags = resolveRuntimeContractFlags(llmConfig);
-  const stopHookRuntime = buildStopHookRuntime(llmConfig?.stopHooks);
+  const userHookDefinitions: readonly HookDefinition[] = llmConfig?.hooks
+    ? buildUserHookDefinitions(llmConfig.hooks).definitions
+    : [];
+  const stopHookRuntime = buildStopHookRuntime(
+    mergeUserStopHooksIntoConfig(llmConfig?.stopHooks, userHookDefinitions),
+  );
+  const toolLoopHookRegistry = (() => {
+    const toolLoopDefinitions = userHookDefinitions.filter(
+      (definition) => definition.event !== "Stop",
+    );
+    return toolLoopDefinitions.length > 0
+      ? new HookRegistry(toolLoopDefinitions)
+      : undefined;
+  })();
 
   return new ChatExecutor({
     providers: params.providers,
@@ -193,7 +213,42 @@ export function createChatExecutor(
     modelRoutingPolicy,
     runtimeContractFlags,
     ...(stopHookRuntime ? { stopHookRuntime } : {}),
-    completionValidation: params.completionValidation,
     ...(canUseTool ? { canUseTool } : {}),
+    ...(toolLoopHookRegistry ? { hookRegistry: toolLoopHookRegistry } : {}),
   });
+}
+
+/**
+ * Fold user-facing `hooks.Stop` entries into the existing stop-hook
+ * runtime config so they participate in the same completion gate as
+ * the built-in stop handlers. All non-Stop events stay in the
+ * `HookRegistry` path used by the tool loop for PreToolUse /
+ * PostToolUse / PostToolUseFailure dispatch.
+ */
+export function mergeUserStopHooksIntoConfig(
+  existing: StopHookRuntimeConfig | undefined,
+  userDefinitions: readonly HookDefinition[],
+): StopHookRuntimeConfig | undefined {
+  const stopHandlers: StopHookHandlerConfig[] = [];
+  userDefinitions.forEach((definition, index) => {
+    if (definition.event !== "Stop") return;
+    if (definition.kind !== "command" && definition.kind !== "http") return;
+    stopHandlers.push({
+      id: `user:stop:${index}`,
+      phase: "Stop",
+      kind: definition.kind,
+      target: definition.target,
+      ...(definition.matcher !== undefined ? { matcher: definition.matcher } : {}),
+      ...(definition.timeoutMs !== undefined
+        ? { timeoutMs: definition.timeoutMs }
+        : {}),
+    });
+  });
+  if (stopHandlers.length === 0) {
+    return existing;
+  }
+  return {
+    ...(existing ?? {}),
+    handlers: [...(existing?.handlers ?? []), ...stopHandlers],
+  };
 }

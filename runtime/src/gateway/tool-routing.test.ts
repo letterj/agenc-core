@@ -93,7 +93,7 @@ describe("buildStaticToolRoutingDecision", () => {
       content: "Open the website in a browser, click through the flow, and then patch the local repo.",
       availableToolNames: [
         "system.readFile",
-        "system.applyPatch",
+        "system.editFile",
         "system.searchTools",
         "playwright.browser_navigate",
         "playwright.browser_click",
@@ -103,12 +103,12 @@ describe("buildStaticToolRoutingDecision", () => {
 
     expect(decision?.routedToolNames).toEqual([
       "system.readFile",
-      "system.applyPatch",
+      "system.editFile",
       "system.searchTools",
     ]);
     expect(decision?.expandedToolNames).toEqual([
       "system.readFile",
-      "system.applyPatch",
+      "system.editFile",
       "system.searchTools",
       "playwright.browser_navigate",
       "playwright.browser_click",

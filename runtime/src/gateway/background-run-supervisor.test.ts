@@ -746,17 +746,10 @@ describe("background-run-supervisor", () => {
             }),
           }),
         }),
-        runtimeVerifierContinuationSessionId: undefined,
       }),
     );
 
     await (supervisor as any).executeCycle("session:bg-interactive");
-    expect(execute).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        runtimeVerifierContinuationSessionId: "subagent:verify-bg-1",
-      }),
-    );
   });
 
   it("starts a run, executes a cycle, and keeps it working", async () => {

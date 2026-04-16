@@ -14,7 +14,7 @@ describe("implementation gate suite", () => {
       incidentFixtureDir: INCIDENT_FIXTURE_DIR,
     });
 
-    expect(artifact.mandatoryScenarioCount).toBe(4);
+    expect(artifact.mandatoryScenarioCount).toBe(3);
     expect(artifact.falseCompletedScenarios).toBe(0);
     expect(artifact.mandatoryPassRate).toBe(1);
     expect(
@@ -23,7 +23,6 @@ describe("implementation gate suite", () => {
       expect.arrayContaining([
         "shell_stub_false_completion_replay_gate",
         "live_runtime_false_completion_gate",
-        "non_empty_wrong_artifact_verifier_gate",
         "resume_after_partial_completion",
       ]),
     );

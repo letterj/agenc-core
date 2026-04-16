@@ -51,7 +51,6 @@ import type { Logger } from "../utils/logger.js";
 import { silentLogger } from "../utils/logger.js";
 import type { SessionContinuityRecord } from "../channels/webchat/types.js";
 import {
-  buildRuntimeContractVerifierTraceId,
   buildRuntimeContractWorkerTraceId,
   logTraceErrorEvent,
   logTraceEvent,
@@ -386,10 +385,8 @@ import {
 import {
   createDaemonToolRegistry,
 } from "./daemon-tool-registry.js";
-import type { TopLevelVerifierTraceEvent } from "./top-level-verifier.js";
 import {
   wireSocial as wireSocialStandalone,
-  wireAutonomousFeatures as wireAutonomousFeaturesStandalone,
   type FeatureWiringContext,
 } from "./daemon-feature-wiring.js";
 import {
@@ -1140,9 +1137,6 @@ export class DaemonManager {
     import("../mcp-client/types.js").MCPToolBridge[]
   > = new Map();
   private _desktopRouterFactory: DesktopRouterFactory | null = null;
-  private _desktopExecutor:
-    | import("../autonomous/desktop-executor.js").DesktopExecutor
-    | null = null;
   private _backgroundRunSupervisor: BackgroundRunSupervisor | null = null;
   private _durableSubrunOrchestrator: DurableSubrunOrchestrator | null = null;
   private _remoteJobManager: SystemRemoteJobManager | null = null;
@@ -1160,9 +1154,6 @@ export class DaemonManager {
       updatedAt: number;
     }
   >();
-  private _goalManager:
-    | import("../autonomous/goal-manager.js").GoalManager
-    | null = null;
   private readonly _foregroundSessionLocks = new Set<string>();
   private _policyEngine: import("../policy/engine.js").PolicyEngine | null =
     null;
@@ -1876,9 +1867,6 @@ export class DaemonManager {
         pendingExternalChannels.delete(name);
       }
 
-      // Wire up autonomous features (curiosity, self-learning, meta-planner, proactive comms)
-      await this.wireAutonomousFeatures(gatewayConfig);
-
       // Wire up subsystems (social module)
       await this.wireSocial(gatewayConfig);
 
@@ -2210,7 +2198,6 @@ export class DaemonManager {
     const resolvedSubAgentConfig = resolveSubAgentRuntimeConfig(config.llm, {
       unsafeBenchmarkMode: this.yolo,
     });
-    const traceConfig = resolveTraceLoggingConfig(config.logging);
     await this.refreshHostToolingProfile({
       enabled: resolvedSubAgentConfig.enabled,
       logging: config.logging,
@@ -2252,41 +2239,6 @@ export class DaemonManager {
         toolAllowList: config.policy?.toolAllowList,
         toolDenyList: config.policy?.toolDenyList,
       }),
-      completionValidation: {
-        topLevelVerifier: {
-          subAgentManager: this._subAgentManager,
-          verifierService: this._delegationVerifierService,
-          agentDefinitions: this._agentDefinitions,
-          availableToolNames: this._toolRegistry?.listCatalog().map((entry) => entry.name),
-          logger: this.logger,
-          taskStore: this._taskTrackerStore,
-          remoteJobManager: this._remoteJobManager,
-          ...(traceConfig.enabled
-            ? {
-                onTraceEvent: async (event: TopLevelVerifierTraceEvent) => {
-                  logTraceEvent(
-                    this.logger,
-                    `runtime_contract.verifier.${event.type}`,
-                    {
-                      traceId: buildRuntimeContractVerifierTraceId(
-                        event.sessionId,
-                        event.taskId,
-                      ),
-                      sessionId: event.sessionId,
-                      ...(event.taskId ? { taskId: event.taskId } : {}),
-                      ...(event.launcherKind
-                        ? { launcherKind: event.launcherKind }
-                        : {}),
-                      ...(event.summary ? { summary: event.summary } : {}),
-                      ...(event.verdict ? { verdict: event.verdict } : {}),
-                    },
-                    traceConfig.maxChars,
-                  );
-                },
-              }
-            : {}),
-        },
-      },
     });
 
     const sessionMgr = this.createSessionManager(hooks);
@@ -3697,8 +3649,6 @@ export class DaemonManager {
       proactiveCommunicator: this._proactiveCommunicator as any,
       heartbeatScheduler: this._heartbeatScheduler as any,
       cronScheduler: this._cronScheduler as any,
-      goalManager: this._goalManager as any,
-      desktopExecutor: this._desktopExecutor as any,
       mcpManager: this._mcpManager as any,
       externalChannels: new Map(this._externalChannels),
       llmProviders: this._llmProviders,
@@ -3720,19 +3670,11 @@ export class DaemonManager {
     this._proactiveCommunicator = ctx.proactiveCommunicator as any;
     this._heartbeatScheduler = ctx.heartbeatScheduler as any;
     this._cronScheduler = ctx.cronScheduler as any;
-    this._goalManager = ctx.goalManager as any;
-    this._desktopExecutor = ctx.desktopExecutor as any;
   }
 
   private async wireSocial(config: GatewayConfig): Promise<void> {
     const ctx = this._buildFeatureWiringContext();
     await wireSocialStandalone(config, ctx);
-    this._applyFeatureWiringContext(ctx);
-  }
-
-  private async wireAutonomousFeatures(config: GatewayConfig): Promise<void> {
-    const ctx = this._buildFeatureWiringContext();
-    await wireAutonomousFeaturesStandalone(config, ctx);
     this._applyFeatureWiringContext(ctx);
   }
 
@@ -3927,7 +3869,6 @@ export class DaemonManager {
         newConfig.llm,
         { unsafeBenchmarkMode: this.yolo },
       );
-      const traceConfig = resolveTraceLoggingConfig(newConfig.logging);
       await this.refreshHostToolingProfile({
         enabled: resolvedSubAgentConfig.enabled,
         logging: newConfig.logging,
@@ -3970,41 +3911,6 @@ export class DaemonManager {
           toolAllowList: newConfig.policy?.toolAllowList,
           toolDenyList: newConfig.policy?.toolDenyList,
         }),
-        completionValidation: {
-          topLevelVerifier: {
-            subAgentManager: this._subAgentManager,
-            verifierService: this._delegationVerifierService,
-            agentDefinitions: this._agentDefinitions,
-            availableToolNames: this._toolRegistry?.listCatalog().map((entry) => entry.name),
-            logger: this.logger,
-            taskStore: this._taskTrackerStore,
-            remoteJobManager: this._remoteJobManager,
-            ...(traceConfig.enabled
-              ? {
-                  onTraceEvent: async (event: TopLevelVerifierTraceEvent) => {
-                    logTraceEvent(
-                      this.logger,
-                      `runtime_contract.verifier.${event.type}`,
-                      {
-                        traceId: buildRuntimeContractVerifierTraceId(
-                          event.sessionId,
-                          event.taskId,
-                        ),
-                        sessionId: event.sessionId,
-                        ...(event.taskId ? { taskId: event.taskId } : {}),
-                        ...(event.launcherKind
-                          ? { launcherKind: event.launcherKind }
-                          : {}),
-                        ...(event.summary ? { summary: event.summary } : {}),
-                        ...(event.verdict ? { verdict: event.verdict } : {}),
-                      },
-                      traceConfig.maxChars,
-                    );
-                  },
-                }
-              : {}),
-          },
-        },
       });
 
       const providerNames = providers.map((p) => p.name).join(" → ") || "none";
@@ -5075,7 +4981,6 @@ export class DaemonManager {
       getDesktopBridges: () => this._desktopBridges,
       getPlaywrightBridges: () => this._playwrightBridges,
       getContainerMCPBridges: () => this._containerMCPBridges as any,
-      getGoalManager: () => this._goalManager as any,
       startSlashInit: async (params) => {
         const workspaceRoot = resolvePath(params.workspaceRoot);
         const filePath = `${workspaceRoot}/AGENC.md`;
@@ -7773,10 +7678,6 @@ export class DaemonManager {
       this._cronScheduler.stop();
       this._cronScheduler = null;
     }
-    if (this._desktopExecutor !== null) {
-      this._desktopExecutor.cancel();
-      this._desktopExecutor = null;
-    }
   }
 
   async stop(): Promise<void> {
@@ -7899,13 +7800,6 @@ export class DaemonManager {
         this._cronScheduler.stop();
         this._cronScheduler = null;
       }
-      // Stop desktop executor
-      if (this._desktopExecutor !== null) {
-        this._desktopExecutor.cancel();
-        this._desktopExecutor = null;
-      }
-      // Clear goal manager
-      this._goalManager = null;
       // Clear proactive communicator
       this._proactiveCommunicator = null;
       // Stop WebChat channel before gateway
@@ -7938,18 +7832,6 @@ export class DaemonManager {
     } finally {
       this.shutdownInProgress = false;
     }
-  }
-
-  get desktopExecutor():
-    | import("../autonomous/desktop-executor.js").DesktopExecutor
-    | null {
-    return this._desktopExecutor;
-  }
-
-  get goalManager():
-    | import("../autonomous/goal-manager.js").GoalManager
-    | null {
-    return this._goalManager;
   }
 
   get proactiveCommunicator(): ProactiveCommunicator | null {

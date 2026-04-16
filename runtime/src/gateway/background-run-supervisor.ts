@@ -3800,7 +3800,6 @@ export class BackgroundRunSupervisor {
               : {}),
           } satisfies InteractiveContextRequest,
           requestTimeoutMs: BACKGROUND_RUN_ACTOR_REQUEST_TIMEOUT_MS,
-          runtimeVerifierContinuationSessionId: run.verifierSessionId,
           stateful: run.carryForward?.providerContinuation
             ? {
                 resumeAnchor: {

@@ -139,6 +139,21 @@ export interface SessionReadSeedEntry {
 const sessionReadState = new Map<string, Map<string, SessionReadSnapshot>>();
 const LOCAL_FILE_HISTORY_MAX_ENTRIES = 8;
 
+/**
+ * Stub returned by system.readFile on a cache hit: the session has
+ * already read this path and the file's mtime is unchanged since that
+ * prior read. Aligns the tool with the upstream reference runtime,
+ * which short-circuits unchanged re-reads to save cache_creation
+ * tokens and discourage the model from re-crawling the same files.
+ *
+ * The stub is a plain string — callers just read the single line and
+ * move on. When the model legitimately needs fresh bytes (e.g. after
+ * an external process modified the file), the mtime will differ and
+ * the short-circuit skips itself; the normal read path runs.
+ */
+export const FILE_UNCHANGED_STUB =
+  "File unchanged since previous read in this session. No need to re-read; use the prior content already in context.";
+
 function resolveLocalFileHistoryRoot(): string {
   const configuredRoot = process.env.AGENC_FILESYSTEM_HISTORY_ROOT?.trim();
   return configuredRoot && configuredRoot.length > 0
@@ -1104,6 +1119,37 @@ function createReadFileTool(
           return errorResult(
             `File size ${fileStats.size} bytes exceeds limit of ${maxReadBytes} bytes`,
           );
+        }
+
+        // Cache-hit short-circuit: if this session already read this
+        // path in full and the file's mtime is unchanged, return the
+        // FILE_UNCHANGED_STUB instead of re-reading. Mirrors the
+        // upstream reference runtime's readFileCache. Only fires for
+        // full-file reads (no offset/limit narrowing) to keep the
+        // semantics simple; partial reads always go through the
+        // normal path.
+        const cacheHitSessionId = resolveSessionId(args);
+        const requestedReadWindow = resolveReadWindow(args);
+        if (
+          cacheHitSessionId &&
+          requestedReadWindow.startLine === undefined &&
+          requestedReadWindow.limit === undefined
+        ) {
+          const priorSnapshot = getSessionReadSnapshot(
+            cacheHitSessionId,
+            resolved!,
+          );
+          const priorTimestamp = priorSnapshot?.timestamp;
+          const currentTimestamp = getFileTimestampMs(fileStats);
+          if (
+            priorSnapshot !== undefined &&
+            priorSnapshot.viewKind === "full" &&
+            typeof priorTimestamp === "number" &&
+            typeof currentTimestamp === "number" &&
+            priorTimestamp === currentTimestamp
+          ) {
+            return { content: FILE_UNCHANGED_STUB };
+          }
         }
 
         const buffer = await readFile(resolved!);

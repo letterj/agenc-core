@@ -80,6 +80,7 @@ describe("createCodingTools", () => {
       allowedPaths: [root],
       persistenceRootDir: root,
       getToolCatalog: () => registry.listCatalog(),
+      codeIntelligenceTools: true,
     });
     registry.registerAll(tools);
 
@@ -98,80 +99,13 @@ describe("createCodingTools", () => {
     expect(parsed.results.some((entry) => entry.name === "system.searchTools")).toBe(true);
   });
 
-  it("requires a full read before applyPatch on existing files", async () => {
-    const root = await createRepoFixture();
-    createdRoots.push(root);
-    const tools = createCodingTools({
-      allowedPaths: [root],
-      persistenceRootDir: root,
-    });
-
-    const readRange = tools.find(byName("system.readFileRange"));
-    const applyPatch = tools.find(byName("system.applyPatch"));
-    expect(readRange).toBeDefined();
-    expect(applyPatch).toBeDefined();
-
-    const before = await readRange!.execute({
-      path: join(root, "src", "app.ts"),
-      startLine: 1,
-      endLine: 4,
-      __agencSessionId: "session-1",
-    });
-    expect(before.isError).not.toBe(true);
-
-    const blocked = await applyPatch!.execute({
-      path: root,
-      patch: [
-        "--- a/src/app.ts",
-        "+++ b/src/app.ts",
-        "@@ -1,3 +1,3 @@",
-        " export function greet(name: string): string {",
-        "-  return `Hello, ${name}`;",
-        "+  return `Hi, ${name}`;",
-        " }",
-        "",
-      ].join("\n"),
-      __agencSessionId: "session-1",
-    });
-    expect(blocked.isError).toBe(true);
-    expect(blocked.content).toContain("Call system.readFile on");
-
-    seedSessionReadState("session-1", [
-      {
-        path: join(root, "src", "app.ts"),
-        content: await readFile(join(root, "src", "app.ts"), "utf8"),
-        viewKind: "full",
-      },
-    ]);
-
-    const patch = [
-      "--- a/src/app.ts",
-      "+++ b/src/app.ts",
-      "@@ -1,3 +1,3 @@",
-      " export function greet(name: string): string {",
-      "-  return `Hello, ${name}`;",
-      "+  return `Hi, ${name}`;",
-      " }",
-      "",
-    ].join("\n");
-
-    const result = await applyPatch!.execute({
-      path: root,
-      patch,
-      __agencSessionId: "session-1",
-    });
-    expect(result.isError).not.toBe(true);
-
-    const next = await readFile(join(root, "src", "app.ts"), "utf8");
-    expect(next).toContain("return `Hi, ${name}`;");
-  });
-
   it("returns git summaries, creates worktrees, and resolves semantic symbol lookups", async () => {
     const root = await createRepoFixture();
     createdRoots.push(root);
     const tools = createCodingTools({
       allowedPaths: [root, join(root, "worktrees")],
       persistenceRootDir: root,
+      codeIntelligenceTools: true,
     });
 
     await writeFile(join(root, "README.md"), "# changed\n", "utf8");
@@ -225,7 +159,7 @@ describe("createCodingTools", () => {
     expect(refsResult.references.some((entry) => entry.filePath === "src/app.ts")).toBe(true);
   });
 
-  it("supports grep, searchFiles, and glob outside git repositories", async () => {
+  it("supports grep and glob outside git repositories", async () => {
     const root = await createWorkspaceFixture();
     createdRoots.push(root);
     const tools = createCodingTools({
@@ -234,10 +168,8 @@ describe("createCodingTools", () => {
     });
 
     const grepTool = tools.find(byName("system.grep"));
-    const searchFilesTool = tools.find(byName("system.searchFiles"));
     const globTool = tools.find(byName("system.glob"));
     expect(grepTool).toBeDefined();
-    expect(searchFilesTool).toBeDefined();
     expect(globTool).toBeDefined();
 
     const grepResult = JSON.parse(
@@ -245,18 +177,13 @@ describe("createCodingTools", () => {
     ) as { matches: Array<{ filePath: string; line: number }> };
     expect(grepResult.matches.some((match) => match.filePath === "src/app.ts")).toBe(true);
 
-    const searchResult = JSON.parse(
-      (await searchFilesTool!.execute({ query: "app", path: root })).content,
-    ) as { matches: string[] };
-    expect(searchResult.matches).toContain("src/app.ts");
-
     const globResult = JSON.parse(
       (await globTool!.execute({ pattern: "**/*.ts", path: root })).content,
     ) as { matches: string[] };
     expect(globResult.matches).toContain("src/app.ts");
   });
 
-  it("keeps grep and file search scoped to the requested subpath", async () => {
+  it("keeps grep scoped to the requested subpath", async () => {
     const root = await createRepoFixture();
     createdRoots.push(root);
     await mkdir(join(root, "docs"), { recursive: true });
@@ -267,19 +194,12 @@ describe("createCodingTools", () => {
       persistenceRootDir: root,
     });
     const grepTool = tools.find(byName("system.grep"));
-    const searchFilesTool = tools.find(byName("system.searchFiles"));
     expect(grepTool).toBeDefined();
-    expect(searchFilesTool).toBeDefined();
 
     const grepResult = JSON.parse(
       (await grepTool!.execute({ pattern: "docs", path: join(root, "src") })).content,
     ) as { matches: Array<{ filePath: string }> };
     expect(grepResult.matches).toHaveLength(0);
-
-    const searchResult = JSON.parse(
-      (await searchFilesTool!.execute({ query: "notes", path: join(root, "src") })).content,
-    ) as { matches: string[] };
-    expect(searchResult.matches).toHaveLength(0);
   });
 
   it("supports additive grep output modes and structured regex failures", async () => {
@@ -327,22 +247,4 @@ describe("createCodingTools", () => {
     expect(invalidRegexResult.content).toContain("error");
   });
 
-  it("returns a structured error for invalid searchFiles regex input", async () => {
-    const root = await createWorkspaceFixture();
-    createdRoots.push(root);
-    const tools = createCodingTools({
-      allowedPaths: [root],
-      persistenceRootDir: root,
-    });
-    const searchFilesTool = tools.find(byName("system.searchFiles"));
-    expect(searchFilesTool).toBeDefined();
-
-    const result = await searchFilesTool!.execute({
-      query: "(",
-      path: root,
-      regex: true,
-    });
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain("Invalid regex pattern");
-  });
 });

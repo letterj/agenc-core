@@ -16,4 +16,13 @@ export {
   defaultHookExecutor,
   type HookExecutor,
 } from "./executors.js";
+export {
+  buildUserHookDefinitions,
+  type UserHooksSettings,
+  type UserHookEntry,
+  type UserHookMatcherEntry,
+  type UserHookCommandEntry,
+  type UserHookHttpEntry,
+  type BuildUserHookDefinitionsResult,
+} from "./user-config.js";
 export * from "./stop-hooks.js";

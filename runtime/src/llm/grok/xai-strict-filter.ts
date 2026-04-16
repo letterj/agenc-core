@@ -628,7 +628,8 @@ export interface XaiResponseAnomaly {
     | "model_silently_aliased"
     | "incomplete_response"
     | "failed_response"
-    | "truncated_response_mid_sentence";
+    | "truncated_response_mid_sentence"
+    | "corrupt_reasoning_summary";
   readonly severity: "error" | "warn";
   readonly message: string;
   readonly evidence: Record<string, unknown>;
@@ -780,6 +781,98 @@ function extractAssistantMessageText(output: unknown): string {
     }
   }
   return parts.join("\n");
+}
+
+/**
+ * Grok reasoning-summary corruption detector.
+ *
+ * On `grok-code-fast-1`, reasoning summary output (`output[].summary[].text`
+ * inside `type: "reasoning"` blocks) can degenerate into a repetitive
+ * `//TODO:` / `// ` comment-style loop. The response reports
+ * `status: "completed"` with HTTP 200 — the API boundary is silent — but
+ * the summary text is garbage scrap like:
+ *
+ *   //TODO: Fix typo in existing summary if needed, //TODO: Fix typo
+ *   in existing summary if needed, //TODO: ig, //TODO: ig
+ *   // junk ignored ignored ignored ig
+ *
+ * Tool-call argument strings in the same response are unaffected (those
+ * legitimately contain `//` in C/JS/TS code edits). This detector scans
+ * only reasoning-summary text fields.
+ *
+ * Reproducer (captured 2026-04-16, model grok-code-fast-1):
+ *   ~/.agenc/trace-payloads/background_session_2ab885d9.../
+ *     1776327393138-background_run.provider.response-1920efa8fd22.json
+ *   at .payload.payload.output[0].summary[0].text
+ *
+ * Heuristics — all must hold, conservative by design:
+ *   - at least 5 occurrences of `//TODO:` or `// ` (with a letter after)
+ *     in one summary text block
+ *   - the average fragment length between `\n\n` separators is <=50 chars
+ *     (degenerate short scraps, not a real multi-paragraph reasoning trail)
+ *
+ * Returns { offendingBlocks, totalCount } where offendingBlocks gives the
+ * location + preview of each corrupt summary, or null if no corruption
+ * is detected. Callers treat this as a warn-level anomaly: tool calls in
+ * the same response are still valid and get dispatched normally. The
+ * corrupt summary text itself should be dropped from any user-visible
+ * output or history feed-forward to avoid poisoning the next turn.
+ */
+const REASONING_SUMMARY_FRAGMENT_AVG_MAX = 50;
+const REASONING_SUMMARY_MIN_COMMENT_OCCURRENCES = 5;
+const REASONING_SUMMARY_COMMENT_RE = /\/\/TODO:|\/\/\s+[A-Za-z]/g;
+
+export interface CorruptReasoningSummaryBlock {
+  readonly itemIndex: number;
+  readonly entryIndex: number;
+  readonly commentCount: number;
+  readonly averageFragmentLength: number;
+  readonly preview: string;
+}
+
+export function detectCorruptReasoningSummary(
+  output: unknown,
+): readonly CorruptReasoningSummaryBlock[] {
+  if (!Array.isArray(output)) return [];
+  const corrupt: CorruptReasoningSummaryBlock[] = [];
+  for (let itemIndex = 0; itemIndex < output.length; itemIndex++) {
+    const item = output[itemIndex];
+    if (!item || typeof item !== "object") continue;
+    if ((item as { type?: unknown }).type !== "reasoning") continue;
+    const summary = (item as { summary?: unknown }).summary;
+    if (!Array.isArray(summary)) continue;
+    for (let entryIndex = 0; entryIndex < summary.length; entryIndex++) {
+      const entry = summary[entryIndex];
+      if (!entry || typeof entry !== "object") continue;
+      const text = (entry as { text?: unknown }).text;
+      if (typeof text !== "string" || text.length === 0) continue;
+
+      // Count comment-style occurrences
+      const matches = text.match(REASONING_SUMMARY_COMMENT_RE);
+      const commentCount = matches ? matches.length : 0;
+      if (commentCount < REASONING_SUMMARY_MIN_COMMENT_OCCURRENCES) continue;
+
+      // Average fragment length between blank-line separators
+      const fragments = text
+        .split(/\n\s*\n/)
+        .map((fragment) => fragment.trim())
+        .filter((fragment) => fragment.length > 0);
+      if (fragments.length === 0) continue;
+      const avgLength =
+        fragments.reduce((sum, fragment) => sum + fragment.length, 0) /
+        fragments.length;
+      if (avgLength > REASONING_SUMMARY_FRAGMENT_AVG_MAX) continue;
+
+      corrupt.push({
+        itemIndex,
+        entryIndex,
+        commentCount,
+        averageFragmentLength: Math.round(avgLength),
+        preview: text.slice(0, 200),
+      });
+    }
+  }
+  return corrupt;
 }
 
 function countReasoningOutputBlocks(output: unknown): number {
@@ -1091,6 +1184,41 @@ export function validateXaiResponsePostFlight(params: {
   //    handles this in the non-streaming path, but the strict filter
   //    surfaces it as a structured anomaly so the post-flight is
   //    authoritative regardless of which path is in use.
+  // 6. Corrupt reasoning summary (grok-code-fast-1 degeneracy). The API
+  //    reports HTTP 200 + status: "completed" but the reasoning summary
+  //    text degrades into repetitive `//TODO:` / `// ` scraps. Tool-call
+  //    argument strings are unaffected (legit code comments there).
+  //    Emitted as a warn-level anomaly: tool calls still dispatched; the
+  //    corrupt summary text should be dropped from any user-visible
+  //    surface or history feed-forward before the next turn.
+  {
+    const corruptSummaries = detectCorruptReasoningSummary(output);
+    if (corruptSummaries.length > 0) {
+      anomalies.push({
+        code: "corrupt_reasoning_summary",
+        severity: "warn",
+        message:
+          `Response contains ${corruptSummaries.length} corrupt reasoning ` +
+          `summary block(s). Pattern matches known grok-code-fast-1 ` +
+          `degeneracy where summary text degrades into repetitive ` +
+          `"//TODO:" / "//" comment-style fragments. Tool calls in this ` +
+          `response are still valid and will be dispatched. The corrupt ` +
+          `summary text should be dropped from history and user-visible ` +
+          `surfaces to avoid poisoning the next turn.`,
+        evidence: {
+          count: corruptSummaries.length,
+          blocks: corruptSummaries.map((block) => ({
+            itemIndex: block.itemIndex,
+            entryIndex: block.entryIndex,
+            commentCount: block.commentCount,
+            averageFragmentLength: block.averageFragmentLength,
+            preview: block.preview,
+          })),
+        },
+      });
+    }
+  }
+
   if ((params.response as { status?: unknown }).status === "failed") {
     const errorPayload = (params.response as { error?: unknown }).error;
     const errorMessage =

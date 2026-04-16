@@ -61,12 +61,7 @@ import type {
   DelegationOutputValidationCode,
 } from "../utils/delegation-validation.js";
 import type { HostToolingProfile } from "../gateway/host-tooling.js";
-import type { AgentDefinition } from "../gateway/agent-loader.js";
-import type { DelegationVerifierService } from "../gateway/delegation-runtime.js";
 import type { InteractiveContextRequest } from "../gateway/interactive-context.js";
-import type { SubAgentManager } from "../gateway/sub-agent.js";
-import type { TaskStore } from "../tools/system/task-tracker.js";
-import type { SystemRemoteJobManager } from "../tools/system/remote-job.js";
 import type { ActiveTaskContext, TurnExecutionContract } from "./turn-execution-contract-types.js";
 import type {
   RuntimeContractFlags,
@@ -157,33 +152,44 @@ export interface ToolCallRecord {
   readonly failureBudgetExempt?: boolean;
 }
 
-type ChatExecutionTraceEventType =
-  | "continuation_evaluated"
-  | "continuation_started"
-  | "continuation_stopped"
-  | "completion_validator_finished"
-  | "completion_validator_started"
-  | "completion_validation_finished"
-  | "completion_validation_started"
-  | "compaction_triggered"
-  | "context_injected"
-  | "model_call_prepared"
-  | "recovery_hints_injected"
-  | "route_expanded"
-  | "runtime_contract_snapshot"
-  | "stop_hook_blocked"
-  | "stop_hook_execution_finished"
-  | "stop_hook_exhausted"
-  | "stop_hook_retry_requested"
-  | "stop_gate_intervention"
-  | "tool_arguments_invalid"
-  | "tool_dispatch_finished"
-  | "tool_dispatch_started"
-  | "tool_protocol_opened"
-  | "tool_protocol_repaired"
-  | "tool_protocol_result_recorded"
-  | "tool_protocol_violation"
-  | "tool_rejected";
+/**
+ * Complete inventory of runtime-emitted chat execution trace event
+ * types. Exposed as a readonly tuple so field-inventory snapshot tests
+ * can assert the exact set without reflecting on a compile-time-only
+ * union. Any event type added to or removed from this list changes
+ * the public trace contract; update consumers and tests deliberately.
+ */
+export const CHAT_EXECUTION_TRACE_EVENT_TYPES = [
+  "continuation_evaluated",
+  "continuation_started",
+  "continuation_stopped",
+  "completion_validator_finished",
+  "completion_validator_started",
+  "completion_validation_finished",
+  "completion_validation_started",
+  "compaction_triggered",
+  "context_injected",
+  "model_call_prepared",
+  "recovery_hints_injected",
+  "route_expanded",
+  "runtime_contract_snapshot",
+  "stop_hook_blocked",
+  "stop_hook_execution_finished",
+  "stop_hook_exhausted",
+  "stop_hook_retry_requested",
+  "stop_gate_intervention",
+  "tool_arguments_invalid",
+  "tool_dispatch_finished",
+  "tool_dispatch_started",
+  "tool_protocol_opened",
+  "tool_protocol_repaired",
+  "tool_protocol_result_recorded",
+  "tool_protocol_violation",
+  "tool_rejected",
+] as const;
+
+export type ChatExecutionTraceEventType =
+  (typeof CHAT_EXECUTION_TRACE_EVENT_TYPES)[number];
 
 export interface ChatExecutionTraceEvent {
   readonly type: ChatExecutionTraceEventType;
@@ -234,8 +240,6 @@ export interface ChatExecuteParams {
   };
   /** Optional replay/hydration context for interactive resume/fork parity. */
   readonly interactiveContext?: InteractiveContextRequest;
-  /** Optional durable verifier child session to resume instead of spawning a new verifier worker. */
-  readonly runtimeVerifierContinuationSessionId?: string;
   /** Optional per-turn tool-routing subset and expansion policy. */
   readonly toolRouting?: {
     /** Effective advertised bundle for this turn before any lexical narrowing. */
@@ -395,8 +399,6 @@ export interface ChatExecutorResult {
   readonly completionState: WorkflowCompletionState;
   /** Structured progress snapshot for long-horizon resume/recovery flows. */
   readonly completionProgress?: WorkflowProgressSnapshot;
-  /** Verifier snapshot observed by the executor-owned completion chain. */
-  readonly verifierSnapshot?: import("../workflow/completion-state.js").PlannerVerificationSnapshot;
   /** Runtime-contract telemetry captured during execution. Not consulted for final completion decisions. */
   readonly runtimeContractSnapshot?: RuntimeContractSnapshot;
   /** Resolved workspace root used for this execution, when available. */
@@ -420,7 +422,6 @@ export interface ToolLoopTerminalResult {
   readonly stopReasonDetail?: string;
   readonly validationCode?: DelegationOutputValidationCode;
   readonly completionState?: WorkflowCompletionState;
-  readonly verifierSnapshot?: import("../workflow/completion-state.js").PlannerVerificationSnapshot;
   readonly runtimeContractSnapshot: RuntimeContractSnapshot;
   readonly mutationDetected: boolean;
 }
@@ -562,27 +563,6 @@ export interface ChatExecutorConfig {
   readonly runtimeContractFlags?: RuntimeContractFlags;
   /** Optional runtime-owned stop-hook chain used by validators and task/worker gates. */
   readonly stopHookRuntime?: StopHookRuntime;
-  /** Optional runtime services for executor-owned completion validation. */
-  readonly completionValidation?: {
-    readonly topLevelVerifier?: {
-      readonly subAgentManager?: Pick<SubAgentManager, "spawn" | "waitForResult"> | null;
-      readonly verifierService?: Pick<
-        DelegationVerifierService,
-        "resolveVerifierRequirement" | "shouldVerifySubAgentResult"
-      > | null;
-      readonly agentDefinitions?: readonly AgentDefinition[];
-      readonly availableToolNames?: readonly string[];
-      readonly logger?: import("../utils/logger.js").Logger;
-      readonly taskStore?: TaskStore | null;
-      readonly remoteJobManager?: Pick<
-        SystemRemoteJobManager,
-        "start" | "handleWebhook"
-      > | null;
-      readonly onTraceEvent?: (
-        event: import("../gateway/top-level-verifier.js").TopLevelVerifierTraceEvent,
-      ) => void | Promise<void>;
-    };
-  };
 }
 
 // ============================================================================
@@ -680,7 +660,6 @@ export interface ExecutionContext {
   readonly plannerDecision: PlannerDecision;
   readonly toolRouting?: ChatExecuteParams["toolRouting"];
   readonly stateful?: ChatExecuteParams["stateful"];
-  readonly runtimeVerifierContinuationSessionId?: string;
   readonly requiredToolEvidence?: {
     readonly maxCorrectionAttempts: number;
     readonly maxCorrectionAttemptsExplicit: boolean;
@@ -719,7 +698,6 @@ export interface ExecutionContext {
   compactedArtifactContext?: ArtifactCompactionState;
   stopReason: LLMPipelineStopReason;
   completionState: WorkflowCompletionState;
-  verifierSnapshot?: import("../workflow/completion-state.js").PlannerVerificationSnapshot;
   /** Telemetry-only runtime contract snapshot carried for traces and results. */
   runtimeContractSnapshot: RuntimeContractSnapshot;
   toolProtocolState: ToolProtocolState;
@@ -769,7 +747,6 @@ interface BuildExecutionContextParams {
   readonly streamCallback?: StreamProgressCallback;
   readonly toolRouting?: ChatExecuteParams["toolRouting"];
   readonly stateful?: ChatExecuteParams["stateful"];
-  readonly runtimeVerifierContinuationSessionId?: string;
   readonly requiredToolEvidence?: ChatExecuteParams["requiredToolEvidence"];
   readonly trace?: ChatExecuteParams["trace"];
   readonly initialRoutedToolNames: readonly string[];
@@ -790,7 +767,6 @@ interface BuildExecutionContextConfig {
   readonly defaultRunClass?: RuntimeRunClass;
   readonly economicsPolicy: RuntimeEconomicsPolicy;
   readonly runtimeContractFlags: RuntimeContractFlags;
-  readonly completionValidation?: ChatExecutorConfig["completionValidation"];
 }
 
 /** Build the default ExecutionContext object with all mutable state initialized. */
@@ -839,8 +815,6 @@ export function buildDefaultExecutionContext(
     plannerDecision: params.plannerDecision,
     toolRouting: params.toolRouting,
     stateful: params.stateful,
-    runtimeVerifierContinuationSessionId:
-      params.runtimeVerifierContinuationSessionId,
     trace: params.trace,
     defaultRunClass: config.defaultRunClass,
     requiredToolEvidence: params.requiredToolEvidence
@@ -889,7 +863,6 @@ export function buildDefaultExecutionContext(
     compactedArtifactContext: params.stateful?.artifactContext,
     stopReason: "completed",
     completionState: "completed",
-    verifierSnapshot: undefined,
     runtimeContractSnapshot: createRuntimeContractSnapshot(
       config.runtimeContractFlags,
     ),

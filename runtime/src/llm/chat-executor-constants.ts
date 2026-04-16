@@ -119,7 +119,6 @@ export const HIGH_RISK_TOOLS = new Set([
   "system.bash",
   "system.writeFile",
   "system.delete",
-  "system.applyPatch",
   "system.gitWorktreeCreate",
   "system.gitWorktreeRemove",
   "system.applescript",
@@ -137,10 +136,8 @@ export const SAFE_TOOL_RETRY_PREFIXES = [
 export const SAFE_TOOL_RETRY_TOOLS = new Set([
   "system.listFiles",
   "system.readFile",
-  "system.readFileRange",
   "system.grep",
   "system.glob",
-  "system.searchFiles",
   "system.repoInventory",
   "system.gitStatus",
   "system.gitDiff",

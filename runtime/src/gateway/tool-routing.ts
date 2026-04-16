@@ -81,8 +81,6 @@ const ALWAYS_INLINE_TOOL_NAMES = new Set([
   "task.list",
   "task.get",
   "task.update",
-  "verification.listProbes",
-  "verification.runProbe",
 ]);
 
 const DEFERRED_NAME_PREFIXES = [

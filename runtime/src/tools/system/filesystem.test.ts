@@ -2301,3 +2301,144 @@ describe("inferToolAccess classification via tool naming", () => {
     expect(isPrefixRead).toBe(false);
   });
 });
+
+// ============================================================================
+// system.readFile — FILE_UNCHANGED_STUB cache-hit short-circuit
+// ============================================================================
+
+describe("system.readFile FILE_UNCHANGED_STUB", () => {
+  let readTool: Tool;
+  const sessionId = "session-file-unchanged";
+  const filePath = "/workspace/cached.txt";
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockRealpath.mockImplementation(async (p: string) => p as never);
+    readTool = findTool(createFilesystemTools(CONFIG), "system.readFile");
+  });
+
+  it("returns FILE_UNCHANGED_STUB on a repeat read with unchanged mtime", async () => {
+    const content = "hello world";
+    const mtimeMs = 1_700_000_000;
+
+    // First read — loads file + records session snapshot.
+    mockStat.mockResolvedValueOnce({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: content.length,
+      mtimeMs,
+    } as never);
+    mockReadFile.mockResolvedValueOnce(Buffer.from(content));
+    const first = await readTool.execute({
+      path: filePath,
+      __agencSessionId: sessionId,
+    });
+    expect(first.isError).toBeUndefined();
+    const firstParsed = JSON.parse(first.content as string);
+    expect(firstParsed.content).toBe(content);
+
+    // Second read — same mtime, stub expected, no readFile call.
+    mockStat.mockResolvedValueOnce({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: content.length,
+      mtimeMs,
+    } as never);
+    const second = await readTool.execute({
+      path: filePath,
+      __agencSessionId: sessionId,
+    });
+    expect(second.isError).toBeUndefined();
+    expect(second.content).toContain("File unchanged since previous read");
+    // readFile must not have been called on the second pass (only the
+    // first pass's one call).
+    expect(mockReadFile).toHaveBeenCalledTimes(1);
+
+    clearSessionReadState(sessionId);
+  });
+
+  it("re-reads when mtime changes between reads", async () => {
+    const original = "first";
+    const modified = "second";
+
+    mockStat.mockResolvedValueOnce({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: original.length,
+      mtimeMs: 1_000,
+    } as never);
+    mockReadFile.mockResolvedValueOnce(Buffer.from(original));
+    const first = await readTool.execute({
+      path: filePath,
+      __agencSessionId: sessionId,
+    });
+    expect(JSON.parse(first.content as string).content).toBe(original);
+
+    mockStat.mockResolvedValueOnce({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: modified.length,
+      mtimeMs: 2_000,
+    } as never);
+    mockReadFile.mockResolvedValueOnce(Buffer.from(modified));
+    const second = await readTool.execute({
+      path: filePath,
+      __agencSessionId: sessionId,
+    });
+    expect(second.isError).toBeUndefined();
+    expect(second.content).not.toContain("File unchanged");
+    expect(JSON.parse(second.content as string).content).toBe(modified);
+
+    clearSessionReadState(sessionId);
+  });
+
+  it("skips the stub for partial reads (offset/limit)", async () => {
+    const content = "line-1\nline-2\nline-3";
+    const mtimeMs = 3_000;
+
+    // First, full read to populate cache.
+    mockStat.mockResolvedValueOnce({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: content.length,
+      mtimeMs,
+    } as never);
+    mockReadFile.mockResolvedValueOnce(Buffer.from(content));
+    await readTool.execute({ path: filePath, __agencSessionId: sessionId });
+
+    // Second, partial — must skip the stub and do a real read.
+    mockStat.mockResolvedValueOnce({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: content.length,
+      mtimeMs,
+    } as never);
+    mockReadFile.mockResolvedValueOnce(Buffer.from(content));
+    const partial = await readTool.execute({
+      path: filePath,
+      offset: 2,
+      limit: 1,
+      __agencSessionId: sessionId,
+    });
+    expect(partial.isError).toBeUndefined();
+    expect(partial.content).not.toContain("File unchanged");
+    expect(JSON.parse(partial.content as string).content).toBe("line-2");
+
+    clearSessionReadState(sessionId);
+  });
+
+  it("skips the stub when no session id is provided", async () => {
+    const content = "no-session";
+    mockStat.mockResolvedValueOnce({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: content.length,
+      mtimeMs: 5_000,
+    } as never);
+    mockReadFile.mockResolvedValueOnce(Buffer.from(content));
+    const result = await readTool.execute({ path: filePath });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).not.toContain("File unchanged");
+    expect(JSON.parse(result.content as string).content).toBe(content);
+  });
+});

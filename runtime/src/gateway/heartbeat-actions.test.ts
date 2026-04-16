@@ -1,15 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PublicKey } from "@solana/web3.js";
 import {
-  createTaskScanAction,
   createSummaryAction,
   createPortfolioAction,
   createPollingAction,
   createDefaultHeartbeatActions,
 } from "./heartbeat-actions.js";
 import type { HeartbeatContext, HeartbeatResult } from "./heartbeat.js";
-import type { TaskScanner } from "../autonomous/scanner.js";
-import type { Task } from "../autonomous/types.js";
 import type { MemoryBackend, MemoryEntry } from "../memory/types.js";
 import type { LLMProvider, LLMResponse } from "../llm/types.js";
 import type { Connection } from "@solana/web3.js";
@@ -30,28 +27,6 @@ function makeContext(): HeartbeatContext {
       .fn<(content: string) => Promise<void>>()
       .mockResolvedValue(undefined),
   };
-}
-
-function makeTask(overrides?: Partial<Task>): Task {
-  return {
-    pda: new PublicKey("11111111111111111111111111111112"),
-    taskId: new Uint8Array(32),
-    creator: new PublicKey("11111111111111111111111111111112"),
-    requiredCapabilities: 1n,
-    reward: 2_000_000_000n,
-    description: new Uint8Array(64),
-    constraintHash: new Uint8Array(32),
-    deadline: 0,
-    maxWorkers: 1,
-    currentClaims: 0,
-    status: 0,
-    rewardMint: null,
-    ...overrides,
-  };
-}
-
-function makeScanner(tasks: Task[] = []): TaskScanner {
-  return { scan: vi.fn().mockResolvedValue(tasks) } as unknown as TaskScanner;
 }
 
 function makeMemoryBackend(overrides?: Partial<MemoryBackend>): MemoryBackend {
@@ -114,64 +89,6 @@ function makeConnection(balance = 5_000_000_000): Connection {
 // ============================================================================
 // Task scan action
 // ============================================================================
-
-describe("createTaskScanAction", () => {
-  it("returns quiet when scanner finds no tasks", async () => {
-    const action = createTaskScanAction({ scanner: makeScanner([]) });
-    const result = await action.execute(makeContext());
-    expect(result.hasOutput).toBe(false);
-    expect(result.quiet).toBe(true);
-  });
-
-  it("returns formatted output when tasks are found", async () => {
-    const tasks = [makeTask({ reward: 1_500_000_000n })];
-    const action = createTaskScanAction({ scanner: makeScanner(tasks) });
-    const result = await action.execute(makeContext());
-
-    expect(result.hasOutput).toBe(true);
-    expect(result.quiet).toBe(false);
-    expect(result.output).toContain("Found 1 claimable task(s)");
-    expect(result.output).toContain("1.5000 SOL");
-  });
-
-  it("formats SPL token tasks with mint address", async () => {
-    const mint = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-    const tasks = [makeTask({ reward: 1_000_000n, rewardMint: mint })];
-    const action = createTaskScanAction({ scanner: makeScanner(tasks) });
-    const result = await action.execute(makeContext());
-
-    expect(result.hasOutput).toBe(true);
-    expect(result.output).toContain("1000000 lamports");
-    expect(result.output).toContain(mint.toBase58());
-  });
-
-  it("returns quiet and logs on scanner error", async () => {
-    const scanner = {
-      scan: vi.fn().mockRejectedValue(new Error("rpc fail")),
-    } as unknown as TaskScanner;
-    const action = createTaskScanAction({ scanner });
-    const ctx = makeContext();
-    const result = await action.execute(ctx);
-
-    expect(result.quiet).toBe(true);
-    expect(ctx.logger.error).toHaveBeenCalled();
-  });
-
-  it('has name "task-scan" and enabled true', () => {
-    const action = createTaskScanAction({ scanner: makeScanner() });
-    expect(action.name).toBe("task-scan");
-    expect(action.enabled).toBe(true);
-  });
-
-  it("includes truncated PDA in output", async () => {
-    const pda = new PublicKey("9WzDXwBbmPdCBoccS9W9J4nAjBD2VBaRqmptzYTfBKSU");
-    const tasks = [makeTask({ pda, reward: 1_000_000_000n })];
-    const action = createTaskScanAction({ scanner: makeScanner(tasks) });
-    const result = await action.execute(makeContext());
-
-    expect(result.output).toContain(pda.toBase58().slice(0, 8));
-  });
-});
 
 // ============================================================================
 // Summary action
@@ -537,9 +454,8 @@ describe("createPollingAction", () => {
 // ============================================================================
 
 describe("createDefaultHeartbeatActions", () => {
-  it("returns 3 actions", () => {
+  it("returns 2 actions", () => {
     const actions = createDefaultHeartbeatActions({
-      scanner: makeScanner(),
       memory: makeMemoryBackend(),
       llm: makeLLMProvider(),
       connection: makeConnection(),
@@ -547,12 +463,11 @@ describe("createDefaultHeartbeatActions", () => {
       sessionId: "sess-1",
     });
 
-    expect(actions).toHaveLength(3);
+    expect(actions).toHaveLength(2);
   });
 
   it("returns actions with correct names", () => {
     const actions = createDefaultHeartbeatActions({
-      scanner: makeScanner(),
       memory: makeMemoryBackend(),
       llm: makeLLMProvider(),
       connection: makeConnection(),
@@ -561,7 +476,6 @@ describe("createDefaultHeartbeatActions", () => {
     });
 
     expect(actions.map((a) => a.name)).toEqual([
-      "task-scan",
       "summary",
       "portfolio",
     ]);
@@ -569,7 +483,6 @@ describe("createDefaultHeartbeatActions", () => {
 
   it("all actions are enabled", () => {
     const actions = createDefaultHeartbeatActions({
-      scanner: makeScanner(),
       memory: makeMemoryBackend(),
       llm: makeLLMProvider(),
       connection: makeConnection(),

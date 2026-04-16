@@ -105,8 +105,6 @@ export type {
 // Response converter
 export { responseToOutput } from "./response-converter.js";
 
-// LLM Task Executor
-export { LLMTaskExecutor, type LLMTaskExecutorConfig } from "./executor.js";
 export { FallbackLLMProvider, type FallbackChainConfig } from "./fallback.js";
 
 // Chat Executor (Phase 1.11)

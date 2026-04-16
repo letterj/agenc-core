@@ -15,7 +15,6 @@ const MIN_DIMINISHING_RETURNS_CONTINUATIONS = 3;
 const CONTINUATION_COMPLETION_THRESHOLD = 0.9;
 
 const SUCCESSFUL_MUTATION_TOOL_NAMES = new Set([
-  "system.applyPatch",
   "system.appendFile",
   "system.editFile",
   "system.mkdir",

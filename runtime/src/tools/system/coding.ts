@@ -1,12 +1,9 @@
-import { readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve as resolvePath } from "node:path";
 
 import type { Tool, ToolCatalogEntry, ToolResult } from "../types.js";
 import { safeStringify } from "../types.js";
 import {
-  hasSessionRead,
-  recordSessionRead,
-  resolveSessionId,
   resolveToolAllowedPaths,
   safePath,
 } from "./filesystem.js";
@@ -26,6 +23,15 @@ export interface CodingToolConfig {
   readonly persistenceRootDir: string;
   readonly logger?: Logger;
   readonly getToolCatalog?: () => readonly ToolCatalogEntry[];
+  /**
+   * Enable the heavier "code intelligence" tools that are not in the
+   * upstream reference runtime: system.repoInventory, system.git*,
+   * system.symbol*. Defaults to false for coding-parity (upstream
+   * uses Bash + grep + glob instead). Marketplace / operator flows
+   * that genuinely need structured git output or the semantic symbol
+   * index can pass true.
+   */
+  readonly codeIntelligenceTools?: boolean;
 }
 
 const MAX_RESULTS = 200;
@@ -313,39 +319,6 @@ async function listSearchTargetFiles(params: {
   };
 }
 
-function passesFileFilters(filePath: string, params: {
-  readonly repoRoot: string;
-  readonly globPatterns?: readonly string[];
-  readonly query?: string;
-  readonly regex?: RegExp;
-}): boolean {
-  const relativePath = toRelativeWorkspacePath(params.repoRoot, filePath);
-  if (params.globPatterns && params.globPatterns.length > 0) {
-    const matched = params.globPatterns.some((pattern) =>
-      matchGlob(pattern, relativePath) ||
-      matchGlob(pattern, basename(relativePath))
-    );
-    if (!matched) return false;
-  }
-  if (params.query) {
-    const lower = params.query.toLowerCase();
-    if (
-      !basename(relativePath).toLowerCase().includes(lower) &&
-      !relativePath.toLowerCase().includes(lower)
-    ) {
-      return false;
-    }
-  }
-  if (params.regex && !params.regex.test(relativePath)) {
-    params.regex.lastIndex = 0;
-    return false;
-  }
-  if (params.regex) {
-    params.regex.lastIndex = 0;
-  }
-  return true;
-}
-
 async function readTextFile(path: string): Promise<string | undefined> {
   const fileStat = await stat(path).catch(() => undefined);
   if (!fileStat?.isFile() || fileStat.size > TEXT_FILE_SIZE_LIMIT) {
@@ -474,153 +447,6 @@ function summarizeChanges(changed: readonly {
     untracked,
     conflicted,
   };
-}
-
-interface ParsedFilePatch {
-  readonly oldPath: string;
-  readonly newPath: string;
-  readonly hunks: readonly ParsedHunk[];
-  readonly createsFile: boolean;
-  readonly deletesFile: boolean;
-}
-
-interface ParsedHunk {
-  readonly oldStart: number;
-  readonly oldCount: number;
-  readonly newStart: number;
-  readonly newCount: number;
-  readonly lines: readonly string[];
-}
-
-function parseUnifiedDiff(diffText: string): ParsedFilePatch[] {
-  const lines = diffText.replace(/\r\n/g, "\n").split("\n");
-  const patches: ParsedFilePatch[] = [];
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index] ?? "";
-    if (!line.startsWith("--- ")) {
-      index += 1;
-      continue;
-    }
-    const oldPathRaw = line.slice(4).trim();
-    const nextLine = lines[index + 1] ?? "";
-    if (!nextLine.startsWith("+++ ")) {
-      throw new Error("Invalid unified diff: missing +++ header");
-    }
-    const newPathRaw = nextLine.slice(4).trim();
-    index += 2;
-    const hunks: ParsedHunk[] = [];
-    while (index < lines.length) {
-      const hunkHeader = lines[index] ?? "";
-      if (hunkHeader.startsWith("--- ")) {
-        break;
-      }
-      if (!hunkHeader.startsWith("@@ ")) {
-        index += 1;
-        continue;
-      }
-      const match =
-        /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(hunkHeader);
-      if (!match) {
-        throw new Error(`Invalid unified diff hunk header: ${hunkHeader}`);
-      }
-      index += 1;
-      const hunkLines: string[] = [];
-      while (index < lines.length) {
-        const hunkLine = lines[index] ?? "";
-        if (hunkLine.startsWith("@@ ") || hunkLine.startsWith("--- ")) {
-          break;
-        }
-        if (hunkLine.startsWith("\\ No newline at end of file")) {
-          index += 1;
-          continue;
-        }
-        hunkLines.push(hunkLine);
-        index += 1;
-      }
-      hunks.push({
-        oldStart: Number(match[1] ?? 0),
-        oldCount: Number(match[2] ?? 1),
-        newStart: Number(match[3] ?? 0),
-        newCount: Number(match[4] ?? 1),
-        lines: hunkLines,
-      });
-    }
-    patches.push({
-      oldPath: stripDiffPath(oldPathRaw),
-      newPath: stripDiffPath(newPathRaw),
-      hunks,
-      createsFile: oldPathRaw === "/dev/null",
-      deletesFile: newPathRaw === "/dev/null",
-    });
-  }
-  return patches;
-}
-
-function stripDiffPath(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed === "/dev/null") return trimmed;
-  if (trimmed.startsWith("a/") || trimmed.startsWith("b/")) {
-    return trimmed.slice(2);
-  }
-  return trimmed;
-}
-
-function applyParsedPatchToLines(params: {
-  readonly originalLines: readonly string[];
-  readonly patch: ParsedFilePatch;
-}): string[] {
-  const next: string[] = [];
-  let cursor = 0;
-  for (const hunk of params.patch.hunks) {
-    const targetIndex = Math.max(0, hunk.oldStart - 1);
-    while (cursor < targetIndex && cursor < params.originalLines.length) {
-      next.push(params.originalLines[cursor] ?? "");
-      cursor += 1;
-    }
-    for (const line of hunk.lines) {
-      const prefix = line[0];
-      const content = line.slice(1);
-      if (prefix === " ") {
-        const existing = params.originalLines[cursor] ?? "";
-        if (existing !== content) {
-          throw new Error(`Patch context mismatch near line ${cursor + 1}`);
-        }
-        next.push(existing);
-        cursor += 1;
-        continue;
-      }
-      if (prefix === "-") {
-        const existing = params.originalLines[cursor] ?? "";
-        if (existing !== content) {
-          throw new Error(`Patch removal mismatch near line ${cursor + 1}`);
-        }
-        cursor += 1;
-        continue;
-      }
-      if (prefix === "+") {
-        next.push(content);
-      }
-    }
-  }
-  while (cursor < params.originalLines.length) {
-    next.push(params.originalLines[cursor] ?? "");
-    cursor += 1;
-  }
-  return next;
-}
-
-async function resolvePatchTargetPath(params: {
-  readonly patchPath: string;
-  readonly repoRoot: string;
-  readonly allowedPaths: readonly string[];
-}): Promise<string> {
-  const absolutePath = resolvePath(params.repoRoot, params.patchPath);
-  const safe = await safePath(absolutePath, params.allowedPaths);
-  if (!safe.safe) {
-    throw new Error(safe.reason ?? `Path ${params.patchPath} is outside allowed directories`);
-  }
-  return safe.resolved;
 }
 
 function scoreCatalogEntry(entry: ToolCatalogEntry, query?: string): number {
@@ -915,69 +741,6 @@ export function createCodingTools(config: CodingToolConfig): readonly Tool[] {
           0,
           normalizePositiveInteger(args.maxResults, 100, MAX_RESULTS),
         ),
-      });
-    },
-  };
-
-  const searchFilesTool: Tool = {
-    name: "system.searchFiles",
-    description:
-      "Search path-scoped files by basename or relative path. Prefer this over raw shell find/fd for coding discovery.",
-    metadata: metadata("system.searchFiles"),
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string" },
-        regex: { type: "boolean" },
-        path: { type: "string" },
-        glob: {
-          anyOf: [
-            { type: "string" },
-            { type: "array", items: { type: "string" } },
-          ],
-        },
-        filePatterns: { type: "array", items: { type: "string" } },
-        maxResults: { type: "integer", minimum: 1, maximum: MAX_RESULTS },
-      },
-      required: ["query"],
-      additionalProperties: false,
-    },
-    async execute(args) {
-      const query = toOptionalString(args.query);
-      if (!query) return errorResult("query must be a non-empty string");
-      const target = await resolveSearchTarget({ config, args, pathArgKeys: ["path"] });
-      if ("error" in target) return errorResult(target.error);
-      let regex: RegExp | undefined;
-      if (args.regex === true) {
-        try {
-          regex = new RegExp(query, "i");
-        } catch (error) {
-          return errorResult(
-            `Invalid regex pattern: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-      const listed = await listSearchTargetFiles({
-        target,
-        globPatterns: resolveSearchGlobPatterns(args),
-      });
-      if ("error" in listed) return errorResult(listed.error);
-      const matched = listed.matches
-        .filter((filePath) =>
-          passesFileFilters(resolvePath(listed.searchRoot, filePath), {
-            repoRoot: listed.searchRoot,
-            query: args.regex === true ? undefined : query,
-            regex,
-          })
-        )
-        .slice(0, normalizePositiveInteger(args.maxResults, 100, MAX_RESULTS));
-      return okResult({
-        repoRoot: listed.searchRoot,
-        searchRoot: listed.searchRoot,
-        searchPath: listed.searchPath,
-        query,
-        regex: args.regex === true,
-        matches: matched,
       });
     },
   };
@@ -1425,136 +1188,6 @@ export function createCodingTools(config: CodingToolConfig): readonly Tool[] {
     },
   };
 
-  const readFileRangeTool: Tool = {
-    name: "system.readFileRange",
-    description:
-      "Read a bounded line range from a text file and record the file as read for later safe mutations.",
-    metadata: metadata("system.readFileRange"),
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string" },
-        startLine: { type: "integer", minimum: 1 },
-        endLine: { type: "integer", minimum: 1 },
-      },
-      required: ["path"],
-      additionalProperties: false,
-    },
-    async execute(args) {
-      const path = toOptionalString(args.path);
-      if (!path) return errorResult("path must be a non-empty string");
-      const allowedPaths = resolveToolAllowedPaths(config.allowedPaths, args);
-      const safe = await safePath(path, allowedPaths);
-      if (!safe.safe) return errorResult(safe.reason ?? "Path is outside allowed directories");
-      const text = await readTextFile(safe.resolved);
-      if (text === undefined) {
-        return errorResult(`Unable to read text file: ${path}`);
-      }
-      const lines = text.split(/\r?\n/);
-      const startLine = normalizePositiveInteger(args.startLine, 1, lines.length || 1);
-      const endLine = Math.max(
-        startLine,
-        normalizePositiveInteger(args.endLine, startLine + 50, lines.length || startLine),
-      );
-      const selected = lines.slice(startLine - 1, endLine);
-      recordSessionRead(resolveSessionId(args), safe.resolved, {
-        content: selected.join("\n"),
-        viewKind: "partial",
-      });
-      return okResult({
-        path: safe.resolved,
-        startLine,
-        endLine,
-        lines: selected.map((text, index) => ({
-          line: startLine + index,
-          text,
-        })),
-      });
-    },
-  };
-
-  const applyPatchTool: Tool = {
-    name: "system.applyPatch",
-    description:
-      "Apply a unified diff patch to repo-local files using the runtime's read-before-write and allowed-path safety rules.",
-    metadata: metadata("system.applyPatch", true),
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "Repo root or path inside the repo." },
-        patch: { type: "string" },
-      },
-      required: ["patch"],
-      additionalProperties: false,
-    },
-    async execute(args) {
-      const patch = toOptionalString(args.patch);
-      if (!patch) return errorResult("patch must be a non-empty string");
-      const repoRoot = await resolveRepoRoot({ config, args, pathArgKeys: ["path"] });
-      if (typeof repoRoot !== "string") return errorResult(repoRoot.error);
-      const allowedPaths = resolveToolAllowedPaths(config.allowedPaths, args);
-      const sessionId = resolveSessionId(args);
-      const patches = parseUnifiedDiff(patch);
-      if (patches.length === 0) {
-        return errorResult("Patch does not contain any file hunks");
-      }
-
-      const changedFiles: string[] = [];
-      for (const filePatch of patches) {
-        const targetPath = filePatch.deletesFile ? filePatch.oldPath : filePatch.newPath;
-        if (!targetPath || targetPath === "/dev/null") {
-          return errorResult("Patch must target a repo-local file path");
-        }
-        const resolvedTarget = await resolvePatchTargetPath({
-          patchPath: targetPath,
-          repoRoot,
-          allowedPaths,
-        }).catch((error) => ({
-          error: error instanceof Error ? error.message : String(error),
-        }));
-        if (typeof resolvedTarget !== "string") {
-          return errorResult(resolvedTarget.error);
-        }
-
-        const existingStat = await stat(resolvedTarget).catch(() => undefined);
-        if (existingStat && !hasSessionRead(sessionId, resolvedTarget)) {
-          return errorResult(
-            `Call system.readFile on "${targetPath}" before system.applyPatch.`,
-          );
-        }
-
-        const originalText = existingStat
-          ? await readFile(resolvedTarget, "utf8").catch(() => "")
-          : "";
-        const originalLines = originalText.length > 0 ? originalText.split(/\r?\n/) : [];
-
-        if (filePatch.deletesFile) {
-          if (!existingStat) {
-            return errorResult(`Cannot delete missing file ${targetPath}`);
-          }
-          await rm(resolvedTarget, { force: false });
-          changedFiles.push(targetPath);
-          continue;
-        }
-
-        const nextLines = applyParsedPatchToLines({
-          originalLines,
-          patch: filePatch,
-        });
-        const nextText = nextLines.join("\n");
-        await writeFile(resolvedTarget, nextText, "utf8");
-        recordSessionRead(sessionId, resolvedTarget);
-        changedFiles.push(targetPath);
-      }
-
-      return okResult({
-        repoRoot,
-        changedFiles,
-        fileCount: changedFiles.length,
-      });
-    },
-  };
-
   const symbolSearchTool: Tool = {
     name: "system.symbolSearch",
     description: "Search semantic repo symbols from the native code-intel index.",
@@ -1750,25 +1383,24 @@ export function createCodingTools(config: CodingToolConfig): readonly Tool[] {
     },
   };
 
-  return [
-    grepTool,
-    globTool,
-    searchFilesTool,
-    repoInventoryTool,
-    gitStatusTool,
-    gitDiffTool,
-    gitShowTool,
-    gitBranchInfoTool,
-    gitChangeSummaryTool,
-    gitWorktreeListTool,
-    gitWorktreeCreateTool,
-    gitWorktreeRemoveTool,
-    gitWorktreeStatusTool,
-    readFileRangeTool,
-    applyPatchTool,
-    symbolSearchTool,
-    symbolDefinitionTool,
-    symbolReferencesTool,
-    searchToolsTool,
-  ];
+  const tools: Tool[] = [grepTool, globTool];
+  if (config.codeIntelligenceTools === true) {
+    tools.push(
+      repoInventoryTool,
+      gitStatusTool,
+      gitDiffTool,
+      gitShowTool,
+      gitBranchInfoTool,
+      gitChangeSummaryTool,
+      gitWorktreeListTool,
+      gitWorktreeCreateTool,
+      gitWorktreeRemoveTool,
+      gitWorktreeStatusTool,
+      symbolSearchTool,
+      symbolDefinitionTool,
+      symbolReferencesTool,
+    );
+  }
+  tools.push(searchToolsTool);
+  return tools;
 }

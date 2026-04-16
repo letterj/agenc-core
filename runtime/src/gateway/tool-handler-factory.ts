@@ -97,11 +97,8 @@ const TOOL_DEFAULT_CWD_NAMES = new Set([
   "desktop.bash",
   "system.processStart",
   "system.serverStart",
-  "verification.listProbes",
-  "verification.runProbe",
   "system.grep",
   "system.glob",
-  "system.searchFiles",
   "system.repoInventory",
   "system.gitStatus",
   "system.gitDiff",
@@ -117,13 +114,11 @@ const TOOL_DEFAULT_CWD_NAMES = new Set([
 ]);
 const SESSION_ALLOWED_ROOT_TOOL_NAMES = new Set([
   "system.readFile",
-  "system.readFileRange",
   "system.writeFile",
   "system.appendFile",
   "system.editFile",
   "system.grep",
   "system.glob",
-  "system.searchFiles",
   "system.repoInventory",
   "system.gitStatus",
   "system.gitDiff",
@@ -134,7 +129,6 @@ const SESSION_ALLOWED_ROOT_TOOL_NAMES = new Set([
   "system.gitWorktreeCreate",
   "system.gitWorktreeRemove",
   "system.gitWorktreeStatus",
-  "system.applyPatch",
   "system.symbolSearch",
   "system.symbolDefinition",
   "system.symbolReferences",
@@ -168,22 +162,18 @@ const SESSION_ALLOWED_ROOT_TOOL_NAMES = new Set([
 const SESSION_ID_TOOL_NAMES = new Set([
   "desktop.text_editor",
   "system.readFile",
-  "system.readFileRange",
   "system.writeFile",
   "system.appendFile",
   "system.editFile",
-  "system.applyPatch",
 ]);
 const TOOL_PATH_ARG_KEYS: Readonly<Record<string, readonly string[]>> = {
   "desktop.text_editor": ["path"],
   "system.readFile": ["path"],
-  "system.readFileRange": ["path"],
   "system.writeFile": ["path"],
   "system.appendFile": ["path"],
   "system.editFile": ["path"],
   "system.grep": ["path"],
   "system.glob": ["path"],
-  "system.searchFiles": ["path"],
   "system.repoInventory": ["path"],
   "system.gitStatus": ["path"],
   "system.gitDiff": ["path"],
@@ -194,7 +184,6 @@ const TOOL_PATH_ARG_KEYS: Readonly<Record<string, readonly string[]>> = {
   "system.gitWorktreeCreate": ["path", "worktreePath"],
   "system.gitWorktreeRemove": ["path", "worktreePath"],
   "system.gitWorktreeStatus": ["worktreePath"],
-  "system.applyPatch": ["path"],
   "system.symbolSearch": ["path"],
   "system.symbolDefinition": ["path", "filePath"],
   "system.symbolReferences": ["path", "filePath"],
@@ -3262,11 +3251,6 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
     });
 
     if (isSubAgentSession && lifecycleEmitter) {
-      const verifierRequirement = verifier?.resolveVerifierRequirement({
-        runtimeRequired: runtimeContractFlags?.verifierRuntimeRequired,
-        projectBootstrap: runtimeContractFlags?.verifierProjectBootstrap,
-        workspaceRoot: defaultWorkingDirectory ?? scopedFilesystemRoot,
-      });
       lifecycleEmitter.emit({
         type: 'subagents.tool.result',
         timestamp: Date.now(),
@@ -3280,9 +3264,6 @@ export function createSessionToolHandler(config: SessionToolHandlerConfig): Tool
           toolCallId,
           ...(subAgentInfo?.parentToolCallId
             ? { parentToolCallId: subAgentInfo.parentToolCallId }
-            : {}),
-          ...(verifierRequirement
-            ? { verifierRequirement }
             : {}),
         },
       });

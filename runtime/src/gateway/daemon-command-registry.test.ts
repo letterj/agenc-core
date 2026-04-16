@@ -572,7 +572,6 @@ function makeCommandRegistry(params?: {
       getDesktopBridges: () => new Map(),
       getPlaywrightBridges: () => new Map(),
       getContainerMCPBridges: () => new Map(),
-      getGoalManager: () => null,
       startSlashInit: vi.fn(async () => ({
         filePath: "/tmp/project/AGENC.md",
         started: true,

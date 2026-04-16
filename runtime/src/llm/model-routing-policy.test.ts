@@ -41,7 +41,36 @@ describe("model-routing-policy — xAI structured-output capability", () => {
     expect(policy.providers[0]?.supportsStructuredOutputWithTools).toBe(true);
   });
 
-  it("reorders a capable grok-4 model ahead of grok-code-fast-1 when structured outputs are required", () => {
+  it("preserves generic non-grok structured-output defaulting (enabled unless explicitly disabled)", () => {
+    const generic = makeProvider("generic-provider");
+    const policy = buildModelRoutingPolicy({
+      providers: [generic],
+      economicsPolicy: NOOP_ECONOMICS_POLICY,
+      providerConfigs: [
+        { provider: "generic-provider", model: "generic-model-v1" },
+      ],
+    });
+    expect(policy.providers[0]?.supportsStructuredOutputWithTools).toBe(true);
+
+    const policyDisabled = buildModelRoutingPolicy({
+      providers: [generic],
+      economicsPolicy: NOOP_ECONOMICS_POLICY,
+      providerConfigs: [
+        {
+          provider: "generic-provider",
+          model: "generic-model-v1",
+          structuredOutputs: { enabled: false },
+        },
+      ],
+    });
+    expect(policyDisabled.providers[0]?.supportsStructuredOutputWithTools).toBe(
+      false,
+    );
+  });
+});
+
+describe("model-routing-policy — session-pinned primary, no silent model swap", () => {
+  it("keeps the session's primary selected when structured outputs are requested, even with a capable fallback available", () => {
     const codeFast = makeProvider("grok");
     const grok4 = makeProvider("grok");
     const policy = buildModelRoutingPolicy({
@@ -59,32 +88,18 @@ describe("model-routing-policy — xAI structured-output capability", () => {
       requirements: { structuredOutputRequired: true },
     });
 
-    expect(decision.selectedModel).toBe("grok-4-1-fast-non-reasoning");
-    expect(decision.rerouted).toBe(true);
-    expect(decision.reason).toBe("structured_output_capability");
-  });
-
-  it("leaves grok-code-fast-1 selected when no capable grok-4 is configured, even if structured outputs are required", () => {
-    const codeFast = makeProvider("grok");
-    const policy = buildModelRoutingPolicy({
-      providers: [codeFast],
-      economicsPolicy: NOOP_ECONOMICS_POLICY,
-      providerConfigs: [
-        { provider: "grok", model: "grok-code-fast-1" },
-      ],
-    });
-
-    const decision = resolveModelRoute({
-      policy,
-      runClass: "executor",
-      requirements: { structuredOutputRequired: true },
-    });
-
+    // Primary stays selected. The incompatibility between the session's
+    // primary and a structured-output-with-tools request is resolved by
+    // the adapter-level fail-closed gate
+    // (`assertXaiStructuredOutputToolCompatibility`), not by silently
+    // hopping to the fallback mid-session.
     expect(decision.selectedModel).toBe("grok-code-fast-1");
     expect(decision.rerouted).toBe(false);
+    expect(decision.reason).toBe("default");
+    expect(decision.selectedProviderRouteKey).toBe("grok:grok-code-fast-1");
   });
 
-  it("does not reorder when structured outputs are NOT required, even with mixed grok models", () => {
+  it("keeps the primary selected when structured outputs are NOT required", () => {
     const codeFast = makeProvider("grok");
     const grok4 = makeProvider("grok");
     const policy = buildModelRoutingPolicy({
@@ -106,30 +121,65 @@ describe("model-routing-policy — xAI structured-output capability", () => {
     expect(decision.rerouted).toBe(false);
   });
 
-  it("preserves non-grok structured-output defaulting (enabled unless explicitly disabled)", () => {
-    const anthropic = makeProvider("anthropic");
+  it("returns the same session-pinned model across repeated calls regardless of run class or requirements", () => {
+    const codeFast = makeProvider("grok");
+    const grok4 = makeProvider("grok");
     const policy = buildModelRoutingPolicy({
-      providers: [anthropic],
+      providers: [codeFast, grok4],
       economicsPolicy: NOOP_ECONOMICS_POLICY,
       providerConfigs: [
-        { provider: "anthropic", model: "claude-sonnet" },
+        { provider: "grok", model: "grok-code-fast-1" },
+        { provider: "grok", model: "grok-4-1-fast-non-reasoning" },
       ],
     });
-    expect(policy.providers[0]?.supportsStructuredOutputWithTools).toBe(true);
 
-    const policyDisabled = buildModelRoutingPolicy({
-      providers: [anthropic],
+    const selections = new Set(
+      [
+        resolveModelRoute({ policy, runClass: "executor" }),
+        resolveModelRoute({
+          policy,
+          runClass: "executor",
+          requirements: { structuredOutputRequired: true },
+        }),
+        resolveModelRoute({
+          policy,
+          runClass: "executor",
+          requirements: { statefulContinuationRequired: true },
+        }),
+        resolveModelRoute({ policy, runClass: "planner" }),
+        resolveModelRoute({ policy, runClass: "verifier" }),
+      ].map((decision) => decision.selectedProviderRouteKey),
+    );
+    // One model variant per session — all calls resolve to the same
+    // primary route key.
+    expect([...selections]).toEqual(["grok:grok-code-fast-1"]);
+  });
+
+  it("falls back to a healthy secondary only when the primary is explicitly degraded", () => {
+    const primary = makeProvider("grok");
+    const secondary = makeProvider("grok-secondary");
+    const policy = buildModelRoutingPolicy({
+      providers: [primary, secondary],
       economicsPolicy: NOOP_ECONOMICS_POLICY,
       providerConfigs: [
-        {
-          provider: "anthropic",
-          model: "claude-sonnet",
-          structuredOutputs: { enabled: false },
-        },
+        { provider: "grok", model: "grok-code-fast-1" },
+        { provider: "grok-secondary", model: "grok-4-1-fast-non-reasoning" },
       ],
     });
-    expect(policyDisabled.providers[0]?.supportsStructuredOutputWithTools).toBe(
-      false,
-    );
+
+    const stable = resolveModelRoute({
+      policy,
+      runClass: "executor",
+    });
+    expect(stable.selectedProviderRouteKey).toBe("grok:grok-code-fast-1");
+
+    const degraded = resolveModelRoute({
+      policy,
+      runClass: "executor",
+      degradedProviderNames: ["grok"],
+    });
+    expect(degraded.selectedProviderName).toBe("grok-secondary");
+    expect(degraded.rerouted).toBe(true);
+    expect(degraded.reason).toBe("degraded_provider");
   });
 });

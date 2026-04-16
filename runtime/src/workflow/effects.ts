@@ -174,7 +174,6 @@ export interface EffectRecordInput {
 
 const FILESYSTEM_WRITE_TOOL_NAMES = new Set([
   "system.writeFile",
-  "system.applyPatch",
   "desktop.text_editor",
 ]);
 const FILESYSTEM_APPEND_TOOL_NAMES = new Set(["system.appendFile"]);

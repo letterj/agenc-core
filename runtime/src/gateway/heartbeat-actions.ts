@@ -6,7 +6,6 @@
  * happens.
  *
  * Actions:
- * - **task-scan** — scans for claimable on-chain tasks
  * - **summary** — generates a conversation summary via LLM
  * - **portfolio** — monitors SOL balance changes
  * - **polling** — generic external endpoint polling
@@ -20,7 +19,6 @@ import type {
   HeartbeatContext,
   HeartbeatResult,
 } from "./heartbeat.js";
-import type { TaskScanner } from "../autonomous/scanner.js";
 import type { MemoryBackend } from "../memory/types.js";
 import { entryToMessage } from "../memory/types.js";
 import type { LLMProvider } from "../llm/types.js";
@@ -35,47 +33,6 @@ const QUIET: HeartbeatResult = Object.freeze({ hasOutput: false, quiet: true });
 
 function output(text: string): HeartbeatResult {
   return { hasOutput: true, output: text, quiet: false };
-}
-
-// ============================================================================
-// Task scan action
-// ============================================================================
-
-export interface TaskScanActionConfig {
-  scanner: TaskScanner;
-}
-
-export function createTaskScanAction(
-  config: TaskScanActionConfig,
-): HeartbeatAction {
-  const { scanner } = config;
-
-  return {
-    name: "task-scan",
-    enabled: true,
-    async execute(context: HeartbeatContext): Promise<HeartbeatResult> {
-      try {
-        const tasks = await scanner.scan();
-        if (tasks.length === 0) return QUIET;
-
-        const lines = tasks.map((t) => {
-          const pda = t.pda.toBase58().slice(0, 8);
-          const reward =
-            t.rewardMint === null
-              ? `${(Number(t.reward) / 1e9).toFixed(4)} SOL`
-              : `${t.reward.toString()} lamports (mint: ${t.rewardMint.toBase58()})`;
-          return `- Task ${pda}: ${reward}`;
-        });
-
-        return output(
-          `Found ${tasks.length} claimable task(s):\n${lines.join("\n")}`,
-        );
-      } catch (err) {
-        context.logger.error("task-scan heartbeat failed:", err);
-        return QUIET;
-      }
-    },
-  };
 }
 
 // ============================================================================
@@ -349,7 +306,6 @@ export function createProactiveCommsAction(
 // ============================================================================
 
 export interface DefaultHeartbeatActionsConfig {
-  scanner: TaskScanner;
   memory: MemoryBackend;
   llm: LLMProvider;
   connection: Connection;
@@ -362,7 +318,6 @@ export function createDefaultHeartbeatActions(
   config: DefaultHeartbeatActionsConfig,
 ): HeartbeatAction[] {
   return [
-    createTaskScanAction({ scanner: config.scanner }),
     createSummaryAction({
       memory: config.memory,
       llm: config.llm,

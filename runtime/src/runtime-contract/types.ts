@@ -160,28 +160,6 @@ export interface RuntimeContractSnapshot {
   readonly toolProtocol: RuntimeToolProtocolSnapshot;
 }
 
-export interface CompletionValidatorResult {
-  readonly id: CompletionValidatorId;
-  readonly outcome: CompletionValidatorOutcome;
-  readonly reason?: string;
-  readonly blockingMessage?: string;
-  readonly evidence?: unknown;
-  readonly maxAttempts?: number;
-  readonly exhaustedDetail?: string;
-  readonly validationCode?: DelegationOutputValidationCode;
-  readonly verifier?: RuntimeVerifierVerdict;
-  readonly verifierTaskId?: string;
-  readonly verifierRequirement?: VerifierRequirement;
-  readonly verifierLauncherKind?: "subagent" | "remote_job";
-}
-
-export interface CompletionValidatorContext {
-  readonly sessionId: string;
-  readonly workspaceRoot?: string;
-  readonly turnClass: string;
-  readonly stopReason: string;
-}
-
 export interface RuntimeWorkerHandle {
   readonly id: string;
   readonly kind: string;
@@ -252,15 +230,6 @@ export interface RuntimeContractStatusSnapshot {
 
 export type RuntimeMailboxDirection = "parent_to_worker" | "worker_to_parent";
 export type RuntimeMailboxStatus = "pending" | "acknowledged" | "handled";
-export type RuntimeMailboxMessageType =
-  | "idle_notification"
-  | "permission_request"
-  | "permission_response"
-  | "shutdown_request"
-  | "task_assignment"
-  | "mode_change"
-  | "verifier_result"
-  | "worker_summary";
 
 interface RuntimeMailboxMessageBase {
   readonly messageId: string;
@@ -432,17 +401,21 @@ export function createRuntimeContractSnapshot(
         : "flag_disabled",
     },
     verifierStages: {
-      bootstrapConfigured: flags.verifierProjectBootstrap,
+      // Runtime verifier has been removed. Regardless of the
+      // verifierRuntimeRequired / verifierProjectBootstrap config
+      // flags, the initial + only-ever snapshot reflects the inert
+      // post-refactor state: no bootstrap, no launcher, no
+      // runtime-required stage. Callers that read this field (traces,
+      // runtime-status reports) get a consistent "verifier off" view.
+      bootstrapConfigured: false,
       bootstrapAttempted: false,
-      runtimeRequired: flags.verifierRuntimeRequired,
-      launcherKind: flags.verifierRuntimeRequired ? "subagent" : "none",
-      bootstrapSource: flags.verifierProjectBootstrap ? "fallback" : "disabled",
+      runtimeRequired: false,
+      launcherKind: "none",
+      bootstrapSource: "disabled",
       profiles: [],
       probeCategories: [],
-      stageStatus: flags.verifierRuntimeRequired ? "pending" : "inactive",
-      ...(flags.verifierRuntimeRequired
-        ? {}
-        : { skipReason: "runtime_not_required" }),
+      stageStatus: "inactive",
+      skipReason: "runtime_not_required",
     },
     toolProtocol: {
       open: false,
