@@ -553,12 +553,6 @@ const ENVELOPE_TOOL_PATH_ARG_KEYS: Readonly<Record<string, readonly string[]>> =
   "system.delete": ["path"],
   "system.move": ["source", "destination"],
 };
-// CONTRACT_MUTATION_TOOL_NAMES / SHELL_MUTATION_COMMAND_RE / isMutationLikeToolUse
-// were removed alongside the no-op'd enforceTurnExecutionContractPolicy gate
-// (see comment on that function below). The classifier those constants
-// fed has been gone since Cut 1.2 and the gate now always returns
-// undefined, so the constants are dead.
-
 function getExecutionEnvelopeFilesystemAccessMode(
   toolName: string,
 ): ArtifactAccessMode | undefined {
@@ -602,29 +596,6 @@ function canonicalizeExplicitArtifactReferenceArgs(params: {
   }
 
   return { args: nextArgs, canonicalizedFields };
-}
-
-function enforceTurnExecutionContractPolicy(_params: {
-  readonly ctx: ExecutionContext;
-  readonly toolName: string;
-  readonly args: Record<string, unknown>;
-}): string | undefined {
-  // Regression no-op (2026-04-09):
-  //
-  // This gate originally rejected mutation-class tool calls when the turn
-  // had not been classified as `workflow_implementation` or
-  // `artifact_update`. The classifier that produced those values lived in
-  // the planner subsystem that was removed by Cut 1.2. With the planner
-  // gone, `resolveTurnExecutionContract` is a stub that always returns
-  // `turnClass: "dialogue"` (see runtime/src/llm/turn-execution-contract.ts),
-  // so this gate refused 100% of mutations and made the runtime unusable
-  // for any code-changing chat turn.
-  //
-  // Until a real classifier is reinstated (or the gate is properly removed
-  // along with its plumbing), short-circuit to "no rejection". The
-  // upstream anti-fabrication gate, the canUseTool seam, the policy-gate
-  // hook, and the ToolPermissionEvaluator all still run normally.
-  return undefined;
 }
 
 function enforceTopLevelExecutionEnvelope(params: {
@@ -840,36 +811,6 @@ export async function executeSingleToolCall(
   }
   if (Object.keys(argumentDiagnostics).length > 0) {
     argumentDiagnostics.rawArgs = rawArgs;
-  }
-  const contractPolicyError = enforceTurnExecutionContractPolicy({
-    ctx,
-    toolName: toolCall.name,
-    args,
-  });
-  if (contractPolicyError) {
-    callbacks.emitExecutionTrace(ctx, {
-      type: "tool_rejected",
-      phase: "tool_followup",
-      callIndex: ctx.callIndex,
-      payload: {
-        tool: toolCall.name,
-        args,
-        originalArgs: rawArgs,
-        reason: "turn_execution_contract",
-        error: contractPolicyError,
-      },
-    });
-    pushToolResultMessage({
-      ctx,
-      callbacks,
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      content: contractPolicyError,
-      args,
-      isError: true,
-      durationMs: 0,
-    });
-    return "skip";
   }
   const executionEnvelopeError = enforceTopLevelExecutionEnvelope({
     toolName: toolCall.name,
