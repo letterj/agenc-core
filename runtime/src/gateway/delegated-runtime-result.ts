@@ -38,41 +38,6 @@ export interface DelegatedTerminalOutcome {
   readonly failureReason?: string;
 }
 
-export function mergeVerifierRequirements(params: {
-  readonly inherited?: VerifierRequirement;
-  readonly resolved?: VerifierRequirement;
-}): VerifierRequirement | undefined {
-  const inherited = params.inherited;
-  const resolved = params.resolved;
-  if (!inherited) return resolved;
-  if (!resolved) return inherited;
-
-  return {
-    required: inherited.required || resolved.required,
-    profiles: uniqueStrings([...inherited.profiles, ...resolved.profiles]),
-    probeCategories: uniqueStrings([
-      ...inherited.probeCategories,
-      ...resolved.probeCategories,
-    ]) as VerifierRequirement["probeCategories"],
-    mutationPolicy:
-      inherited.mutationPolicy === "read_only_workspace" ||
-      resolved.mutationPolicy === "read_only_workspace"
-        ? "read_only_workspace"
-        : resolved.mutationPolicy,
-    allowTempArtifacts:
-      inherited.allowTempArtifacts || resolved.allowTempArtifacts,
-    bootstrapSource:
-      inherited.bootstrapSource === "fallback" ||
-      resolved.bootstrapSource === "fallback"
-        ? "fallback"
-        : inherited.bootstrapSource === "derived" ||
-            resolved.bootstrapSource === "derived"
-          ? "derived"
-          : resolved.bootstrapSource,
-    rationale: uniqueStrings([...inherited.rationale, ...resolved.rationale]),
-  };
-}
-
 export function resolveDelegatedTerminalStatus(params: {
   readonly completionState?: WorkflowCompletionState;
   readonly stopReason?: string;
@@ -214,10 +179,6 @@ export function computeDelegatedExecutionEnvelopeFingerprint(
   return createHash("sha256")
     .update(stableStringify(payload))
     .digest("hex");
-}
-
-function uniqueStrings<T extends string>(values: readonly T[]): readonly T[] {
-  return [...new Set(values.filter((value) => value.trim().length > 0))];
 }
 
 function stableStringify(value: unknown): string {

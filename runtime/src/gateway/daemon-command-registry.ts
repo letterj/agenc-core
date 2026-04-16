@@ -3832,11 +3832,6 @@ export function createDaemonCommandRegistry(
       const runtimeStatusSnapshot = buildSessionRuntimeContractStatusSnapshot(
         session.metadata,
       ) as Record<string, unknown> | undefined;
-      const verifierSnapshot =
-        typeof runtimeStatusSnapshot?.verifierStages === "object" &&
-        runtimeStatusSnapshot.verifierStages !== null
-          ? JSON.stringify(runtimeStatusSnapshot.verifierStages, null, 2)
-          : "No runtime verifier snapshot available.";
       const verificationSurface = [
         "Verification surface:",
         formatGitBranchReply(branchInfo),
@@ -3844,9 +3839,6 @@ export function createDaemonCommandRegistry(
         formatGitSummaryReply(summary),
         "",
         formatTaskListReply(tasks),
-        "",
-        "Runtime verifier snapshot:",
-        verifierSnapshot,
       ].join("\n");
       if (!wantsDelegate) {
         const verificationState = updateVerificationSurfaceState(session, {
