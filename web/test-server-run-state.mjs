@@ -7,7 +7,6 @@ export function createContract(overrides = {}) {
     blockedCriteria: ['Pause if operator approval becomes required.'],
     nextCheckMs: 4000,
     heartbeatMs: 12000,
-    requiresUserStop: false,
     managedProcessPolicy: { mode: 'none' },
     ...overrides,
   };
@@ -30,7 +29,6 @@ function createRunDetail(overrides = {}) {
     cycleCount: 4,
     contractKind: 'finite',
     contractDomain: 'generic',
-    requiresUserStop: false,
     pendingSignals: 1,
     watchCount: 1,
     fenceToken: 3,
@@ -134,7 +132,6 @@ function summarizeRun(detail) {
     cycleCount: detail.cycleCount,
     contractKind: detail.contractKind,
     contractDomain: detail.contractDomain,
-    requiresUserStop: detail.requiresUserStop,
     pendingSignals: detail.pendingSignals,
     watchCount: detail.watchCount,
     fenceToken: detail.fenceToken,

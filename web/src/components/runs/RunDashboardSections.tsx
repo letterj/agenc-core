@@ -13,7 +13,6 @@ export interface RunEditorState {
   blockedCriteria: string;
   nextCheckMs: string;
   heartbeatMs: string;
-  requiresUserStop: boolean;
   maxRuntimeMs: string;
   maxCycles: string;
   maxIdleMs: string;
@@ -29,7 +28,6 @@ export const EMPTY_RUN_EDITOR_STATE: RunEditorState = {
   blockedCriteria: '',
   nextCheckMs: '',
   heartbeatMs: '',
-  requiresUserStop: false,
   maxRuntimeMs: '',
   maxCycles: '',
   maxIdleMs: '',
@@ -40,7 +38,6 @@ export const EMPTY_RUN_EDITOR_STATE: RunEditorState = {
 
 const INPUT_CLASS = 'w-full border border-bbs-border bg-bbs-surface px-3 py-2 text-sm text-bbs-lightgray placeholder:text-bbs-gray focus:outline-none focus:border-bbs-purple-dim';
 const TEXTAREA_CLASS = `${INPUT_CLASS} min-h-20 resize-y`;
-const CHECKBOX_CLASS = 'h-3.5 w-3.5 border-bbs-border bg-bbs-surface text-bbs-purple focus:ring-0';
 
 function formatTimestamp(value: number | undefined): string {
   if (!value) return 'n/a';
@@ -185,7 +182,6 @@ export function buildRunEditorState(run: RunDetail | null): RunEditorState {
       run.contract.heartbeatMs !== undefined
         ? String(run.contract.heartbeatMs)
         : '',
-    requiresUserStop: run.contract.requiresUserStop,
     maxRuntimeMs: String(run.budget.maxRuntimeMs),
     maxCycles: String(run.budget.maxCycles),
     maxIdleMs:
@@ -657,18 +653,6 @@ function RunConstraintScheduleFields(props: {
           placeholder="heartbeatMs"
         />
       </div>
-      <label className="flex items-center gap-2 text-sm text-bbs-lightgray">
-        <input
-          type="checkbox"
-          aria-label="Requires user stop"
-          checked={props.editor.requiresUserStop}
-          onChange={(event) =>
-            props.onEditorChange('requiresUserStop', event.target.checked)
-          }
-          className={CHECKBOX_CLASS}
-        />
-        Requires user stop
-      </label>
     </>
   );
 }
@@ -702,7 +686,6 @@ function RunConstraintEditor(props: RunControlSectionProps) {
                     blockedCriteria: parseList(editor.blockedCriteria),
                     nextCheckMs: toOptionalNumber(editor.nextCheckMs),
                     heartbeatMs: toOptionalNumber(editor.heartbeatMs),
-                    requiresUserStop: editor.requiresUserStop,
                   },
                 }
               : undefined,

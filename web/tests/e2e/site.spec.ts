@@ -110,10 +110,8 @@ test.describe('site navigation paths', () => {
     await page.getByLabel('Blocked criteria').fill('Pause if approval is required.');
     await page.getByLabel('Next check interval').fill('9000');
     await page.getByLabel('Heartbeat interval').fill('15000');
-    await page.getByLabel('Requires user stop').check();
     await page.getByRole('button', { name: /^\[APPLY CONSTRAINTS\]$/i }).click();
     await expect(page.locator('section').getByText('run_contract_amended')).toBeVisible();
-    await expect(page.getByText('"requiresUserStop": true')).toBeVisible();
     await expect(page.getByText('"nextCheckMs": 9000')).toBeVisible();
 
     await page.getByLabel('Maximum runtime').fill('120000');
