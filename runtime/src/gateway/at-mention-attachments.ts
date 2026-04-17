@@ -78,7 +78,7 @@ function buildToolPrelude(params: {
   return [
     {
       role: "assistant",
-      content: "",
+      content: `Reading ${params.toolName === "system.readFile" ? JSON.parse(JSON.stringify(params.toolArgs)).path ?? "file" : "resource"}`,
       toolCalls: [
         {
           id: params.toolCallId,
