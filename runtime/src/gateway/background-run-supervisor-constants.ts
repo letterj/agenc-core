@@ -11,7 +11,13 @@ import type { BackgroundRunWorkerPool } from "./background-run-store.js";
 
 export const DEFAULT_POLL_INTERVAL_MS = 8_000;
 export const BUSY_RETRY_INTERVAL_MS = 1_500;
-export const MIN_POLL_INTERVAL_MS = 2_000;
+// Upstream reference runtime loops immediately (zero delay between
+// iterations). The 2-second floor was designed for the old verifier
+// cycle cadence. With the verifier stack removed, active coding
+// cycles should have near-zero inter-iteration delay. Non-coding
+// scenarios (managed-process polling, approval gates) still specify
+// their own explicit nextCheckMs via the contract.
+export const MIN_POLL_INTERVAL_MS = 100;
 export const MAX_POLL_INTERVAL_MS = 60_000;
 export const FAST_FOLLOWUP_POLL_INTERVAL_MS = 4_000;
 export const STABLE_POLL_STEP_MS = 8_000;

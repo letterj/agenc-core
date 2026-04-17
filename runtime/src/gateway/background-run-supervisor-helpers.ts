@@ -1215,7 +1215,7 @@ export function buildFallbackDecision(run: ActiveBackgroundRun, actorResult: Cha
         MAX_USER_UPDATE_CHARS,
       ),
       internalSummary: actorResult.content || "Cycle completed with tool calls.",
-      nextCheckMs: DEFAULT_POLL_INTERVAL_MS,
+      nextCheckMs: MIN_POLL_INTERVAL_MS,
       shouldNotifyUser: true,
     };
   }
@@ -1301,8 +1301,30 @@ export function groundDecision(
         `Overrode blocked decision: actor executed ${actorResult.toolCalls.length} tool calls ` +
         `(${successfulToolCalls.length} ok, ${failedToolCalls.length} failed). ` +
         `Error context flows to next cycle.`,
-      nextCheckMs: DEFAULT_POLL_INTERVAL_MS,
+      nextCheckMs: MIN_POLL_INTERVAL_MS,
       shouldNotifyUser: true,
+    };
+  }
+
+  // When the actor executed tools and the decision is "working" on a
+  // coding-pattern domain (generic / workspace / pipeline), force
+  // immediate next-cycle regardless of the decision model's
+  // nextCheckMs. The reference runtime loops with zero delay between
+  // iterations. Non-coding domains (managed_process, remote_session,
+  // approval, etc.) keep their own poll cadence because they
+  // legitimately wait on external state changes.
+  const isCodingDomain =
+    run.contract.domain === "generic" ||
+    run.contract.domain === "workspace" ||
+    run.contract.domain === "pipeline";
+  if (
+    decision.state === "working" &&
+    actorResult.toolCalls.length > 0 &&
+    isCodingDomain
+  ) {
+    return {
+      ...decision,
+      nextCheckMs: MIN_POLL_INTERVAL_MS,
     };
   }
 
