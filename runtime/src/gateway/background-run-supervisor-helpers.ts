@@ -1366,7 +1366,15 @@ export function groundDecision(
     completionProgress &&
     (decision.state === "completed" || decision.state === "working")
   ) {
-    if (completionProgress.completionState === "blocked") {
+    // Do NOT park the run as "blocked" when the actor had successful
+    // tool calls. The upstream pattern: tool errors flow into history
+    // and the model adapts on the next cycle. completionProgress
+    // "blocked" from a build failure is the model's problem to solve,
+    // not a reason to stop cycling.
+    if (
+      completionProgress.completionState === "blocked" &&
+      successfulToolCalls.length === 0
+    ) {
       return {
         state: "blocked",
         userUpdate: truncate(
