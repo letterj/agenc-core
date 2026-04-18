@@ -110,7 +110,7 @@ describe("agenc task template tools", () => {
     });
 
     const result = await tool.execute({
-      description: "Devnet ABI warning task",
+      taskDescription: "Devnet ABI warning task",
       reward: "1",
       requiredCapabilities: "1",
       taskId: "11".repeat(32),
@@ -139,6 +139,32 @@ describe("agenc task template tools", () => {
     expect(createTaskAccountsPartial.mock.calls[0]?.[0]).not.toHaveProperty(
       "authorityRateLimit",
     );
+  });
+
+  it("uses taskDescription (not description) as the input schema property name", () => {
+    const tool = createCreateTaskTool(
+      {
+        provider: { publicKey: new PublicKey("11111111111111111111111111111111") },
+      } as never,
+      createLogger() as never,
+    );
+
+    const props = tool.inputSchema.properties as Record<string, unknown>;
+    expect(props).toHaveProperty("taskDescription");
+    expect(props).not.toHaveProperty("description");
+  });
+
+  it("requires taskDescription (not description) in the input schema", () => {
+    const tool = createCreateTaskTool(
+      {
+        provider: { publicKey: new PublicKey("11111111111111111111111111111111") },
+      } as never,
+      createLogger() as never,
+    );
+
+    const required = tool.inputSchema.required as string[];
+    expect(required).toContain("taskDescription");
+    expect(required).not.toContain("description");
   });
 
   it("lists approved task templates", async () => {

@@ -2559,7 +2559,7 @@ export function createCreateTaskTool(
     inputSchema: {
       type: 'object',
       properties: {
-        description: {
+        taskDescription: {
           type: 'string',
           description: `Short on-chain task title/summary (max ${DESCRIPTION_BYTES} UTF-8 bytes). Put the long marketplace job details in jobSpec/fullDescription.`,
         },
@@ -2647,7 +2647,7 @@ export function createCreateTaskTool(
           description: 'Optional creator agent PDA (base58). Auto-resolved when omitted.',
         },
       },
-      required: ['description', 'reward', 'requiredCapabilities'],
+      required: ['taskDescription', 'reward', 'requiredCapabilities'],
     },
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
       try {
@@ -2662,7 +2662,7 @@ export function createCreateTaskTool(
         const creator = program.provider.publicKey;
 
         // Dedup guard — prevent LLM from calling createTask multiple times
-        const dedupKey = `${creator.toBase58()}|${String(args.description ?? '').trim().toLowerCase()}`;
+        const dedupKey = `${creator.toBase58()}|${String(args.taskDescription ?? args.description ?? '').trim().toLowerCase()}`;
         const dedupNow = Date.now();
         const lastCall = recentCreateTaskCalls.get(dedupKey);
         if (lastCall && dedupNow - lastCall < CREATE_TASK_DEDUP_TTL_MS) {
@@ -2675,7 +2675,7 @@ export function createCreateTaskTool(
         const [taskId, taskIdErr] = parseTaskId(args.taskId);
         if (taskIdErr || !taskId) return taskIdErr ?? errorResult('Invalid taskId');
 
-        const [descBytes, descErr] = parseTaskDescription(args.description);
+        const [descBytes, descErr] = parseTaskDescription(args.taskDescription ?? args.description);
         if (descErr || !descBytes) return descErr ?? errorResult('Invalid description');
 
         const [reward, rewardErr] = parseBigIntInput(args.reward, 'reward');
@@ -2781,7 +2781,7 @@ export function createCreateTaskTool(
           try {
             storedJobSpec = await persistMarketplaceJobSpec(
               {
-                description: args.description as string,
+                description: (args.taskDescription ?? args.description) as string,
                 jobSpec: args.jobSpec,
                 fullDescription: args.fullDescription,
                 acceptanceCriteria: args.acceptanceCriteria,
