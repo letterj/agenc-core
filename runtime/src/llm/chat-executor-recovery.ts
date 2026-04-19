@@ -1165,7 +1165,14 @@ function inferRepeatReadFileHint(
   const REPEAT_READ_THRESHOLD = 3;
   const counts = new Map<string, number>();
   for (const call of recentCalls) {
-    if (call.tool !== "system.readFile") continue;
+    // ToolCallRecord uses `name`, not `tool` — the original PR #482
+    // wording assumed `tool` (copying from chat.dispatch events).
+    // With the wrong field, every comparison was `undefined !==
+    // "system.readFile"` → always continue → counts always empty →
+    // hint never fires. Traced in a 126-call session that re-read
+    // lexer.c 19 times, alias.c 15 times, heredoc.c 12 times with
+    // zero recovery_hints_injected events.
+    if (call.name !== "system.readFile") continue;
     if (didToolCallFail(call.isError, call.result)) continue;
     const argsObject =
       call.args && typeof call.args === "object"
