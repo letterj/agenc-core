@@ -15,9 +15,6 @@ import type {
   LLMProvider,
   LLMMessage,
   LLMResponse,
-  LLMStatefulDiagnostics,
-  LLMStatefulEvent,
-  LLMStatefulFallbackReason,
   LLMToolCall,
   LLMUsage,
   LLMRequestMetrics,
@@ -32,19 +29,15 @@ import type {
 import { validateToolCallDetailed } from "../types.js";
 import { LLMProviderError, mapLLMError } from "../errors.js";
 import {
-  assertNoSilentToolDropOnFollowup,
   DOCUMENTED_XAI_RESPONSES_REQUEST_FIELDS,
   validateXaiRequestPreFlight,
   validateXaiResponsePostFlight,
-  XaiSilentToolDropError,
   XAI_RESPONSES_MAX_TOOL_COUNT,
 } from "./xai-strict-filter.js";
 import { ensureLazyImport } from "../lazy-import.js";
 import {
   assertXaiReasoningEffortCompatibility,
   assertXaiStructuredOutputToolCompatibility,
-  resolveLLMStatefulResponsesConfig,
-  type ResolvedLLMStatefulResponsesConfig,
 } from "../provider-capabilities.js";
 import {
   getProviderNativeToolDefinitions,
@@ -56,14 +49,10 @@ import { repairToolTurnSequence, validateToolTurnSequence } from "../tool-turn-v
 import type { GrokProviderConfig } from "./types.js";
 import { resolveContextWindowProfile } from "../../gateway/context-window.js";
 import {
-  buildIncrementalContinuationMessages,
   buildProviderTraceErrorPayload,
   buildToolSelectionTraceContext,
   cloneProviderTracePayload,
-  computePersistedResponseReconciliationHash,
-  computeReconciliationChain,
   extractTraceToolNames,
-  isContinuationRetrievalFailure,
   slimTools,
   summarizeTraceToolChoice,
   toSlimTool,
@@ -132,11 +121,6 @@ function getXaiResponsesTrimPriority(tool: Record<string, unknown>): number {
   return XAI_RESPONSES_TRIM_PRIORITY_TOOL_NAMES.has(name) ? 0 : 1;
 }
 
-interface StatefulSessionAnchor {
-  responseId: string;
-  reconciliationHash: string;
-  updatedAt: number;
-}
 
 interface ProviderResponseTraceMeta {
   readonly providerRequestId?: string;
@@ -384,10 +368,6 @@ function isPromptOverflowErrorMessage(message: string): boolean {
 function collectParamDiagnostics(
   params: Record<string, unknown>,
   selection?: ToolSelectionDiagnostics,
-  statefulInput?: {
-    mode: "full_replay" | "incremental_delta";
-    omittedMessageCount: number;
-  },
 ): LLMRequestMetrics {
   const messages = Array.isArray(params.messages)
     ? (params.messages as Array<Record<string, unknown>>)
@@ -490,16 +470,6 @@ function collectParamDiagnostics(
         ? structuredFormat.strict
         : undefined,
     serializedChars,
-    previousResponseId:
-      typeof params.previous_response_id === "string"
-        ? String(params.previous_response_id)
-        : undefined,
-    ...(statefulInput
-      ? {
-        statefulInputMode: statefulInput.mode,
-        statefulOmittedMessageCount: statefulInput.omittedMessageCount,
-      }
-      : {}),
     store: typeof params.store === "boolean" ? params.store : undefined,
     parallelToolCalls:
       typeof params.parallel_tool_calls === "boolean"
@@ -513,7 +483,6 @@ function buildProviderRequestTraceContext(
   selection: ToolSelectionDiagnostics,
   toolChoice: LLMToolChoice | undefined,
   requestMetrics: LLMRequestMetrics,
-  statefulDiagnostics?: LLMStatefulDiagnostics,
   compactionDiagnostics?: LLMCompactionDiagnostics,
   timeout?: RequestTimeoutResolution,
 ): Record<string, unknown> {
@@ -527,27 +496,6 @@ function buildProviderRequestTraceContext(
     totalContentChars: requestMetrics.totalContentChars,
     maxMessageChars: requestMetrics.maxMessageChars,
     serializedChars: requestMetrics.serializedChars,
-    statefulInputMode: requestMetrics.statefulInputMode,
-    statefulOmittedMessageCount: requestMetrics.statefulOmittedMessageCount,
-    previousResponseId: requestMetrics.previousResponseId,
-    ...(statefulDiagnostics
-      ? {
-        statefulAttempted: statefulDiagnostics.attempted,
-        statefulContinued: statefulDiagnostics.continued,
-        statefulFallbackReason: statefulDiagnostics.fallbackReason,
-        statefulAnchorMatched: statefulDiagnostics.anchorMatched,
-        statefulReconciliationHash: statefulDiagnostics.reconciliationHash,
-        statefulPreviousReconciliationHash:
-          statefulDiagnostics.previousReconciliationHash,
-        statefulReconciliationMessageCount:
-          statefulDiagnostics.reconciliationMessageCount,
-        statefulReconciliationSource:
-          statefulDiagnostics.reconciliationSource,
-        statefulHistoryCompacted: statefulDiagnostics.historyCompacted,
-        statefulCompactedHistoryTrusted:
-          statefulDiagnostics.compactedHistoryTrusted,
-      }
-      : {}),
     ...(compactionDiagnostics
       ? {
         compactionActive: compactionDiagnostics.active,
@@ -564,18 +512,10 @@ function buildProviderRequestTraceContext(
 }
 
 function buildProviderResponseTraceContext(
-  statefulDiagnostics?: LLMStatefulDiagnostics,
   compactionDiagnostics?: LLMCompactionDiagnostics,
   responseMeta?: ProviderResponseTraceMeta,
 ): Record<string, unknown> | undefined {
   const context: Record<string, unknown> = {};
-  if (statefulDiagnostics) {
-    context.statefulResponseId = statefulDiagnostics.responseId;
-    context.statefulReconciliationHash = statefulDiagnostics.reconciliationHash;
-    context.statefulContinued = statefulDiagnostics.continued;
-    context.statefulAnchorMatched = statefulDiagnostics.anchorMatched;
-    context.statefulFallbackReason = statefulDiagnostics.fallbackReason;
-  }
   if (compactionDiagnostics) {
     context.compactionActive = compactionDiagnostics.active;
     context.compactionObservedItemCount = compactionDiagnostics.observedItemCount;
@@ -710,20 +650,6 @@ function emitProviderTraceEvent(
   options?.trace?.onProviderTraceEvent?.(event);
 }
 
-function appendStatefulEvent(
-  events: LLMStatefulEvent[],
-  type: LLMStatefulEvent["type"],
-  options?: {
-    reason?: LLMStatefulFallbackReason;
-    detail?: string;
-  },
-): void {
-  events.push({
-    type,
-    reason: options?.reason,
-    detail: options?.detail,
-  });
-}
 
 function hasImageContent(content: unknown): boolean {
   if (!Array.isArray(content)) return false;
@@ -830,8 +756,6 @@ export class GrokProvider implements LLMProvider {
   >();
   private readonly warnedPostFlightAnomalies = new Set<string>();
   private readonly toolChars: number;
-  private readonly statefulConfig: ResolvedLLMStatefulResponsesConfig;
-  private readonly statefulSessions = new Map<string, StatefulSessionAnchor>();
   private readonly configuredTimeoutMs: number | undefined;
 
   constructor(config: GrokProviderConfig) {
@@ -843,9 +767,6 @@ export class GrokProvider implements LLMProvider {
       timeoutMs: normalizeTimeoutMs(config.timeoutMs),
       parallelToolCalls: config.parallelToolCalls ?? false,
     };
-    this.statefulConfig = resolveLLMStatefulResponsesConfig(
-      config.statefulResponses,
-    );
 
     // Build client-side function tools plus provider-native tool definitions.
     const rawTools = [...(config.tools ?? [])];
@@ -943,7 +864,6 @@ export class GrokProvider implements LLMProvider {
           activePlan.toolSelection,
           options?.toolChoice,
           activePlan.requestMetrics,
-          activePlan.statefulDiagnostics,
           activePlan.compactionDiagnostics,
           activeRequestTimeout,
         ),
@@ -971,17 +891,7 @@ export class GrokProvider implements LLMProvider {
           options,
           "chat",
         );
-        const silentDropMitigatedResponse =
-          await this.maybeRetrySilentToolDrop(
-            client,
-            activePlan.params as Record<string, unknown>,
-            (truncationMitigatedResponse ??
-              originalResponse) as Record<string, unknown>,
-            options,
-            "chat",
-          );
         const response = (
-          silentDropMitigatedResponse ??
           truncationMitigatedResponse ??
           originalResponse
         ) as typeof originalResponse;
@@ -994,7 +904,6 @@ export class GrokProvider implements LLMProvider {
           response,
           activePlan.params,
           activePlan.requestMetrics,
-          activePlan.statefulDiagnostics,
           activePlan.compactionDiagnostics,
           options?.structuredOutput,
         );
@@ -1004,7 +913,6 @@ export class GrokProvider implements LLMProvider {
           "chat",
           parsed.model,
         );
-        this.persistStatefulAnchor(activePlan, parsed);
         emitProviderTraceEvent(options, {
           kind: "response",
           transport: "chat",
@@ -1014,7 +922,6 @@ export class GrokProvider implements LLMProvider {
             cloneProviderTracePayload(response) ??
             { error: "provider_response_trace_unavailable" },
           context: buildProviderResponseTraceContext(
-            parsed.stateful,
             parsed.compaction,
             responseMeta,
           ),
@@ -1032,25 +939,15 @@ export class GrokProvider implements LLMProvider {
       }
     };
 
-    while (true) {
-      try {
-        return await run(plan);
-      } catch (err: unknown) {
-        if (this.shouldRetryStatelessFromStateful(err, plan.statefulDiagnostics)) {
-          plan = this.buildRequestPlan(messages, options, {
-            forceStateless: true,
-            fallbackReason: "provider_retrieval_failure",
-            inheritedEvents: plan.statefulDiagnostics?.events ?? [],
-          });
-          continue;
-        }
-        const mapped = this.mapError(
-          err,
-          lastAttemptTimeoutMs ?? requestTimeout.timeoutMs,
-        );
-        this.logPromptOverflowDiagnostics(mapped, plan.params);
-        throw mapped;
-      }
+    try {
+      return await run(plan);
+    } catch (err: unknown) {
+      const mapped = this.mapError(
+        err,
+        lastAttemptTimeoutMs ?? requestTimeout.timeoutMs,
+      );
+      this.logPromptOverflowDiagnostics(mapped, plan.params);
+      throw mapped;
     }
   }
 
@@ -1062,12 +959,11 @@ export class GrokProvider implements LLMProvider {
     const client = await this.ensureClient();
     let plan = this.buildRequestPlan(messages, options);
     let params: Record<string, unknown> = { ...plan.params, stream: true };
-    let requestMetrics = {
+    const requestMetrics = {
       ...plan.requestMetrics,
       stream: true,
     };
-    let statefulDiagnostics = plan.statefulDiagnostics;
-    let compactionDiagnostics = plan.compactionDiagnostics;
+    const compactionDiagnostics = plan.compactionDiagnostics;
     let content = "";
     let model = this.config.model;
     let finishReason: LLMResponse["finishReason"] = "stop";
@@ -1089,85 +985,61 @@ export class GrokProvider implements LLMProvider {
         : Number.POSITIVE_INFINITY;
 
     try {
-      let stream: AsyncIterable<any>;
-      while (true) {
-        const requestAttemptTimeout =
-          Number.isFinite(streamDeadlineAt)
-            ? {
-              ...streamTimeout,
-              timeoutMs: Math.max(1, streamDeadlineAt - Date.now()),
-            }
-            : streamTimeout;
-        emitProviderTraceEvent(options, {
-          kind: "request",
-          transport: "chat_stream",
-          provider: this.name,
-          model: String(params.model ?? this.config.model),
-          payload:
-            cloneProviderTracePayload(params) ??
-            { error: "provider_request_trace_unavailable" },
-          context: buildProviderRequestTraceContext(
-            plan.toolSelection,
-            options?.toolChoice,
-            requestMetrics,
-            statefulDiagnostics,
-            compactionDiagnostics,
-            requestAttemptTimeout,
-          ),
-        });
-        try {
-          const result = await withTimeout(
-            async (signal) =>
-              createWithResponseMetadata<AsyncIterable<any>>(
-                client,
-                params,
-                signal,
-              ),
-            requestAttemptTimeout.timeoutMs,
-            this.name,
-            options?.signal,
-          );
-          stream = result.data;
-          streamResponseMeta = buildProviderResponseMeta({
-            response: result.response,
-            requestId: result.requestId,
-          });
-          emitProviderTraceEvent(options, {
-            kind: "stream_event",
-            transport: "chat_stream",
-            provider: this.name,
-            model: String(params.model ?? this.config.model),
-            payload: { type: "stream.open" },
-            context: {
-              eventIndex: 0,
-              eventType: "stream.open",
-              ...(
-                streamResponseMeta
-                  ? streamResponseMeta
-                  : {}
-              ),
-            },
-          });
-          break;
-        } catch (err: unknown) {
-          if (this.shouldRetryStatelessFromStateful(err, statefulDiagnostics)) {
-            plan = this.buildRequestPlan(messages, options, {
-              forceStateless: true,
-              fallbackReason: "provider_retrieval_failure",
-              inheritedEvents: statefulDiagnostics?.events ?? [],
-            });
-            params = { ...plan.params, stream: true };
-            requestMetrics = {
-              ...plan.requestMetrics,
-              stream: true,
-            };
-            statefulDiagnostics = plan.statefulDiagnostics;
-            compactionDiagnostics = plan.compactionDiagnostics;
-            continue;
+      const requestAttemptTimeout =
+        Number.isFinite(streamDeadlineAt)
+          ? {
+            ...streamTimeout,
+            timeoutMs: Math.max(1, streamDeadlineAt - Date.now()),
           }
-          throw err;
-        }
-      }
+          : streamTimeout;
+      emitProviderTraceEvent(options, {
+        kind: "request",
+        transport: "chat_stream",
+        provider: this.name,
+        model: String(params.model ?? this.config.model),
+        payload:
+          cloneProviderTracePayload(params) ??
+          { error: "provider_request_trace_unavailable" },
+        context: buildProviderRequestTraceContext(
+          plan.toolSelection,
+          options?.toolChoice,
+          requestMetrics,
+          compactionDiagnostics,
+          requestAttemptTimeout,
+        ),
+      });
+      const result = await withTimeout(
+        async (signal) =>
+          createWithResponseMetadata<AsyncIterable<any>>(
+            client,
+            params,
+            signal,
+          ),
+        requestAttemptTimeout.timeoutMs,
+        this.name,
+        options?.signal,
+      );
+      const stream = result.data;
+      streamResponseMeta = buildProviderResponseMeta({
+        response: result.response,
+        requestId: result.requestId,
+      });
+      emitProviderTraceEvent(options, {
+        kind: "stream_event",
+        transport: "chat_stream",
+        provider: this.name,
+        model: String(params.model ?? this.config.model),
+        payload: { type: "stream.open" },
+        context: {
+          eventIndex: 0,
+          eventType: "stream.open",
+          ...(
+            streamResponseMeta
+              ? streamResponseMeta
+              : {}
+          ),
+        },
+      });
 
       streamIterator = stream[Symbol.asyncIterator]();
       let streamEventIndex = 0;
@@ -1264,17 +1136,7 @@ export class GrokProvider implements LLMProvider {
             options,
             "chat_stream",
           );
-          const silentDropMitigatedResponse =
-            await this.maybeRetrySilentToolDrop(
-              client,
-              params,
-              (truncationMitigatedResponse ??
-                response) as Record<string, unknown>,
-              options,
-              "chat_stream",
-            );
-          const mitigatedResponse =
-            silentDropMitigatedResponse ?? truncationMitigatedResponse;
+          const mitigatedResponse = truncationMitigatedResponse;
           if (mitigatedResponse) {
             response = mitigatedResponse;
             // Reset stream-accumulated tool calls; the mitigation
@@ -1340,15 +1202,6 @@ export class GrokProvider implements LLMProvider {
             response: response as Record<string, unknown>,
           });
           for (const anomaly of xaiAnomalies) {
-            if (
-              anomaly.severity === "error" &&
-              anomaly.code === "silent_tool_drop_promised_in_text"
-            ) {
-              throw new XaiSilentToolDropError(
-                "incoming_promised_tools_missing",
-                anomaly.evidence,
-              );
-            }
             if (anomaly.code === "truncated_response_mid_sentence") continue;
             this.logPostFlightAnomaly(anomaly);
           }
@@ -1364,13 +1217,6 @@ export class GrokProvider implements LLMProvider {
           const outputText = String(response.output_text ?? "");
           if (outputText && content.length === 0) {
             content = outputText;
-          }
-          if (statefulDiagnostics) {
-            statefulDiagnostics = {
-              ...statefulDiagnostics,
-              responseId:
-                typeof response.id === "string" ? String(response.id) : undefined,
-            };
           }
           break;
         }
@@ -1394,7 +1240,6 @@ export class GrokProvider implements LLMProvider {
               cloneProviderTracePayload(failedResponse) ??
               { error: "provider_error_trace_unavailable" },
             context: buildProviderResponseTraceContext(
-              undefined,
               undefined,
               streamResponseMeta,
             ),
@@ -1426,7 +1271,6 @@ export class GrokProvider implements LLMProvider {
         usage,
         model,
         requestMetrics,
-        stateful: statefulDiagnostics,
         compaction: compactionDiagnostics,
         providerEvidence,
         structuredOutput:
@@ -1443,7 +1287,6 @@ export class GrokProvider implements LLMProvider {
         finishReason,
         ...(responseError ? { error: responseError } : {}),
       };
-      this.persistStatefulAnchor(plan, parsed);
       emitProviderTraceEvent(options, {
         kind: "response",
         transport: "chat_stream",
@@ -1452,7 +1295,6 @@ export class GrokProvider implements LLMProvider {
         payload:
           responseTracePayload ?? { error: "provider_response_trace_unavailable" },
           context: buildProviderResponseTraceContext(
-            parsed.stateful,
             parsed.compaction,
             streamResponseMeta,
           ),
@@ -1478,7 +1320,6 @@ export class GrokProvider implements LLMProvider {
           usage,
           model,
           requestMetrics,
-          stateful: statefulDiagnostics,
           compaction: compactionDiagnostics,
           providerEvidence,
           structuredOutput:
@@ -1561,20 +1402,6 @@ export class GrokProvider implements LLMProvider {
     }
   }
 
-  getCapabilities() {
-    return {
-      provider: this.name,
-      stateful: {
-        assistantPhase: false,
-        previousResponseId: true,
-        encryptedReasoning: true,
-        storedResponseRetrieval: true,
-        storedResponseDeletion: true,
-        opaqueCompaction: false,
-        deterministicFallback: true,
-      },
-    } as const;
-  }
 
   async getExecutionProfile() {
     return (
@@ -1599,191 +1426,23 @@ export class GrokProvider implements LLMProvider {
     };
   }
 
-  resetSessionState(sessionId: string): void {
-    this.statefulSessions.delete(sessionId);
-  }
-
-  clearSessionState(): void {
-    this.statefulSessions.clear();
-  }
-
   private buildRequestPlan(
     messages: readonly LLMMessage[],
     options?: LLMChatOptions,
-    overrides?: {
-      forceStateless?: boolean;
-      fallbackReason?: LLMStatefulFallbackReason;
-      inheritedEvents?: readonly LLMStatefulEvent[];
-    },
   ): {
     params: Record<string, unknown>;
     requestMetrics: LLMRequestMetrics;
     toolSelection: ToolSelectionDiagnostics;
-    statefulDiagnostics?: LLMStatefulDiagnostics;
     compactionDiagnostics?: LLMCompactionDiagnostics;
-    sessionId?: string;
-    reconciliationHash?: string;
     requestMessages?: readonly LLMMessage[];
   } {
     const compactionDiagnostics = undefined;
-    const sessionId = options?.stateful?.sessionId?.trim();
-    if (!this.statefulConfig.enabled || !sessionId) {
-      const toolSelection = this.resolveResponseTools(
-        options?.toolRouting?.allowedToolNames,
-        options?.toolChoice,
-      );
-      const built = this.buildParams(messages, {
-        store: false,
-        allowedToolNames: options?.toolRouting?.allowedToolNames,
-        toolChoice: options?.toolChoice,
-        maxTurns: options?.maxTurns,
-        reasoningEffort: options?.reasoningEffort,
-        includeEncryptedReasoning: options?.includeEncryptedReasoning,
-        structuredOutput: options?.structuredOutput,
-        toolSelection,
-        promptCacheKey: options?.stateful?.sessionId?.trim() || undefined,
-      });
-      return {
-        params: built.params,
-        requestMetrics: collectParamDiagnostics(
-          built.params,
-          built.toolSelection,
-        ),
-        toolSelection: built.toolSelection,
-        compactionDiagnostics,
-      };
-    }
-
-    const events: LLMStatefulEvent[] = [
-      ...(overrides?.inheritedEvents ?? []),
-    ];
-    const reconciliationMessages =
-      options?.stateful?.reconciliationMessages ?? messages;
-    const continuationTurn = reconciliationMessages.some(
-      (message) => message.role === "assistant" || message.role === "tool",
-    );
-    const reconciliation = computeReconciliationChain(
-      reconciliationMessages,
-      this.statefulConfig.reconciliationWindow,
-    );
-    const persistedResumeAnchor = options?.stateful?.resumeAnchor;
-    const memoryAnchor = this.statefulSessions.get(sessionId);
-    const anchor = memoryAnchor ?? (
-      persistedResumeAnchor?.previousResponseId
-        ? {
-            responseId: persistedResumeAnchor.previousResponseId,
-            reconciliationHash: persistedResumeAnchor.reconciliationHash,
-            updatedAt: Date.now(),
-          }
-        : undefined
-    );
-    const forceStateless = overrides?.forceStateless === true;
-    const providerContinuationEnabled = this.statefulConfig.store === true;
-    let attempted = false;
-    let continued = false;
-    let previousResponseId: string | undefined;
-    let fallbackReason = overrides?.fallbackReason;
-    let anchorMatched: boolean | undefined;
-    let anchorRelevantMessageIndex: number | undefined;
-    const historyCompacted = options?.stateful?.historyCompacted === true;
-    let compactedHistoryTrusted = false;
-
-    if (!forceStateless && continuationTurn && !providerContinuationEnabled) {
-      fallbackReason = "store_disabled";
-      appendStatefulEvent(events, "stateful_fallback", {
-        reason: "store_disabled",
-        detail:
-          "provider continuation disabled because store=false; replaying local history instead",
-      });
-    } else if (!forceStateless && anchor?.responseId) {
-      attempted = true;
-      previousResponseId = anchor.responseId;
-      appendStatefulEvent(events, "stateful_continuation_attempt", {
-        detail: `session=${sessionId}`,
-      });
-
-      if (anchor.reconciliationHash) {
-        const anchorRelativeIndex = reconciliation.chain.lastIndexOf(
-          anchor.reconciliationHash,
-        );
-        anchorMatched = anchorRelativeIndex >= 0;
-        if (anchorMatched) {
-          anchorRelevantMessageIndex =
-            reconciliation.messageCountUsed - reconciliation.chain.length +
-            anchorRelativeIndex;
-        }
-      }
-      if (anchorMatched) {
-        continued = true;
-        appendStatefulEvent(events, "stateful_continuation_success");
-      } else if (!anchor.reconciliationHash) {
-        continued = true;
-        appendStatefulEvent(events, "stateful_continuation_success", {
-          detail: `session=${sessionId}; reconciliation_hash=missing`,
-        });
-      } else if (historyCompacted) {
-        continued = true;
-        compactedHistoryTrusted = true;
-        appendStatefulEvent(events, "stateful_continuation_success", {
-          detail: `session=${sessionId}; trusted_compacted_history=true`,
-        });
-      } else {
-        fallbackReason = "state_reconciliation_mismatch";
-        appendStatefulEvent(events, "state_reconciliation_mismatch", {
-          reason: "state_reconciliation_mismatch",
-          detail: `session=${sessionId}`,
-        });
-        this.statefulSessions.delete(sessionId);
-        previousResponseId = undefined;
-        if (!this.statefulConfig.fallbackToStateless) {
-          throw new LLMProviderError(
-            this.name,
-            "state_reconciliation_mismatch: local history does not match previous_response_id anchor",
-            400,
-          );
-        }
-        continued = false;
-        previousResponseId = undefined;
-        appendStatefulEvent(events, "stateful_fallback", {
-          reason: "state_reconciliation_mismatch",
-        });
-      }
-    } else if (!forceStateless && continuationTurn) {
-      fallbackReason = "missing_previous_response_id";
-      appendStatefulEvent(events, "stateful_fallback", {
-        reason: "missing_previous_response_id",
-      });
-      if (!this.statefulConfig.fallbackToStateless) {
-        throw new LLMProviderError(
-          this.name,
-          "missing_previous_response_id: stateful continuation requested but no prior response anchor is available",
-          400,
-        );
-      }
-    } else if (forceStateless && fallbackReason) {
-      appendStatefulEvent(events, "stateful_fallback", {
-        reason: fallbackReason,
-      });
-    }
-
     const toolSelection = this.resolveResponseTools(
       options?.toolRouting?.allowedToolNames,
       options?.toolChoice,
     );
-    const statefulInput =
-      continued && anchorMatched && anchorRelevantMessageIndex !== undefined
-        ? buildIncrementalContinuationMessages(
-          messages,
-          anchorRelevantMessageIndex,
-        )
-        : {
-          messages,
-          mode: "full_replay" as const,
-          omittedMessageCount: 0,
-        };
-    const built = this.buildParams(statefulInput.messages, {
-      store: this.statefulConfig.store,
-      previousResponseId: continued ? previousResponseId : undefined,
+    const built = this.buildParams(messages, {
+      store: false,
       allowedToolNames: options?.toolRouting?.allowedToolNames,
       toolChoice: options?.toolChoice,
       maxTurns: options?.maxTurns,
@@ -1791,97 +1450,18 @@ export class GrokProvider implements LLMProvider {
       includeEncryptedReasoning: options?.includeEncryptedReasoning,
       structuredOutput: options?.structuredOutput,
       toolSelection,
-      promptCacheKey: sessionId,
+      promptCacheKey: options?.promptCacheKey?.trim() || undefined,
     });
-
     return {
       params: built.params,
       requestMetrics: collectParamDiagnostics(
         built.params,
         built.toolSelection,
-        statefulInput,
       ),
       toolSelection: built.toolSelection,
-      sessionId,
-      reconciliationHash: reconciliation.anchorHash,
-      requestMessages: reconciliationMessages,
       compactionDiagnostics,
-      statefulDiagnostics: {
-        enabled: true,
-        attempted,
-        continued,
-        store: this.statefulConfig.store,
-        fallbackToStateless: this.statefulConfig.fallbackToStateless,
-        previousResponseId: continued ? previousResponseId : undefined,
-        fallbackReason,
-        reconciliationHash: reconciliation.anchorHash,
-        previousReconciliationHash: anchor?.reconciliationHash,
-        reconciliationMessageCount: reconciliation.messageCountUsed,
-        reconciliationSource: reconciliation.source,
-        anchorMatched,
-        historyCompacted,
-        compactedHistoryTrusted,
-        events,
-      },
+      requestMessages: messages,
     };
-  }
-
-  private persistStatefulAnchor(
-    plan: {
-      sessionId?: string;
-      reconciliationHash?: string;
-      requestMessages?: readonly LLMMessage[];
-      statefulDiagnostics?: LLMStatefulDiagnostics;
-    },
-    response: LLMResponse,
-  ): void {
-    if (!plan.statefulDiagnostics?.enabled) return;
-    const sessionId = plan.sessionId;
-    const responseId = response.stateful?.responseId;
-    const hasMeaningfulAssistantOutput =
-      response.toolCalls.length > 0 ||
-      response.content.trim().length > 0;
-    if (!hasMeaningfulAssistantOutput) {
-      if (sessionId) {
-        this.statefulSessions.delete(sessionId);
-      }
-      return;
-    }
-    const reconciliationHash =
-      plan.requestMessages &&
-      plan.requestMessages.length > 0
-        ? computePersistedResponseReconciliationHash(
-          plan.requestMessages,
-          response,
-          this.statefulConfig.reconciliationWindow,
-        )
-        : plan.reconciliationHash;
-    if (!sessionId || !responseId || !reconciliationHash) {
-      if (sessionId) {
-        this.statefulSessions.delete(sessionId);
-      }
-      return;
-    }
-    if (response.stateful) {
-      response.stateful = {
-        ...response.stateful,
-        reconciliationHash,
-      };
-    }
-    this.statefulSessions.set(sessionId, {
-      responseId,
-      reconciliationHash,
-      updatedAt: Date.now(),
-    });
-  }
-
-  private shouldRetryStatelessFromStateful(
-    error: unknown,
-    statefulDiagnostics: LLMStatefulDiagnostics | undefined,
-  ): boolean {
-    if (!statefulDiagnostics?.attempted) return false;
-    if (!statefulDiagnostics.fallbackToStateless) return false;
-    return isContinuationRetrievalFailure(error);
   }
 
   private async ensureClient(): Promise<unknown> {
@@ -1903,7 +1483,6 @@ export class GrokProvider implements LLMProvider {
     messages: readonly LLMMessage[],
     options?: {
       store?: boolean;
-      previousResponseId?: string;
       allowedToolNames?: readonly string[];
       toolChoice?: LLMToolChoice;
       maxTurns?: number;
@@ -1921,7 +1500,6 @@ export class GrokProvider implements LLMProvider {
     const repairedMessages = repairToolTurnSequence(messages);
     validateToolTurnSequence(repairedMessages, {
       providerName: this.name,
-      allowLeadingToolResults: Boolean(options?.previousResponseId),
     });
 
     // Build mapped messages, handling multimodal tool messages.
@@ -1988,11 +1566,8 @@ export class GrokProvider implements LLMProvider {
     const params: Record<string, unknown> = {
       model,
       input,
-      store: options?.store ?? this.statefulConfig?.store ?? true,
+      store: options?.store ?? false,
     };
-    if (options?.previousResponseId) {
-      params.previous_response_id = options.previousResponseId;
-    }
     // Cut 5.10: xAI prompt caching is prefix-based and is maximized by
     // routing requests with the same conversation ID to the same
     // server. For the Responses API, that routing hint is the
@@ -2140,25 +1715,6 @@ export class GrokProvider implements LLMProvider {
     // params as the runtime intends to send them, including any field
     // that the sanitize step would silently strip.
     validateXaiRequestPreFlight(params);
-
-    // Inline silent-tool-drop assertion. Catches the legacy
-    // MAX_TOOL_SCHEMA_CHARS_FOLLOWUP bug pattern: the runtime selected
-    // tools (`selectedTools.tools.length > 0`) but the final params has
-    // no `tools` field. The pre-flight validator can't catch this with
-    // the params alone — it needs the runtime's selection intent.
-    //
-    // The `toolSuppressionReason` argument tells the assertion when an
-    // empty `tools` field is *intentional* (e.g.
-    // `vision_model_without_tool_support` when an image is sent to a
-    // vision model that lacks tool support, or `empty_allowlist` when
-    // the routed tool subset resolves to zero matches). In those cases
-    // the assertion is a no-op — the runtime deliberately suppressed
-    // tools and that is not a bug.
-    assertNoSilentToolDropOnFollowup({
-      runtimeIntendedToolCount: selectedTools.tools.length,
-      toolSuppressionReason: selectedTools.toolSuppressionReason,
-      outgoingParams: params,
-    });
 
     return {
       params: sanitizeToDocumentedXaiResponsesParams(params),
@@ -2573,17 +2129,6 @@ export class GrokProvider implements LLMProvider {
         return undefined;
       }
 
-      const silentDropRecovered = await this.maybeRetrySilentToolDrop(
-        client,
-        retryParams,
-        retryResponse,
-        options,
-        transport,
-      );
-      if (silentDropRecovered) {
-        return silentDropRecovered;
-      }
-
       return retryResponse;
     } catch (err) {
       console.warn(
@@ -2594,95 +2139,10 @@ export class GrokProvider implements LLMProvider {
     }
   }
 
-  private async maybeRetrySilentToolDrop(
-    client: unknown,
-    originalParams: Record<string, unknown>,
-    originalResponse: Record<string, unknown>,
-    options: LLMChatOptions | undefined,
-    transport: "chat" | "chat_stream",
-  ): Promise<Record<string, unknown> | undefined> {
-    const anomalies = validateXaiResponsePostFlight({
-      request: originalParams,
-      response: originalResponse,
-    });
-    const silentDrop = anomalies.find(
-      (a) => a.code === "silent_tool_drop_promised_in_text",
-    );
-    if (!silentDrop) return undefined;
-
-    const retryParams: Record<string, unknown> = {
-      ...originalParams,
-      tool_choice: "required",
-      stream: false,
-    };
-
-    emitProviderTraceEvent(options, {
-      kind: "request",
-      transport,
-      provider: this.name,
-      model: String(retryParams.model ?? this.config.model),
-      payload:
-        cloneProviderTracePayload(retryParams) ??
-        { error: "provider_retry_request_trace_unavailable" },
-      context: {
-        retryReason: "xai_silent_tool_drop_mitigation",
-        originalEvidence: silentDrop.evidence,
-      } as unknown as ReturnType<typeof buildProviderRequestTraceContext>,
-    });
-
-    try {
-      const retryResult = await createWithResponseMetadata<
-        Record<string, unknown>
-      >(client, retryParams, undefined);
-      const retryResponse = retryResult.data;
-
-      emitProviderTraceEvent(options, {
-        kind: "response",
-        transport,
-        provider: this.name,
-        model: String(
-          (retryResponse as { model?: unknown }).model ?? retryParams.model,
-        ),
-        payload:
-          cloneProviderTracePayload(retryResponse) ??
-          { error: "provider_retry_response_trace_unavailable" },
-        context: {
-          retryReason: "xai_silent_tool_drop_mitigation",
-        } as unknown as ReturnType<typeof buildProviderResponseTraceContext>,
-      });
-
-      const retryAnomalies = validateXaiResponsePostFlight({
-        request: retryParams,
-        response: retryResponse,
-      });
-      const retryStillBroken = retryAnomalies.some(
-        (a) =>
-          a.code === "silent_tool_drop_promised_in_text" ||
-          a.code === "truncated_response_mid_sentence",
-      );
-      if (retryStillBroken) {
-        console.warn(
-          `[GrokProvider] xAI silent-tool-drop retry with tool_choice="required" ` +
-            `also returned a broken tool transition; falling through to original.`,
-        );
-        return undefined;
-      }
-
-      return retryResponse;
-    } catch (err) {
-      console.warn(
-        `[GrokProvider] xAI silent-tool-drop retry failed:`,
-        err instanceof Error ? err.message : String(err),
-      );
-      return undefined;
-    }
-  }
-
   private parseResponse(
     response: any,
     request: Record<string, unknown> | undefined,
     requestMetrics?: LLMRequestMetrics,
-    statefulDiagnostics?: LLMStatefulDiagnostics,
     compactionDiagnostics?: LLMCompactionDiagnostics,
     structuredOutputRequest?: LLMChatOptions["structuredOutput"],
   ): LLMResponse & {
@@ -2692,27 +2152,15 @@ export class GrokProvider implements LLMProvider {
       response.output,
     );
 
-    // Strict post-flight: detect xAI silent-degradation patterns. Error-
-    // level anomalies throw so the executor sees them as provider_error.
-    // Warn-level anomalies (model silent aliasing, incomplete responses)
-    // log via console.warn for observability without failing the turn.
-    // Pass-through path when no request context is available (e.g. parsing
-    // a stored response by ID).
+    // Strict post-flight: detect xAI semantic-degradation patterns and
+    // log them at the anomaly level. Pass-through when no request
+    // context is available (e.g. parsing a stored response by ID).
     if (request) {
       const anomalies = validateXaiResponsePostFlight({
         request,
         response: response as Record<string, unknown>,
       });
       for (const anomaly of anomalies) {
-        if (
-          anomaly.severity === "error" &&
-          anomaly.code === "silent_tool_drop_promised_in_text"
-        ) {
-          throw new XaiSilentToolDropError(
-            "incoming_promised_tools_missing",
-            anomaly.evidence,
-          );
-        }
         // truncated_response_mid_sentence is handled upstream by
         // maybeRetryMidSentenceTruncation() BEFORE parseResponse is
         // called. If it surfaces here, it means the retry ran and
@@ -2725,14 +2173,6 @@ export class GrokProvider implements LLMProvider {
     }
 
     const finishReason = this.mapResponseFinishReason(response, toolCalls);
-    const responseId =
-      typeof response?.id === "string" ? String(response.id) : undefined;
-    const stateful = statefulDiagnostics
-      ? {
-        ...statefulDiagnostics,
-        responseId,
-      }
-      : undefined;
     const compaction = compactionDiagnostics;
     const parsedError = this.extractResponseError(response, finishReason);
 
@@ -2742,7 +2182,6 @@ export class GrokProvider implements LLMProvider {
       usage: this.parseUsage(response),
       model: String(response.model ?? this.config.model),
       requestMetrics,
-      stateful,
       compaction,
       providerEvidence: this.extractProviderEvidence(response),
       structuredOutput: this.extractStructuredOutputResult(

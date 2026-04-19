@@ -4,6 +4,7 @@ import type {
   ChatToolRoutingSummary,
 } from "../llm/chat-executor.js";
 import { executeChatToLegacyResult } from "../llm/execute-chat.js";
+import { collectAttachments } from "../llm/attachment-injection.js";
 import { normalizePromptEnvelope } from "../llm/prompt-envelope.js";
 import type {
   LLMProviderTraceEvent,
@@ -13,7 +14,6 @@ import type {
 import type { MemoryBackend } from "../memory/types.js";
 import type { Logger } from "../utils/logger.js";
 import type { ChatExecutionTraceEvent } from "../llm/chat-executor-types.js";
-import { hasActionableStatefulFallback } from "../llm/chat-executor-recovery.js";
 import type { GatewayMessage } from "./message.js";
 import {
   resolveSessionShellProfile,
@@ -222,6 +222,16 @@ interface ExecuteTextChannelTurnParams {
   readonly workerManager?: PersistentWorkerManager | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
   readonly taskStore?: TaskStore | null;
+  readonly readTodosForSession?: (
+    sessionId: string,
+  ) => Promise<
+    readonly import("../tools/system/todo-store.js").TodoItem[]
+  >;
+  readonly readTasksForSession?: (
+    sessionId: string,
+  ) => Promise<
+    readonly import("../llm/task-reminder.js").ReminderTaskView[]
+  >;
 }
 
 export async function executeTextChannelTurn(
@@ -308,10 +318,26 @@ export async function executeTextChannelTurn(
   const sessionInteractiveContext = buildSessionInteractiveContext(session, {
     overrideState: interactiveTurnState,
   });
-  const effectiveHistory =
+  const historyBeforeAttachments =
     atMentionAttachments.historyPrelude.length > 0
       ? [...session.history, ...atMentionAttachments.historyPrelude]
       : session.history;
+  const todosForAttachment = params.readTodosForSession
+    ? await params.readTodosForSession(msg.sessionId)
+    : [];
+  const tasksForAttachment = params.readTasksForSession
+    ? await params.readTasksForSession(msg.sessionId)
+    : [];
+  const runtimeAttachments = collectAttachments({
+    history: historyBeforeAttachments,
+    activeToolNames: new Set<string>(advertisedToolNames),
+    todos: todosForAttachment,
+    tasks: tasksForAttachment,
+  });
+  const effectiveHistory =
+    runtimeAttachments.messages.length > 0
+      ? [...historyBeforeAttachments, ...runtimeAttachments.messages]
+      : historyBeforeAttachments;
   const promptEnvelope = normalizePromptEnvelope({
     baseSystemPrompt: effectiveSystemPrompt,
   });
@@ -525,7 +551,6 @@ export async function executeTextChannelTurn(
       tokenUsage: result.tokenUsage,
       requestShape: summarizeInitialRequestShape(result.callUsage),
       callUsage: summarizeCallUsageForTrace(result.callUsage),
-      statefulSummary: result.statefulSummary,
       ...(includePlannerSummaryInTrace
         ? { plannerSummary: result.plannerSummary }
         : {}),
@@ -580,7 +605,6 @@ export async function executeTextChannelTurn(
               tokenUsage: result.tokenUsage,
               requestShape: summarizeInitialRequestShape(result.callUsage),
               callUsage: result.callUsage,
-              statefulSummary: result.statefulSummary,
               ...(includePlannerSummaryInTrace
                 ? { plannerSummary: result.plannerSummary }
                 : {}),
@@ -605,14 +629,6 @@ export async function executeTextChannelTurn(
           }
         : undefined,
     );
-  }
-
-  if (hasActionableStatefulFallback(result.statefulSummary)) {
-    logger.warn(`[stateful] ${channelName} fallback_to_stateless`, {
-      traceId: turnTraceId,
-      sessionId: msg.sessionId,
-      summary: result.statefulSummary,
-    });
   }
 
   persistSessionStatefulContinuation(session, result);

@@ -470,14 +470,6 @@ You have broad access to this machine via the system.bash tool.`,
       failedToolCalls: 0,
     });
 
-    const hydrated = createSession();
-    await hydrateWebSessionRuntimeState(memoryBackend, "session:test", hydrated);
-    expect(
-      hydrated.metadata[SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY],
-    ).toEqual({
-      previousResponseId: "resp-next",
-      reconciliationHash: "hash-next",
-    });
   });
 
   it("persists delegated scope trust metadata for poisoned child cwd summaries", async () => {

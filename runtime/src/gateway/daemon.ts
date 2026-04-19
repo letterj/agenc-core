@@ -121,6 +121,7 @@ import {
 } from "../llm/provider-native-search.js";
 import {
   createLLMProviders as createLLMProvidersStandalone,
+  createSingleLLMProvider,
   resolveLlmContextWindowTokens as resolveLlmContextWindowTokensStandalone,
   resolveProviderExecutionBudget as resolveProviderExecutionBudgetStandalone,
   buildPromptBudgetConfig,
@@ -152,6 +153,7 @@ import { ToolRegistry } from "../tools/registry.js";
 import { SystemRemoteJobManager } from "../tools/system/remote-job.js";
 import { SystemRemoteSessionManager } from "../tools/system/remote-session.js";
 import { TaskStore } from "../tools/system/task-tracker.js";
+import { TodoStore } from "../tools/system/todo-store.js";
 import { DEFAULT_TIMEOUT_MS as DEFAULT_BASH_TOOL_TIMEOUT_MS } from "../tools/system/types.js";
 import {
   SkillDiscovery,
@@ -184,7 +186,6 @@ import {
 } from "./session-transcript.js";
 // loadWallet moved to ./daemon-tool-registry.ts and ./daemon-feature-wiring.ts
 import {
-  buildSessionStatefulOptions,
   clearWebSessionReplayState,
   hydrateWebSessionReplayState,
   loadPersistedSessionReplayContext,
@@ -421,7 +422,6 @@ export {
   persistSessionStatefulContinuation,
   rebindSessionExecutionLocation,
   persistWebSessionRuntimeState,
-  resolveSessionStatefulContinuation,
 } from "./daemon-session-state.js";
 import {
   persistWebSessionRuntimeState,
@@ -1142,6 +1142,7 @@ export class DaemonManager {
   private _remoteJobManager: SystemRemoteJobManager | null = null;
   private _remoteSessionManager: SystemRemoteSessionManager | null = null;
   private _taskTrackerStore: TaskStore | null = null;
+  private _todoStore: TodoStore | null = null;
   private _persistentWorkerManager: PersistentWorkerManager | null = null;
   private _sessionModelInfo = new Map<
     string,
@@ -2438,9 +2439,41 @@ export class DaemonManager {
               logger: this.logger,
             })
           : undefined;
+      // Build a fast, non-reasoning supervisor provider for the
+      // short JSON-only calls (`evaluateDecision`,
+      // `refreshCarryForwardState`). Compaction continues to use the
+      // primary provider to match the upstream reference runtime,
+      // which preserves same-model continuity for summaries. Falls
+      // back silently to the primary when the primary provider isn't
+      // Grok (other adapters don't expose a fast variant here).
+      let supervisorFastLlm: LLMProvider | undefined;
+      if (config.llm?.provider === "grok") {
+        supervisorFastLlm =
+          (await createSingleLLMProvider(
+            {
+              ...config.llm,
+              model: "grok-4-fast-non-reasoning",
+              // Fast supervisor calls never use tools; strip the tool
+              // config so the fast provider never spins up tool
+              // routing state for its own calls.
+              parallelToolCalls: false,
+            },
+            [],
+            this.logger,
+          )) ?? undefined;
+      }
       this._backgroundRunSupervisor = new BackgroundRunSupervisor({
         chatExecutor: this._chatExecutor,
         supervisorLlm: providers[0],
+        ...(supervisorFastLlm ? { supervisorFastLlm } : {}),
+        ...(typeof sessionCompactionThreshold === "number" &&
+        sessionCompactionThreshold > 0
+          ? { compactionThresholdTokens: sessionCompactionThreshold }
+          : {}),
+        ...(typeof config.llm?.promptCharPerToken === "number" &&
+        config.llm.promptCharPerToken > 0
+          ? { compactionCharPerToken: config.llm.promptCharPerToken }
+          : {}),
         getSystemPrompt: () => this._systemPrompt,
         runStore,
         policyEngine: this._policyEngine ?? undefined,
@@ -2525,6 +2558,18 @@ export class DaemonManager {
           ),
         seedHistoryForSession: (sessionId) =>
           sessionMgr.get(sessionId)?.history ?? [],
+        readTodosForSession: async (sessionId) =>
+          this._todoStore ? await this._todoStore.getTodos(sessionId) : [],
+        readTasksForSession: async (sessionId) => {
+          const store = this._taskTrackerStore;
+          if (!store) return [];
+          const tasks = await store.listTasks(sessionId);
+          return tasks.map((task) => ({
+            id: task.id,
+            subject: task.subject,
+            status: task.status,
+          }));
+        },
         isSessionBusy: (sessionId) =>
           this._foregroundSessionLocks.has(sessionId),
         onStatus: (sessionId, payload) => {
@@ -4024,6 +4069,7 @@ export class DaemonManager {
     this._remoteJobManager = result.remoteJobManager;
     this._remoteSessionManager = result.remoteSessionManager;
     this._taskTrackerStore = result.taskTrackerStore;
+    this._todoStore = result.todoStore;
     await this._taskTrackerStore.repairRuntimeState();
     await this.configurePersistentWorkerManager(config);
     this._containerMCPConfigs = result.containerMCPConfigs;
@@ -5532,7 +5578,6 @@ export class DaemonManager {
       return null;
     }
     const session = this._webSessionManager?.get(sessionId);
-    const stateful = session ? buildSessionStatefulOptions(session) : undefined;
 
     const totalTokens = executor.getSessionTokenUsage(sessionId);
     // Show per-call context window occupancy (from the last model
@@ -5548,7 +5593,7 @@ export class DaemonManager {
     const usageSnapshot = buildCurrentContextUsageSnapshot({
       messages: buildCurrentApiView({
         baseSystemPrompt: this._systemPrompt,
-        artifactContext: stateful?.artifactContext,
+        artifactContext: undefined,
         history: session?.history ?? [],
       }),
       contextWindowTokens,
@@ -7556,6 +7601,18 @@ export class DaemonManager {
           });
         },
         taskStore: this._taskTrackerStore,
+        readTodosForSession: async (sessionId) =>
+          this._todoStore ? await this._todoStore.getTodos(sessionId) : [],
+        readTasksForSession: async (sessionId) => {
+          const store = this._taskTrackerStore;
+          if (!store) return [];
+          const tasks = await store.listTasks(sessionId);
+          return tasks.map((task) => ({
+            id: task.id,
+            subject: task.subject,
+            status: task.status,
+          }));
+        },
         workerManager,
         maybeStartBackgroundRun,
         onSubagentSynthesis: (result) => {
@@ -7814,6 +7871,9 @@ export class DaemonManager {
       }
       if (this._taskTrackerStore !== null) {
         this._taskTrackerStore = null;
+      }
+      if (this._todoStore !== null) {
+        this._todoStore = null;
       }
       this._toolRegistry = null;
       if (this._memoryBackend !== null) {

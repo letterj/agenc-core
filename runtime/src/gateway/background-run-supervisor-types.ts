@@ -155,6 +155,20 @@ export interface ActiveBackgroundRun {
   cycleCount: number;
   stableWorkingCycles: number;
   consecutiveErrorCycles: number;
+  /**
+   * Runtime counters backing the `verify_reminder` trigger. These are
+   * persisted state rather than scan-derived from history because their
+   * anchors are singular past events — a verifier spawn, a prior
+   * reminder emission — that history compaction can summarize away.
+   * Separation of "runtime bookkeeping state" from "model-visible
+   * context" matches the reference runtime's `AppState.pendingPlanVerification`
+   * pattern and the SOTA position from ESAA / LangGraph / OpenAI
+   * Assistants runs. Read by `collectAttachments` at the start of the
+   * next cycle; written at the end of the current cycle after
+   * `recordToolEvidence`.
+   */
+  mutatingEditsSinceLastVerifierSpawn: number;
+  assistantTurnsSinceLastVerifyReminder: number;
   anchorFiles: AnchorFileSnapshot[];
   nextCheckAt?: number;
   nextHeartbeatAt?: number;
@@ -197,6 +211,30 @@ export interface ActiveBackgroundRun {
 export interface BackgroundRunSupervisorConfig {
   readonly chatExecutor: ChatExecutor;
   readonly supervisorLlm: LLMProvider;
+  /**
+   * Optional fast provider for short JSON-only supervisor calls
+   * (`evaluateDecision`, `refreshCarryForwardState`). Compaction
+   * intentionally continues to use `supervisorLlm` to match the
+   * upstream reference runtime, which preserves same-model continuity
+   * between the actor prompt and its summaries.
+   *
+   * Falls back to `supervisorLlm` when undefined.
+   */
+  readonly supervisorFastLlm?: LLMProvider;
+  /**
+   * Token threshold at which the supervisor compacts `internalHistory`
+   * before the next actor turn. Matches the upstream reference
+   * runtime's `effectiveContextWindow - AUTOCOMPACT_BUFFER_TOKENS`
+   * trigger. When undefined, the supervisor falls back to the legacy
+   * message-count heuristic.
+   */
+  readonly compactionThresholdTokens?: number;
+  /**
+   * Char-to-token ratio for the cheap prompt-size estimate used by the
+   * compaction gate. Mirrors `llm.promptCharPerToken` from gateway
+   * config (default 4).
+   */
+  readonly compactionCharPerToken?: number;
   readonly getSystemPrompt: () => string;
   readonly createToolHandler: (params: {
     sessionId: string;
@@ -226,6 +264,29 @@ export interface BackgroundRunSupervisorConfig {
     discoveredToolNames?: readonly string[],
   ) => readonly string[];
   readonly seedHistoryForSession?: (sessionId: string) => readonly LLMMessage[];
+  /**
+   * Optional callback returning the session's current TodoWrite list.
+   * Used by the shared attachment-injection hook to render the
+   * 10-turn reminder with the right list contents. When absent, the
+   * reminder still fires on cadence but with an empty list payload.
+   */
+  readonly readTodosForSession?: (
+    sessionId: string,
+  ) => Promise<
+    readonly import("../tools/system/todo-store.js").TodoItem[]
+  >;
+  /**
+   * Optional callback returning the session's current task list. Used by
+   * the shared attachment-injection hook to render the `task_reminder`.
+   * Returns the minimal `ReminderTaskView` shape (`id`, `subject`,
+   * `status`) so both `Task` (TaskStore) and `SessionTask` values are
+   * structurally assignable.
+   */
+  readonly readTasksForSession?: (
+    sessionId: string,
+  ) => Promise<
+    readonly import("../llm/task-reminder.js").ReminderTaskView[]
+  >;
   readonly isSessionBusy?: (sessionId: string) => boolean;
   readonly onStatus?: (
     sessionId: string,
@@ -279,6 +340,16 @@ export interface ResolvedCycleOutcome {
   readonly actorResult?: ChatExecutorResult;
   readonly decision: BackgroundRunDecision;
   readonly heartbeatMs?: number;
+  /**
+   * Carry-forward refresh started in parallel with `evaluateDecision`
+   * during non-parity cycle resolution. Downstream branches (working /
+   * finishing) await this instead of firing a fresh refresh, so the
+   * two LLM calls run concurrently rather than serially.
+   *
+   * Undefined when we took the parity path (synchronous fallback) or
+   * a deterministic domain decision short-circuited the LLM path.
+   */
+  readonly carryForwardRefreshPromise?: Promise<void>;
 }
 
 export interface NativeManagedProcessCycleResult {
@@ -349,6 +420,10 @@ export function toPersistedRun(run: ActiveBackgroundRun): PersistedBackgroundRun
     cycleCount: run.cycleCount,
     stableWorkingCycles: run.stableWorkingCycles,
     consecutiveErrorCycles: run.consecutiveErrorCycles,
+    mutatingEditsSinceLastVerifierSpawn:
+      run.mutatingEditsSinceLastVerifierSpawn,
+    assistantTurnsSinceLastVerifyReminder:
+      run.assistantTurnsSinceLastVerifyReminder,
     anchorFiles: [...run.anchorFiles],
     nextCheckAt: run.nextCheckAt,
     nextHeartbeatAt: run.nextHeartbeatAt,
@@ -432,6 +507,20 @@ export function toActiveRun(run: PersistedBackgroundRun): ActiveBackgroundRun {
     cycleCount: run.cycleCount,
     stableWorkingCycles: run.stableWorkingCycles,
     consecutiveErrorCycles: run.consecutiveErrorCycles,
+    // Explicit defaults for runs persisted before the counters landed:
+    //   - edit counter defaults to 0 so only post-upgrade mutating
+    //     tool calls accrue toward the verify_reminder threshold.
+    //   - turn counter defaults to Infinity so the first reminder
+    //     fires as soon as the edit threshold hits after an upgrade
+    //     (no spurious 10-turn delay on first boot after this PR).
+    mutatingEditsSinceLastVerifierSpawn:
+      typeof run.mutatingEditsSinceLastVerifierSpawn === "number"
+        ? run.mutatingEditsSinceLastVerifierSpawn
+        : 0,
+    assistantTurnsSinceLastVerifyReminder:
+      typeof run.assistantTurnsSinceLastVerifyReminder === "number"
+        ? run.assistantTurnsSinceLastVerifyReminder
+        : Number.POSITIVE_INFINITY,
     anchorFiles: [...run.anchorFiles],
     nextCheckAt: run.nextCheckAt,
     nextHeartbeatAt: run.nextHeartbeatAt,

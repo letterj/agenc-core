@@ -800,9 +800,9 @@ describe("createDaemonCommandRegistry /response", () => {
     const replies = await dispatchAndCollect(registry, "/response status");
 
     expect(replies).toHaveLength(1);
-    expect(replies[0]).toContain("Retrieval supported: yes");
-    expect(replies[0]).toContain("Deletion supported: yes");
-    expect(replies[0]).toContain("Encrypted reasoning support: yes");
+    expect(replies[0]).toContain("Stored response state:");
+    expect(replies[0]).toContain("Replay provider available: yes");
+    expect(replies[0]).toContain("Runtime includeEncryptedReasoning: enabled");
     expect(replies[0]).toContain("Current response anchor: resp-anchor-1");
   });
 

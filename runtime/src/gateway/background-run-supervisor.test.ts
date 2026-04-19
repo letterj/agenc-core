@@ -2657,19 +2657,6 @@ describe("background-run-supervisor", () => {
       await expect(runStore1.loadRun("session-recover")).resolves.toMatchObject({
         state: "working",
         fenceToken: 2,
-        carryForward: expect.objectContaining({
-          providerContinuation: expect.objectContaining({
-            responseId: "resp_recover_1",
-            reconciliationHash: "hash_recover_1",
-          }),
-          artifacts: expect.arrayContaining([
-            expect.objectContaining({
-              kind: "opaque_provider_state",
-              locator: "provider:grok:compaction:cmp_recover_1",
-              digest: "recoverdigest0001",
-            }),
-          ]),
-        }),
         budgetState: expect.objectContaining({
           maxRuntimeMs: 0,
           maxCycles: deriveDefaultBackgroundRunMaxCycles({
@@ -2677,9 +2664,6 @@ describe("background-run-supervisor", () => {
             nextCheckMs: 4000,
           }),
           nextCheckIntervalMs: 4000,
-        }),
-        compaction: expect.objectContaining({
-          refreshCount: 1,
         }),
         watchRegistrations: [
           expect.objectContaining({
@@ -2761,35 +2745,15 @@ describe("background-run-supervisor", () => {
 
       await vi.advanceTimersByTimeAsync(0);
       expect(execute2).toHaveBeenCalledTimes(1);
-      expect(execute2.mock.calls[0]?.[0]).toMatchObject({
-        stateful: {
-          resumeAnchor: {
-            previousResponseId: "resp_recover_1",
-            reconciliationHash: "hash_recover_1",
-          },
-        },
-      });
       await expect(runStore2.loadRun("session-recover")).resolves.toMatchObject({
         state: "working",
         fenceToken: expect.any(Number),
-        carryForward: expect.objectContaining({
-          artifacts: expect.arrayContaining([
-            expect.objectContaining({
-              kind: "opaque_provider_state",
-              locator: "provider:grok:compaction:cmp_recover_1",
-              digest: "recoverdigest0001",
-            }),
-          ]),
-        }),
         budgetState: expect.objectContaining({
           maxRuntimeMs: 0,
           maxCycles: deriveDefaultBackgroundRunMaxCycles({
             maxRuntimeMs: 0,
             nextCheckMs: 4000,
           }),
-        }),
-        compaction: expect.objectContaining({
-          lastHistoryLength: expect.any(Number),
         }),
         watchRegistrations: [
           expect.objectContaining({
@@ -3922,147 +3886,6 @@ describe("background-run-supervisor", () => {
     });
   });
 
-  it("persists provider continuation anchors and reuses them on the next cycle", async () => {
-    const publishUpdate = vi.fn(async () => undefined);
-    const execute = vi
-      .fn()
-      .mockResolvedValueOnce(
-        makeResult({
-          content: "Watcher started and verified.",
-          callUsage: [
-            makeCallUsageRecord({
-              statefulDiagnostics: {
-                enabled: true,
-                attempted: false,
-                continued: false,
-                store: true,
-                fallbackToStateless: true,
-                responseId: "resp_cycle_1",
-                reconciliationHash: "hash_cycle_1",
-                events: [],
-              },
-            }),
-          ],
-          toolCalls: [
-            {
-              name: "desktop.process_start",
-              args: { label: "watcher" },
-              result: '{"processId":"proc_watcher","label":"watcher","state":"running"}',
-              isError: false,
-              durationMs: 5,
-            },
-          ],
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeResult({
-          content: "Watcher is still running.",
-          toolCalls: [
-            {
-              name: "desktop.process_status",
-              args: { processId: "proc_watcher" },
-              result: '{"processId":"proc_watcher","label":"watcher","state":"running"}',
-              isError: false,
-              durationMs: 5,
-            },
-          ],
-        }),
-      );
-    const supervisorLlm: LLMProvider = {
-      name: "supervisor",
-      chat: vi
-        .fn()
-        .mockResolvedValueOnce({
-          content:
-            '{"kind":"until_condition","successCriteria":["keep the watcher running"],"completionCriteria":["observe the watcher exit"],"blockedCriteria":["missing process controls"],"nextCheckMs":4000,"heartbeatMs":12000}',
-          toolCalls: [],
-          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-          model: "supervisor-model",
-          finishReason: "stop",
-        })
-        .mockResolvedValueOnce({
-          content:
-            '{"state":"working","userUpdate":"Watcher is running.","internalSummary":"verified running","nextCheckMs":4000,"shouldNotifyUser":true}',
-          toolCalls: [],
-          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-          model: "supervisor-model",
-          finishReason: "stop",
-        })
-        .mockResolvedValueOnce({
-          content:
-            '{"summary":"Watcher is running.","verifiedFacts":["Watcher started."],"openLoops":["Wait for process exit."],"nextFocus":"Continue monitoring."}',
-          toolCalls: [],
-          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-          model: "supervisor-model",
-          finishReason: "stop",
-        })
-        .mockResolvedValueOnce({
-          content:
-            '{"state":"working","userUpdate":"Watcher still running.","internalSummary":"verified running again","nextCheckMs":4000,"shouldNotifyUser":true}',
-          toolCalls: [],
-          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-          model: "supervisor-model",
-          finishReason: "stop",
-        })
-        .mockResolvedValueOnce({
-          content:
-            '{"summary":"Watcher is still running.","verifiedFacts":["Watcher is running."],"openLoops":["Wait for process exit."],"nextFocus":"Keep monitoring."}',
-          toolCalls: [],
-          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-          model: "supervisor-model",
-          finishReason: "stop",
-        }),
-      chatStream: vi.fn(),
-      healthCheck: vi.fn(async () => true),
-    };
-
-    const runStore = createRunStore();
-    const supervisor = new BackgroundRunSupervisor({
-      chatExecutor: { execute } as any,
-      supervisorLlm,
-      getSystemPrompt: () => "base system prompt",
-      runStore,
-      createToolHandler: (): ToolHandler => vi.fn(async () => "ok"),
-      publishUpdate,
-    });
-
-    await supervisor.startRun({
-      sessionId: "session-stateful-anchor",
-      objective: "Monitor the watcher in the background and keep it running.",
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    await expect(runStore.loadRun("session-stateful-anchor")).resolves.toMatchObject({
-      carryForward: expect.objectContaining({
-        providerContinuation: expect.objectContaining({
-          provider: "grok",
-          responseId: "resp_cycle_1",
-          reconciliationHash: "hash_cycle_1",
-          mode: "previous_response_id",
-        }),
-      }),
-      compaction: expect.objectContaining({
-        lastProviderAnchorAt: expect.any(Number),
-      }),
-    });
-
-    await supervisor.signalRun({
-      sessionId: "session-stateful-anchor",
-      content: "Check it again.",
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(execute.mock.calls[1]?.[0]).toMatchObject({
-      stateful: {
-        resumeAnchor: {
-          previousResponseId: "resp_cycle_1",
-          reconciliationHash: "hash_cycle_1",
-        },
-      },
-    });
-  });
-
   it("repairs poisoned carry-forward summaries that drift from verified evidence", async () => {
     const publishUpdate = vi.fn(async () => undefined);
     const execute = vi
@@ -4182,128 +4005,6 @@ describe("background-run-supervisor", () => {
     });
     const repaired = await runStore.loadRun("session-carry-repair");
     expect(repaired?.carryForward?.summary).not.toBe(poisonedSummary);
-  });
-
-  it("stores provider state artifacts out of band and traces them on memory refresh", async () => {
-    const publishUpdate = vi.fn(async () => undefined);
-    const execute = vi.fn().mockResolvedValue(
-      makeResult({
-        content: "Watcher launched and compacted provider state was returned.",
-        toolCalls: [
-          {
-            name: "desktop.process_start",
-            args: { label: "watcher" },
-            result: '{"processId":"proc_watcher","label":"watcher","state":"running"}',
-            isError: false,
-            durationMs: 5,
-          },
-        ],
-        callUsage: [
-          makeCallUsageRecord({
-            provider: "grok",
-            statefulDiagnostics: {
-              enabled: true,
-              attempted: false,
-              continued: false,
-              store: true,
-              fallbackToStateless: true,
-              responseId: "resp_compacted",
-              reconciliationHash: "hash_compacted",
-            },
-            compactionDiagnostics: {
-              enabled: true,
-              requested: true,
-              active: true,
-              mode: "provider_managed_state",
-              threshold: 12_000,
-              observedItemCount: 1,
-              latestItem: {
-                type: "compaction",
-                id: "cmp_1",
-                digest: "deadbeefcafebabe",
-              },
-            },
-          }),
-        ],
-      }),
-    );
-    const supervisorLlm: LLMProvider = {
-      name: "supervisor",
-      chat: vi
-        .fn()
-        .mockResolvedValueOnce({
-          content:
-            '{"kind":"until_condition","successCriteria":["watch the process"],"completionCriteria":["observe it exit"],"blockedCriteria":["missing process controls"],"nextCheckMs":4000,"heartbeatMs":12000}',
-          toolCalls: [],
-          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-          model: "supervisor-model",
-          finishReason: "stop",
-        })
-        .mockResolvedValueOnce({
-          content:
-            '{"state":"working","userUpdate":"Watcher launched.","internalSummary":"watcher launched","nextCheckMs":4000,"shouldNotifyUser":true}',
-          toolCalls: [],
-          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-          model: "supervisor-model",
-          finishReason: "stop",
-        })
-        .mockResolvedValueOnce({
-          content:
-            '{"summary":"Watcher launched and needs monitoring.","verifiedFacts":["Watcher process launched."],"openLoops":["Wait for process exit."],"nextFocus":"Keep monitoring the watcher."}',
-          toolCalls: [],
-          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-          model: "supervisor-model",
-          finishReason: "stop",
-        }),
-      chatStream: vi.fn(),
-      healthCheck: vi.fn(async () => true),
-    };
-
-    const runStore = createRunStore();
-    const supervisor = new BackgroundRunSupervisor({
-      chatExecutor: { execute } as any,
-      supervisorLlm,
-      getSystemPrompt: () => "base system prompt",
-      runStore,
-      createToolHandler: (): ToolHandler => vi.fn(async () => "ok"),
-      publishUpdate,
-    });
-
-    await supervisor.startRun({
-      sessionId: "session-provider-compaction",
-      objective: "Monitor the watcher in the background until it exits.",
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    const run = await runStore.loadRun("session-provider-compaction");
-    expect(run).toMatchObject({
-      carryForward: expect.objectContaining({
-        providerContinuation: expect.objectContaining({
-          responseId: "resp_compacted",
-        }),
-        artifacts: [
-          expect.objectContaining({
-            kind: "process",
-            locator: "proc_watcher",
-          }),
-          expect.objectContaining({
-            kind: "opaque_provider_state",
-            locator: "provider:grok:compaction:cmp_1",
-            source: "grok:provider_state",
-            digest: "deadbeefcafebabe",
-          }),
-        ],
-      }),
-    });
-
-    const compactionEvent = (await runStore.listEvents(run!.id)).find((event) =>
-      event.metadata?.eventType === "memory_compacted"
-    );
-    expect(compactionEvent?.metadata).toMatchObject({
-      eventType: "memory_compacted",
-      providerCompactionArtifact: "provider:grok:compaction:cmp_1",
-      providerCompactionDigest: "deadbeefcafebabe",
-    });
   });
 
   it("keeps binary tool outputs out of band when recording carry-forward evidence", async () => {

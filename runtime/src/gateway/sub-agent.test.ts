@@ -2452,12 +2452,6 @@ describe("SubAgentManager", () => {
             { role: "user", content: "Store the token for later recall" },
             { role: "assistant", content: "CHILD-STORED-S1" },
           ],
-          stateful: {
-            resumeAnchor: {
-              previousResponseId: "resp-child-1",
-              reconciliationHash: "hash-child-1",
-            },
-          },
         });
       } finally {
         executeSpy.mockRestore();
@@ -2577,12 +2571,6 @@ describe("SubAgentManager", () => {
             { role: "user", content: "Store the token for later recall" },
             { role: "assistant", content: "STORED-CHILD-RESULT" },
           ],
-          stateful: {
-            resumeAnchor: {
-              previousResponseId: "resp-child-persisted-1",
-              reconciliationHash: "hash-child-persisted-1",
-            },
-          },
         });
       } finally {
         executeSpy.mockRestore();

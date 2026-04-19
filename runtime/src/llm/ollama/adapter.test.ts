@@ -120,23 +120,6 @@ describe("OllamaProvider", () => {
     expect(params.model).toBe("mistral");
   });
 
-  it("reports deterministic unsupported stateful capabilities", () => {
-    const provider = new OllamaProvider({});
-
-    expect(provider.getCapabilities?.()).toEqual({
-      provider: "ollama",
-      stateful: {
-        assistantPhase: false,
-        previousResponseId: false,
-        encryptedReasoning: false,
-        storedResponseRetrieval: false,
-        storedResponseDeletion: false,
-        opaqueCompaction: false,
-        deterministicFallback: true,
-      },
-    });
-  });
-
   it("reports execution profile from explicit num_ctx configuration", async () => {
     const provider = new OllamaProvider({
       model: "qwen2.5-coder",
@@ -380,45 +363,6 @@ describe("OllamaProvider", () => {
       missingRequestedToolNames: ["mcp.example.start"],
       toolResolution: "subset_no_resolved_matches",
       providerCatalogToolCount: 1,
-    });
-  });
-
-  it("returns explicit unsupported diagnostics for stateful continuation and compaction", async () => {
-    mockChat.mockResolvedValueOnce(makeResponse());
-
-    const provider = new OllamaProvider({
-      statefulResponses: {
-        enabled: true,
-        store: true,
-        fallbackToStateless: true,
-        compaction: {
-          enabled: true,
-          compactThreshold: 2048,
-          fallbackOnUnsupported: true,
-        },
-      },
-    });
-    const result = await provider.chat(
-      [{ role: "user", content: "test" }],
-      {
-        stateful: {
-          sessionId: "session-1",
-        },
-      },
-    );
-
-    expect(result.stateful).toMatchObject({
-      enabled: true,
-      attempted: false,
-      continued: false,
-      fallbackReason: "unsupported",
-    });
-    expect(result.compaction).toMatchObject({
-      enabled: true,
-      requested: true,
-      active: false,
-      threshold: 2048,
-      fallbackReason: "unsupported",
     });
   });
 

@@ -5,8 +5,8 @@ import type {
   ChatToolRoutingSummary,
 } from "../llm/chat-executor.js";
 import type { ChatExecutionTraceEvent } from "../llm/chat-executor-types.js";
-import { hasActionableStatefulFallback } from "../llm/chat-executor-recovery.js";
 import { executeChatToLegacyResult } from "../llm/execute-chat.js";
+import { collectAttachments } from "../llm/attachment-injection.js";
 import { normalizePromptEnvelope } from "../llm/prompt-envelope.js";
 import type {
   LLMProviderTraceEvent,
@@ -134,6 +134,16 @@ interface ExecuteWebChatConversationTurnParams {
   readonly workerManager?: PersistentWorkerManager | null;
   readonly agentDefinitions?: readonly AgentDefinition[];
   readonly taskStore?: TaskStore | null;
+  readonly readTodosForSession?: (
+    sessionId: string,
+  ) => Promise<
+    readonly import("../tools/system/todo-store.js").TodoItem[]
+  >;
+  readonly readTasksForSession?: (
+    sessionId: string,
+  ) => Promise<
+    readonly import("../llm/task-reminder.js").ReminderTaskView[]
+  >;
   readonly maybeStartBackgroundRun?: (params: {
     readonly session: Session;
     readonly objective: string;
@@ -405,10 +415,26 @@ export async function executeWebChatConversationTurn(
     const sessionInteractiveContext = buildSessionInteractiveContext(session, {
       overrideState: interactiveTurnState,
     });
-    const effectiveHistory =
+    const historyBeforeAttachments =
       atMentionAttachments.historyPrelude.length > 0
         ? [...session.history, ...atMentionAttachments.historyPrelude]
         : session.history;
+    const todosForAttachment = params.readTodosForSession
+      ? await params.readTodosForSession(msg.sessionId)
+      : [];
+    const tasksForAttachment = params.readTasksForSession
+      ? await params.readTasksForSession(msg.sessionId)
+      : [];
+    const runtimeAttachments = collectAttachments({
+      history: historyBeforeAttachments,
+      activeToolNames: new Set<string>(advertisedToolNames),
+      todos: todosForAttachment,
+      tasks: tasksForAttachment,
+    });
+    const effectiveHistory =
+      runtimeAttachments.messages.length > 0
+        ? [...historyBeforeAttachments, ...runtimeAttachments.messages]
+        : historyBeforeAttachments;
     if (
       params.maybeStartBackgroundRun &&
       await params.maybeStartBackgroundRun({
@@ -558,7 +584,6 @@ export async function executeWebChatConversationTurn(
         tokenUsage: result.tokenUsage,
         requestShape: summarizeInitialRequestShape(result.callUsage),
         callUsage: summarizeCallUsageForTrace(result.callUsage),
-        statefulSummary: result.statefulSummary,
         plannerSummary: result.plannerSummary,
         economicsSummary: result.economicsSummary,
         toolRoutingDecision:
@@ -610,7 +635,6 @@ export async function executeWebChatConversationTurn(
             tokenUsage: result.tokenUsage,
             requestShape: summarizeInitialRequestShape(result.callUsage),
             callUsage: result.callUsage,
-            statefulSummary: result.statefulSummary,
             plannerSummary: result.plannerSummary,
             economicsSummary: result.economicsSummary,
             toolRoutingDecision,
@@ -642,14 +666,6 @@ export async function executeWebChatConversationTurn(
         stopReasonDetail,
       });
     }
-    if (hasActionableStatefulFallback(result.statefulSummary)) {
-      logger.warn("[stateful] webchat fallback_to_stateless", {
-        traceId: turnTraceId,
-        sessionId: msg.sessionId,
-        summary: result.statefulSummary,
-      });
-    }
-
     persistSessionStatefulContinuation(session, result);
     persistSessionActiveTaskContext(session, result);
     persistSessionStartContextMessages(session, result);

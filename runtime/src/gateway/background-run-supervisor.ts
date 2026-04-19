@@ -11,12 +11,23 @@
  */
 
 import type { ChatExecutor } from "../llm/chat-executor.js";
-import type { ChatExecutorResult } from "../llm/chat-executor-types.js";
+import type {
+  ChatExecutionTraceEvent,
+  ChatExecutorResult,
+} from "../llm/chat-executor-types.js";
 import { executeChatToLegacyResult } from "../llm/execute-chat.js";
 import { normalizePromptEnvelope } from "../llm/prompt-envelope.js";
 import { buildModelOnlyChatOptions } from "../llm/model-only-options.js";
 import { getCompactPrompt, formatCompactSummary } from "../llm/compact/prompt.js";
 import type { LLMMessage, LLMProvider, ToolHandler } from "../llm/types.js";
+import { partitionByAnchorPreserve } from "../llm/types.js";
+import { collectAttachments } from "../llm/attachment-injection.js";
+import {
+  containsVerdictMarkerInToolResult,
+  isMutatingTool,
+  isVerifierSpawnFromRecord,
+  messageContainsVerifyReminderPrefix,
+} from "../llm/verify-reminder.js";
 import type { Logger } from "../utils/logger.js";
 import { silentLogger } from "../utils/logger.js";
 import { toErrorMessage } from "../utils/async.js";
@@ -177,10 +188,8 @@ import {
   buildWakeDedupeKey,
   recordToolEvidence,
   recordProviderCompactionArtifacts,
-  buildEmptyCarryForwardState,
   buildFallbackCarryForwardState,
   buildCarryForwardAnchors,
-  extractLatestProviderContinuation,
   deriveCarryForwardRefreshReason,
   detectCarryForwardDrift,
   repairCarryForwardState,
@@ -380,26 +389,8 @@ function buildBackgroundRunInteractiveContextState(params: {
 }
 
 function resolveBackgroundContinuationMode(
-  actorResult: ChatExecutorResult,
+  _actorResult: ChatExecutorResult,
 ): "provider_continuation" | "transcript_resume" | "full_replay_fallback" {
-  const latestUsage = [...actorResult.callUsage].reverse().find(Boolean);
-  const diagnostics = latestUsage?.statefulDiagnostics;
-  if (diagnostics?.continued === true && diagnostics.previousResponseId) {
-    return "provider_continuation";
-  }
-  if (
-    diagnostics?.fallbackReason === "store_disabled" ||
-    diagnostics?.fallbackReason === "missing_previous_response_id" ||
-    diagnostics?.fallbackReason === "state_reconciliation_mismatch"
-  ) {
-    return "transcript_resume";
-  }
-  if (
-    diagnostics?.attempted === true &&
-    diagnostics.continued !== true
-  ) {
-    return "full_replay_fallback";
-  }
   return "transcript_resume";
 }
 
@@ -597,12 +588,17 @@ export function isBackgroundRunStatusRequest(message: string): boolean {
 export class BackgroundRunSupervisor {
   private readonly chatExecutor: ChatExecutor;
   private readonly supervisorLlm: LLMProvider;
+  private readonly supervisorFastLlm: LLMProvider;
+  private readonly compactionThresholdTokens: number | undefined;
+  private readonly compactionCharPerToken: number;
   private readonly getSystemPrompt: () => string;
   private readonly createToolHandler: BackgroundRunSupervisorConfig["createToolHandler"];
   private readonly resolveExecutionContext?: BackgroundRunSupervisorConfig["resolveExecutionContext"];
   private readonly buildToolRoutingDecision?: BackgroundRunSupervisorConfig["buildToolRoutingDecision"];
   private readonly resolveAdvertisedToolNames?: BackgroundRunSupervisorConfig["resolveAdvertisedToolNames"];
   private readonly seedHistoryForSession?: BackgroundRunSupervisorConfig["seedHistoryForSession"];
+  private readonly readTodosForSession?: BackgroundRunSupervisorConfig["readTodosForSession"];
+  private readonly readTasksForSession?: BackgroundRunSupervisorConfig["readTasksForSession"];
   private readonly isSessionBusy?: BackgroundRunSupervisorConfig["isSessionBusy"];
   private readonly onStatus?: BackgroundRunSupervisorConfig["onStatus"];
   private readonly publishUpdate: BackgroundRunSupervisorConfig["publishUpdate"];
@@ -633,16 +629,49 @@ export class BackgroundRunSupervisor {
   private workerHeartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private dispatchPumpRunning = false;
   private workerDraining = false;
+  /**
+   * In-flight concurrent dispatch cycles. The pump fills this set up
+   * to `workerMaxConcurrentRuns` and keeps draining the claim queue
+   * as slots free up. Without this, a single long-running cycle
+   * (e.g. a subagent tool loop) would serially block every other
+   * session's scheduled wake-up even though Node handles those
+   * sessions' I/O awaits concurrently at the event loop level.
+   */
+  private readonly inFlightDispatches = new Set<Promise<void>>();
+  /**
+   * Set of sessionIds currently running a dispatched cycle. Ensures
+   * the concurrent pump never runs two cycles of the SAME session
+   * simultaneously — a late operator signal overlapping an expired
+   * timer dispatch would otherwise show up as two separate claimed
+   * items, and without this guard both would run, double-cycling
+   * the session.
+   */
+  private readonly inFlightSessionIds = new Set<string>();
 
   constructor(config: BackgroundRunSupervisorConfig) {
     this.chatExecutor = config.chatExecutor;
     this.supervisorLlm = config.supervisorLlm;
+    this.supervisorFastLlm = config.supervisorFastLlm ?? config.supervisorLlm;
+    this.compactionThresholdTokens =
+      typeof config.compactionThresholdTokens === "number" &&
+      Number.isFinite(config.compactionThresholdTokens) &&
+      config.compactionThresholdTokens > 0
+        ? Math.floor(config.compactionThresholdTokens)
+        : undefined;
+    this.compactionCharPerToken =
+      typeof config.compactionCharPerToken === "number" &&
+      Number.isFinite(config.compactionCharPerToken) &&
+      config.compactionCharPerToken > 0
+        ? config.compactionCharPerToken
+        : 4;
     this.getSystemPrompt = config.getSystemPrompt;
     this.createToolHandler = config.createToolHandler;
     this.resolveExecutionContext = config.resolveExecutionContext;
     this.buildToolRoutingDecision = config.buildToolRoutingDecision;
     this.resolveAdvertisedToolNames = config.resolveAdvertisedToolNames;
     this.seedHistoryForSession = config.seedHistoryForSession;
+    this.readTodosForSession = config.readTodosForSession;
+    this.readTasksForSession = config.readTasksForSession;
     this.isSessionBusy = config.isSessionBusy;
     this.onStatus = config.onStatus;
     this.publishUpdate = config.publishUpdate;
@@ -663,9 +692,16 @@ export class BackgroundRunSupervisor {
       `background-supervisor-${Math.random().toString(36).slice(2, 10)}`;
     this.now = config.now ?? (() => Date.now());
     this.workerPools = sanitizeWorkerPools(config.workerPools);
+    // Default to 8 concurrent cycles per worker. The dispatch pump
+    // runs this many in parallel (see `pumpDispatchQueue`). Pre-8
+    // default was 1, which meant a single long cycle serialized
+    // every other session's scheduled wake-up. 8 is comfortably
+    // below typical per-host socket limits for outbound HTTPS and
+    // leaves headroom for MCP + tool I/O. Operators can override
+    // via `autonomy.backgroundRuns.workerMaxConcurrentRuns`.
     this.workerMaxConcurrentRuns = Math.max(
       1,
-      Math.floor(config.workerMaxConcurrentRuns ?? 1),
+      Math.floor(config.workerMaxConcurrentRuns ?? 8),
     );
     this.wakeBus = new BackgroundRunWakeBus({
       runStore: this.runStore,
@@ -1495,17 +1531,79 @@ export class BackgroundRunSupervisor {
     this.dispatchPumpRunning = true;
     try {
       await this.heartbeatWorker();
+      // Concurrent dispatch: the pump claims up to
+      // `workerMaxConcurrentRuns` dispatches and runs them in
+      // parallel via `handleClaimedDispatch`. Whenever a slot frees,
+      // we try to claim more. Without this, a single long cycle
+      // (subagent tool loops are the typical offender) would block
+      // every other session's scheduled wake even though JS I/O
+      // awaits in the cycle already yield to the event loop —
+      // concurrent sessions would run fine, the bottleneck is
+      // strictly the old serial claim→await loop below.
       while (!this.workerDraining) {
-        const claim = await this.runStore.claimDispatchForWorker({
-          workerId: this.instanceId,
-          pools: this.workerPools,
-          now: this.now(),
-        });
-        if (!claim.claimed || !claim.item) {
+        while (
+          !this.workerDraining &&
+          this.inFlightDispatches.size < this.workerMaxConcurrentRuns
+        ) {
+          const claim = await this.runStore.claimDispatchForWorker({
+            workerId: this.instanceId,
+            pools: this.workerPools,
+            now: this.now(),
+          });
+          if (!claim.claimed || !claim.item) {
+            break;
+          }
+          const item = claim.item;
+          // Per-session serialization: if we already have an
+          // in-flight dispatch for this session (e.g. a late signal
+          // claim racing with an already-running timer claim),
+          // release the duplicate back to the queue instead of
+          // double-running the cycle.
+          if (this.inFlightSessionIds.has(item.sessionId)) {
+            await this.runStore.releaseDispatch({
+              dispatchId: item.id,
+              workerId: this.instanceId,
+              now: this.now(),
+              availableAt: this.now() + DEFAULT_DISPATCH_RETRY_MS,
+              preferredWorkerId: item.preferredWorkerId,
+            });
+            continue;
+          }
+          this.inFlightSessionIds.add(item.sessionId);
+          const inFlight = (async () => {
+            try {
+              await this.handleClaimedDispatch(item);
+            } finally {
+              this.inFlightSessionIds.delete(item.sessionId);
+              try {
+                await this.heartbeatWorker();
+              } catch {
+                // Heartbeat failures are logged inside
+                // `heartbeatWorker`'s call sites; ignore here so the
+                // slot still frees for the next claim.
+              }
+            }
+          })();
+          this.inFlightDispatches.add(inFlight);
+          inFlight.finally(() => {
+            this.inFlightDispatches.delete(inFlight);
+          });
+        }
+        if (this.inFlightDispatches.size === 0) {
+          // Nothing in flight AND no new items claimed → queue drained.
           break;
         }
-        await this.handleClaimedDispatch(claim.item);
-        await this.heartbeatWorker();
+        // Wait until at least one in-flight dispatch finishes before
+        // attempting the next claim round. `Promise.race` returns on
+        // the first settle (fulfill or reject); individual error
+        // handling is inside `handleClaimedDispatch`.
+        await Promise.race(this.inFlightDispatches).catch(() => undefined);
+      }
+      // Drain any still-in-flight dispatches before marking the pump
+      // idle so callers that await `pumpDispatchQueue` see the true
+      // completion boundary.
+      if (this.inFlightDispatches.size > 0) {
+        await Promise.allSettled(this.inFlightDispatches);
       }
     } finally {
       this.dispatchPumpRunning = false;
@@ -1881,6 +1979,10 @@ export class BackgroundRunSupervisor {
       cycleCount: 0,
       stableWorkingCycles: 0,
       consecutiveErrorCycles: 0,
+      mutatingEditsSinceLastVerifierSpawn: 0,
+      // Infinity so the first verify_reminder is eligible to fire as
+      // soon as the edit threshold is reached on a fresh run.
+      assistantTurnsSinceLastVerifyReminder: Number.POSITIVE_INFINITY,
       anchorFiles: initialAnchorFiles,
       lastVerifiedAt: undefined,
       lastUserUpdate: undefined,
@@ -3636,14 +3738,26 @@ export class BackgroundRunSupervisor {
     actorResult: ChatExecutorResult | undefined;
     decision: BackgroundRunDecision;
     heartbeatMs?: number;
+    carryForwardRefreshPromise?: Promise<void>;
   }): Promise<boolean> {
-    const { run, sessionId, actorResult, decision, heartbeatMs } = params;
-    const carryForwardSignalSnapshot = cloneSignals(run.pendingSignals);
-    await this.refreshCarryForwardState({
+    const {
       run,
+      sessionId,
       actorResult,
-      signalSnapshot: carryForwardSignalSnapshot,
-    });
+      decision,
+      heartbeatMs,
+      carryForwardRefreshPromise,
+    } = params;
+    if (carryForwardRefreshPromise !== undefined) {
+      await carryForwardRefreshPromise;
+    } else {
+      const carryForwardSignalSnapshot = cloneSignals(run.pendingSignals);
+      await this.refreshCarryForwardState({
+        run,
+        actorResult,
+        signalSnapshot: carryForwardSignalSnapshot,
+      });
+    }
     if (!this.isActiveRun(run)) {
       return true;
     }
@@ -3754,39 +3868,94 @@ export class BackgroundRunSupervisor {
     actorResult?: ChatExecutorResult;
     decision: BackgroundRunDecision;
     heartbeatMs?: number;
+    carryForwardRefreshPromise?: Promise<void>;
   }> {
     const { run, sessionId, cycleToolHandler, actorPrompt, actorPromptEnvelope } = params;
     let actorResult: ChatExecutorResult | undefined;
     let decision: BackgroundRunDecision;
     let heartbeatMs: number | undefined;
-    const actorTrace =
-      this.traceProviderPayloads
+    let carryForwardRefreshPromise: Promise<void> | undefined;
+    // Per-tool-call observer that updates the verify_reminder
+    // counters on `ActiveBackgroundRun`. Runs INSIDE the actor turn
+    // (one event per tool dispatch_finished), not after the turn
+    // ends. Without this, a single long actor turn with hundreds of
+    // tool calls would never increment the counter from
+    // `collectAttachments`'s perspective until the cycle boundary —
+    // and verify_reminder would never fire on long-running cycles.
+    // Always installed regardless of `traceProviderPayloads`; trace
+    // logging itself is gated separately below.
+    const updateVerifyReminderCountersFromExecutionEvent = (
+      event: ChatExecutionTraceEvent,
+    ): void => {
+      if (event.type !== "tool_dispatch_finished") return;
+      const payload = event.payload as Record<string, unknown>;
+      const toolName =
+        typeof payload.tool === "string" ? payload.tool : undefined;
+      if (!toolName) return;
+      if (isMutatingTool(toolName)) {
+        run.mutatingEditsSinceLastVerifierSpawn += 1;
+      }
+      const args =
+        payload.args && typeof payload.args === "object"
+          ? (payload.args as Record<string, unknown>)
+          : undefined;
+      if (args && isVerifierSpawnFromRecord({ name: toolName, args })) {
+        run.mutatingEditsSinceLastVerifierSpawn = 0;
+      }
+      const rawResult = payload.result;
+      const resultString =
+        typeof rawResult === "string"
+          ? rawResult
+          : rawResult === undefined || rawResult === null
+            ? ""
+            : JSON.stringify(rawResult);
+      if (
+        containsVerdictMarkerInToolResult({
+          name: toolName,
+          result: resultString,
+        })
+      ) {
+        run.mutatingEditsSinceLastVerifierSpawn = 0;
+      }
+    };
+
+    const actorExecutionTraceLogger = this.traceProviderPayloads
+      ? createExecutionTraceEventLogger({
+          logger: this.logger,
+          traceLabel: "background_run.executor",
+          traceId: `background:${sessionId}:${run.id}:${run.cycleCount}:actor`,
+          sessionId,
+          staticFields: {
+            runId: run.id,
+            cycleCount: run.cycleCount,
+            phase: "actor",
+          },
+        })
+      : undefined;
+
+    const actorTrace = {
+      includeProviderPayloads: this.traceProviderPayloads,
+      onExecutionTraceEvent: (event: ChatExecutionTraceEvent): void => {
+        // Counter mutation is always-on; trace logging gated.
+        updateVerifyReminderCountersFromExecutionEvent(event);
+        actorExecutionTraceLogger?.(event);
+      },
+      ...(this.traceProviderPayloads
         ? {
-          includeProviderPayloads: true as const,
-          onProviderTraceEvent: createProviderTraceEventLogger({
-            logger: this.logger,
-            traceLabel: "background_run.provider",
-            traceId: `background:${sessionId}:${run.id}:${run.cycleCount}:actor`,
-            sessionId,
-            staticFields: {
-              runId: run.id,
-              cycleCount: run.cycleCount,
-              phase: "actor",
-            },
-          }),
-          onExecutionTraceEvent: createExecutionTraceEventLogger({
-            logger: this.logger,
-            traceLabel: "background_run.executor",
-            traceId: `background:${sessionId}:${run.id}:${run.cycleCount}:actor`,
-            sessionId,
-            staticFields: {
-              runId: run.id,
-              cycleCount: run.cycleCount,
-              phase: "actor",
-            },
-          }),
-        }
-        : undefined;
+            onProviderTraceEvent: createProviderTraceEventLogger({
+              logger: this.logger,
+              traceLabel: "background_run.provider",
+              traceId: `background:${sessionId}:${run.id}:${run.cycleCount}:actor`,
+              sessionId,
+              staticFields: {
+                runId: run.id,
+                cycleCount: run.cycleCount,
+                phase: "actor",
+              },
+            }),
+          }
+        : {}),
+    };
 
     try {
       const previousToolEvidence = run.lastToolEvidence;
@@ -3861,22 +4030,6 @@ export class BackgroundRunSupervisor {
               : {}),
           } satisfies InteractiveContextRequest,
           requestTimeoutMs: BACKGROUND_RUN_ACTOR_REQUEST_TIMEOUT_MS,
-          stateful: run.carryForward?.providerContinuation
-            ? {
-                resumeAnchor: {
-                previousResponseId: run.carryForward.providerContinuation.responseId,
-                ...(run.carryForward.providerContinuation.reconciliationHash
-                  ? {
-                    reconciliationHash:
-                      run.carryForward.providerContinuation.reconciliationHash,
-                  }
-                  : {}),
-              },
-              ...(run.compaction.refreshCount > 0
-                ? { historyCompacted: true }
-                : {}),
-            }
-            : undefined,
           toolHandler: cycleToolHandler,
           signal: abortSignal,
           maxToolRounds: BACKGROUND_RUN_MAX_TOOL_ROUNDS,
@@ -3892,7 +4045,7 @@ export class BackgroundRunSupervisor {
                 persistDiscovery: true,
               }
               : undefined,
-          ...(actorTrace ? { trace: actorTrace } : {}),
+          trace: actorTrace,
         });
 
         const extendedHistory: LLMMessage[] = [
@@ -3900,7 +4053,7 @@ export class BackgroundRunSupervisor {
           { role: "user", content: actorPrompt } as LLMMessage,
           { role: "assistant", content: actorResult.content, phase: "commentary" } as LLMMessage,
         ];
-        if (extendedHistory.length >= HISTORY_COMPACTION_THRESHOLD) {
+        if (this.shouldCompactHistory(extendedHistory)) {
           run.internalHistory = await this.compactInternalHistory(
             run,
             extendedHistory,
@@ -3915,33 +4068,26 @@ export class BackgroundRunSupervisor {
         ]);
         run.lastVerifiedAt = this.now();
         recordToolEvidence(run, actorResult.toolCalls);
+        // verify_reminder counter is updated per-tool-call inside the
+        // actor turn via `updateVerifyReminderCountersFromExecutionEvent`
+        // wired into the actorTrace.onExecutionTraceEvent callback.
+        // The previous end-of-actor-turn aggregation loop is removed
+        // because, on a long actor turn (hundreds of tool calls in
+        // one cycle), counters need to advance continuously — not in
+        // a single batch at cycle boundary — so that the next cycle's
+        // `collectAttachments` sees the accumulated work.
+        //
+        // The turn counter still resets only when the reminder actually
+        // fires (see prepareCycleContext below) — spawning a verifier
+        // does NOT suppress the next reminder; the model has to keep
+        // making edits without a fresh verdict for the threshold to
+        // re-cross.
+        run.assistantTurnsSinceLastVerifyReminder += 1;
         recordProviderCompactionArtifacts(run, actorResult);
         run.continuationMode = resolveBackgroundContinuationMode(actorResult);
         const verifierStages = actorResult.runtimeContractSnapshot?.verifierStages;
         run.verifierSessionId = verifierStages?.taskId ?? run.verifierSessionId;
         run.verifierStage = verifierStages?.stageStatus ?? run.verifierStage;
-        const providerContinuation = extractLatestProviderContinuation(
-          actorResult,
-          run.lastVerifiedAt,
-        );
-        if (providerContinuation) {
-          run.carryForward = {
-            ...(run.carryForward ?? buildEmptyCarryForwardState(run.lastVerifiedAt)),
-            providerContinuation,
-            memoryAnchors: buildCarryForwardAnchors({
-              previous: run.carryForward?.memoryAnchors ?? [],
-              providerContinuation,
-              pendingSignals: [],
-              actorResult,
-              now: run.lastVerifiedAt,
-            }),
-            lastCompactedAt: run.carryForward?.lastCompactedAt ?? run.lastVerifiedAt,
-          };
-          run.compaction = {
-            ...run.compaction,
-            lastProviderAnchorAt: providerContinuation.updatedAt,
-          };
-        }
         if (actorResult.toolCalls.length > 0) {
           run.pendingSignals = [
             ...run.pendingSignals,
@@ -3955,18 +4101,48 @@ export class BackgroundRunSupervisor {
         }
         getRunDomain(run).observeActorResult?.(run, actorResult, run.lastVerifiedAt);
         const domainDecision = buildDeterministicRunDomainDecision(run);
+        // Non-parity decision resolution runs an LLM call
+        // (`evaluateDecision`). Downstream cycle handling will also
+        // run `refreshCarryForwardState`, which is another LLM call
+        // for non-parity runs. Those two calls are independent — they
+        // read the same cycle state and write to disjoint fields.
+        // Start the refresh in parallel with the decision call and
+        // hand its Promise to the branch handlers via the outcome,
+        // so the two supervisor LLM calls run concurrently rather
+        // than serially.
+        const shouldShortCircuitOnDomainDecision =
+          domainDecision !== undefined && domainDecision.state !== "working";
+        const isParity = this.shouldUseActorLoopParity(run);
+        // Kick off both LLM calls before awaiting either, so they run
+        // concurrently inside the provider adapter. evaluateDecision is
+        // started BEFORE refreshCarryForwardState so its `.chat()`
+        // invocation is queued first — mock sequences in tests, and
+        // the observable provider request order in production logs,
+        // remain `decision → refresh`. The pre-refresh uses the same
+        // non-forced semantics as the working-path branch: the
+        // `deriveCarryForwardRefreshReason` heuristic decides whether
+        // the LLM call actually runs. Non-working branches still
+        // force-refresh themselves if needed, so we don't speculate
+        // on a force refresh here.
+        const decisionPromise: Promise<BackgroundRunDecision | undefined> =
+          shouldShortCircuitOnDomainDecision
+            ? Promise.resolve(domainDecision)
+            : isParity
+              ? Promise.resolve(undefined)
+              : this.evaluateDecision(run, actorResult);
+        if (
+          !shouldShortCircuitOnDomainDecision &&
+          !isParity
+        ) {
+          carryForwardRefreshPromise = this.refreshCarryForwardState({
+            run,
+            actorResult,
+            signalSnapshot: cloneSignals(run.pendingSignals),
+          });
+        }
+        const resolvedDecision = await decisionPromise;
         decision =
-          (
-            domainDecision && domainDecision.state !== "working"
-              ? domainDecision
-              : undefined
-          ) ??
-          (
-            this.shouldUseActorLoopParity(run)
-              ? undefined
-              : await this.evaluateDecision(run, actorResult)
-          ) ??
-          buildFallbackDecision(run, actorResult);
+          resolvedDecision ?? buildFallbackDecision(run, actorResult);
         decision = groundDecision(run, actorResult, decision, domainDecision);
       }
 
@@ -4076,6 +4252,9 @@ export class BackgroundRunSupervisor {
       actorResult,
       decision,
       heartbeatMs,
+      ...(carryForwardRefreshPromise === undefined
+        ? {}
+        : { carryForwardRefreshPromise }),
     };
   }
 
@@ -4094,6 +4273,46 @@ export class BackgroundRunSupervisor {
         now: this.now(),
       });
     }
+
+    // Runtime-injected attachments (today: the TodoWrite 10-turn
+    // reminder). Shared with the webchat chat-executor via
+    // `collectAttachments` so both surfaces emit identical nudges.
+    const activeToolNames = new Set<string>(
+      this.resolveAdvertisedToolNames?.(
+        sessionId,
+        run.shellProfile ?? DEFAULT_SESSION_SHELL_PROFILE,
+      ) ?? [],
+    );
+    const todos = this.readTodosForSession
+      ? await this.readTodosForSession(sessionId)
+      : [];
+    const tasks = this.readTasksForSession
+      ? await this.readTasksForSession(sessionId)
+      : [];
+    const attachments = collectAttachments({
+      history: run.internalHistory,
+      activeToolNames,
+      todos,
+      tasks,
+      mutatingEditsSinceLastVerifierSpawn:
+        run.mutatingEditsSinceLastVerifierSpawn,
+      assistantTurnsSinceLastVerifyReminder:
+        run.assistantTurnsSinceLastVerifyReminder,
+    });
+    for (const attachment of attachments.messages) {
+      run.internalHistory.push(attachment);
+    }
+    // Reset the turn counter if a verify_reminder was just emitted.
+    // Scans up to ~3 messages (the attachment payload is tiny) —
+    // cheaper than extending AttachmentInjectionResult and keeping
+    // the webchat/text-channel call sites in sync with a field they
+    // would never use.
+    if (
+      attachments.messages.some((m) => messageContainsVerifyReminderPrefix(m))
+    ) {
+      run.assistantTurnsSinceLastVerifyReminder = 0;
+    }
+
     return {
       run,
       sessionId,
@@ -4135,6 +4354,7 @@ export class BackgroundRunSupervisor {
     let actorResult: ChatExecutorResult | undefined;
     let decision: BackgroundRunDecision;
     let heartbeatMs: number | undefined;
+    let carryForwardRefreshPromise: Promise<void> | undefined;
     try {
       const preCycleDecision = buildPreCycleDomainDecision(run);
       if (preCycleDecision) {
@@ -4156,7 +4376,12 @@ export class BackgroundRunSupervisor {
           heartbeatMs: undefined,
         };
       }
-      ({ actorResult, decision, heartbeatMs } = await this.resolveCycleDecision({
+      ({
+        actorResult,
+        decision,
+        heartbeatMs,
+        carryForwardRefreshPromise,
+      } = await this.resolveCycleDecision({
         run,
         sessionId,
         cycleToolHandler,
@@ -4206,6 +4431,9 @@ export class BackgroundRunSupervisor {
       actorResult,
       decision,
       heartbeatMs,
+      ...(carryForwardRefreshPromise === undefined
+        ? {}
+        : { carryForwardRefreshPromise }),
     };
   }
 
@@ -4218,6 +4446,7 @@ export class BackgroundRunSupervisor {
       actorResult,
       decision,
       heartbeatMs,
+      carryForwardRefreshPromise,
     } = outcome;
 
     if (decision.state === "working") {
@@ -4225,6 +4454,7 @@ export class BackgroundRunSupervisor {
         run,
         sessionId,
         actorResult,
+        carryForwardRefreshPromise,
         decision,
         heartbeatMs,
       })) {
@@ -4237,6 +4467,7 @@ export class BackgroundRunSupervisor {
       run,
       actorResult,
       decision,
+      carryForwardRefreshPromise,
     });
   }
 
@@ -4244,8 +4475,20 @@ export class BackgroundRunSupervisor {
     run: ActiveBackgroundRun;
     actorResult?: ChatExecutorResult;
     decision: BackgroundRunDecision;
+    carryForwardRefreshPromise?: Promise<void>;
   }): Promise<void> {
-    const { run, actorResult, decision } = params;
+    const { run, actorResult, decision, carryForwardRefreshPromise } = params;
+    // The parallel pre-refresh ran under the `derive…Reason` heuristic
+    // (no `force`) so a working-path outcome wouldn't over-refresh.
+    // Finalizing a non-working run still wants the forced refresh the
+    // original path used, so await the pre-refresh first and then run
+    // the force pass. The forced pass is a no-op if the heuristic had
+    // already refreshed, since it re-reads the same state; the extra
+    // LLM round-trip only happens when the heuristic skipped and the
+    // run is actually terminating.
+    if (carryForwardRefreshPromise !== undefined) {
+      await carryForwardRefreshPromise;
+    }
     await this.refreshCarryForwardState({ run, actorResult, force: true });
     if (!this.isActiveRun(run)) {
       return;
@@ -4280,6 +4523,46 @@ export class BackgroundRunSupervisor {
     await this.handleResolvedCycleOutcome(outcome);
   }
 
+  /**
+   * Return true when `history` should be compacted before the next
+   * actor turn. Matches the upstream reference runtime's trigger:
+   * compact reactively when the estimated prompt tokens approach the
+   * effective context window, NOT proactively on every cycle.
+   *
+   * When a token threshold is configured (via
+   * `compactionThresholdTokens`), the gate is token-aware and
+   * message-count is ignored. When no token threshold is configured
+   * (dev/test fixtures), falls back to the legacy message-count
+   * heuristic so existing test scaffolds keep working.
+   */
+  private shouldCompactHistory(history: readonly LLMMessage[]): boolean {
+    if (this.compactionThresholdTokens !== undefined) {
+      return (
+        this.estimateHistoryTokens(history) >= this.compactionThresholdTokens
+      );
+    }
+    return history.length >= HISTORY_COMPACTION_THRESHOLD;
+  }
+
+  /**
+   * Cheap char-based token estimate. Sum the serialized content
+   * length across messages and divide by `compactionCharPerToken`.
+   * Good enough for a compaction trigger — the actual prompt
+   * budgeting happens later during packing.
+   */
+  private estimateHistoryTokens(history: readonly LLMMessage[]): number {
+    let totalChars = 0;
+    for (const message of history) {
+      const content = message.content;
+      if (typeof content === "string") {
+        totalChars += content.length;
+      } else if (Array.isArray(content) || typeof content === "object") {
+        totalChars += JSON.stringify(content).length;
+      }
+    }
+    return Math.ceil(totalChars / this.compactionCharPerToken);
+  }
+
   private async compactInternalHistory(
     run: ActiveBackgroundRun,
     history: LLMMessage[],
@@ -4290,21 +4573,16 @@ export class BackgroundRunSupervisor {
     }
     const toSummarize = history.slice(0, -keepTail);
     const kept = history.slice(-keepTail);
-    try {
-      const historyText = toSummarize
-        .map((m) => `[${m.role}]: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
-        .join("\n\n");
-      const response = await this.supervisorLlm.chat(
-        [
-          { role: "system", content: getCompactPrompt() },
-          { role: "user", content: historyText },
-        ],
-        buildModelOnlyChatOptions({ toolChoice: "none" }),
-      );
-      const summary = formatCompactSummary(response.content).trim();
-      if (summary.length === 0) {
-        return history;
-      }
+    // Anchor-marked messages survive compaction boundaries —
+    // upstream's `messagesToKeep` pattern. Runtime-injected
+    // reminders rely on their own prior presence as a re-emission
+    // anti-spam anchor; if compaction summarized them away, the
+    // next cycle would re-inject immediately.
+    const { anchorPreserved, rest: toActuallySummarize } =
+      partitionByAnchorPreserve(toSummarize);
+    // Breaking the xAI stateful chain is independent of whether
+    // summarization actually runs — any compaction pass clears it.
+    const breakProviderContinuation = (): void => {
       run.compaction = {
         ...run.compaction,
         refreshCount: run.compaction.refreshCount + 1,
@@ -4320,8 +4598,72 @@ export class BackgroundRunSupervisor {
           providerContinuation: undefined,
         };
       }
+    };
+    // All summarizable messages were anchor-preserved → nothing to
+    // ask the summarizer model. Emit a stub system message so the
+    // result always starts with a system role (consistent with the
+    // normal compaction output) and skip the provider call.
+    if (toActuallySummarize.length === 0) {
+      breakProviderContinuation();
+      return [
+        {
+          role: "system",
+          content:
+            "[previous messages compacted; anchor-preserved reminders retained]",
+        } as LLMMessage,
+        ...anchorPreserved,
+        ...kept,
+      ];
+    }
+    try {
+      const historyText = toActuallySummarize
+        .map((m) => `[${m.role}]: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
+        .join("\n\n");
+      // Trace the supervisor's compaction LLM call alongside the
+      // actor's. Without this, compaction is one of the silent
+      // contributors to the per-cycle gap between actor turn end
+      // and the next request — the call happens, takes 5-15s, and
+      // emits no provider.request/.response trace events. The
+      // wrapping pattern matches `evaluateDecision` /
+      // `refreshCarryForwardState` / `planRunContract` which use the
+      // same `createProviderTraceEventLogger` shape; phase label
+      // `compaction` distinguishes the cause.
+      const providerTrace = this.traceProviderPayloads
+        ? {
+            trace: {
+              includeProviderPayloads: true as const,
+              onProviderTraceEvent: createProviderTraceEventLogger({
+                logger: this.logger,
+                traceLabel: "background_run.provider",
+                traceId: `background:${run.sessionId}:${run.id}:${run.cycleCount}:compaction`,
+                sessionId: run.sessionId,
+                staticFields: {
+                  runId: run.id,
+                  cycleCount: run.cycleCount,
+                  phase: "compaction",
+                },
+              }),
+            },
+          }
+        : undefined;
+      const response = await this.supervisorLlm.chat(
+        [
+          { role: "system", content: getCompactPrompt() },
+          { role: "user", content: historyText },
+        ],
+        buildModelOnlyChatOptions({
+          toolChoice: "none",
+          ...(providerTrace ?? {}),
+        }),
+      );
+      const summary = formatCompactSummary(response.content).trim();
+      if (summary.length === 0) {
+        return history;
+      }
+      breakProviderContinuation();
       return [
         { role: "system", content: summary } as LLMMessage,
+        ...anchorPreserved,
         ...kept,
       ];
     } catch {
@@ -4353,7 +4695,7 @@ export class BackgroundRunSupervisor {
             },
           }
           : undefined;
-      const response = await this.supervisorLlm.chat([
+      const response = await this.supervisorFastLlm.chat([
         { role: "system", content: DECISION_SYSTEM_PROMPT },
         {
           role: "user",
@@ -4399,9 +4741,6 @@ export class BackgroundRunSupervisor {
       pendingSignals,
     });
     if (!refreshReason) return;
-    const providerContinuation =
-      extractLatestProviderContinuation(actorResult, now) ??
-      previousCarryForward?.providerContinuation;
     let finalReason: CarryForwardRefreshReason = refreshReason;
     if (this.shouldUseActorLoopParity(run)) {
       const fallbackState = buildFallbackCarryForwardState({
@@ -4416,12 +4755,10 @@ export class BackgroundRunSupervisor {
         artifacts: previousCarryForward?.artifacts ?? [],
         memoryAnchors: buildCarryForwardAnchors({
           previous: previousCarryForward?.memoryAnchors ?? [],
-          providerContinuation,
           pendingSignals,
           actorResult,
           now,
         }),
-        providerContinuation,
         summaryHealth: {
           status: "healthy",
           driftCount: previousCarryForward?.summaryHealth.driftCount ?? 0,
@@ -4452,7 +4789,7 @@ export class BackgroundRunSupervisor {
               },
             }
             : undefined;
-        const response = await this.supervisorLlm.chat([
+        const response = await this.supervisorFastLlm.chat([
           { role: "system", content: CARRY_FORWARD_SYSTEM_PROMPT },
           {
             role: "user",
@@ -4495,7 +4832,6 @@ export class BackgroundRunSupervisor {
             actorResult,
             now,
             reason: driftReason,
-            providerContinuation,
           });
           this.logger.warn("Background run carry-forward drift detected", {
             sessionId: run.sessionId,
@@ -4508,12 +4844,10 @@ export class BackgroundRunSupervisor {
             artifacts: previousCarryForward?.artifacts ?? [],
             memoryAnchors: buildCarryForwardAnchors({
               previous: previousCarryForward?.memoryAnchors ?? [],
-              providerContinuation,
               pendingSignals,
               actorResult,
               now,
             }),
-            providerContinuation,
             summaryHealth: {
               status: "healthy",
               driftCount: previousCarryForward?.summaryHealth.driftCount ?? 0,
@@ -4541,12 +4875,10 @@ export class BackgroundRunSupervisor {
           ...run.carryForward,
           memoryAnchors: buildCarryForwardAnchors({
             previous: previousCarryForward?.memoryAnchors ?? [],
-            providerContinuation,
             pendingSignals,
             actorResult,
             now,
           }),
-          providerContinuation,
           summaryHealth: previousCarryForward?.summaryHealth ?? {
             status: "healthy",
             driftCount: 0,
@@ -4570,8 +4902,7 @@ export class BackgroundRunSupervisor {
         finalReason === "repair"
           ? run.compaction.repairCount + 1
           : run.compaction.repairCount,
-      lastProviderAnchorAt:
-        providerContinuation?.updatedAt ?? run.compaction.lastProviderAnchorAt,
+      lastProviderAnchorAt: run.compaction.lastProviderAnchorAt,
     };
     const latestProviderCompactionArtifact = [...run.carryForward.artifacts]
       .reverse()

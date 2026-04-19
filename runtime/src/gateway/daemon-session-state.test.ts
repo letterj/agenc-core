@@ -84,52 +84,6 @@ describe("buildSessionStatefulOptions", () => {
     expect(buildSessionStatefulOptions(createSession())).toBeUndefined();
   });
 
-  it("returns the stateful continuation options for stored anchors", () => {
-    expect(
-      buildSessionStatefulOptions(
-        createSession({
-          [SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY]: {
-            previousResponseId: "resp-123",
-            reconciliationHash: "hash-123",
-          },
-          [SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY]: true,
-        }),
-      ),
-    ).toEqual({
-      resumeAnchor: {
-        previousResponseId: "resp-123",
-        reconciliationHash: "hash-123",
-      },
-      historyCompacted: true,
-    });
-  });
-
-  it("ignores malformed anchors while preserving trusted compaction state", () => {
-    expect(
-      buildSessionStatefulOptions(
-        createSession({
-          [SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY]: {
-            previousResponseId: "   ",
-          },
-          [SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY]: true,
-        }),
-      ),
-    ).toEqual({
-      historyCompacted: true,
-    });
-  });
-
-  it("returns compacted stateful options without artifact payloads", () => {
-    expect(
-      buildSessionStatefulOptions(
-        createSession({
-          [SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY]: true,
-        }),
-      ),
-    ).toEqual({
-      historyCompacted: true,
-    });
-  });
 });
 
 describe("web session runtime state helpers", () => {
@@ -157,50 +111,6 @@ describe("web session runtime state helpers", () => {
     );
 
     expect(hydrated.metadata).toEqual({});
-  });
-
-  it("does not persist artifact-backed context in the new runtime-state format", async () => {
-    const memoryBackend = createMemoryBackendStub();
-    await persistSessionRuntimeState(
-      memoryBackend,
-      "web-session-artifacts",
-      createSession({
-        [SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY]: {
-          previousResponseId: "resp-123",
-          reconciliationHash: "hash-123",
-        },
-        [SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY]: true,
-      }),
-    );
-
-    expect(
-      await loadPersistedSessionRuntimeState(memoryBackend, "web-session-artifacts"),
-    ).toMatchObject({
-      version: 2,
-      boundarySeq: 1,
-      snapshot: {
-        statefulResumeAnchor: {
-          previousResponseId: "resp-123",
-          reconciliationHash: "hash-123",
-        },
-        statefulHistoryCompacted: true,
-      },
-    });
-
-    const hydrated = createSession();
-    await hydrateSessionRuntimeState(
-      memoryBackend,
-      "web-session-artifacts",
-      hydrated,
-    );
-
-    expect(buildSessionStatefulOptions(hydrated)).toEqual({
-      resumeAnchor: {
-        previousResponseId: "resp-123",
-        reconciliationHash: "hash-123",
-      },
-      historyCompacted: true,
-    });
   });
 
   it("repairs replay history so orphaned tool results regain an assistant envelope", () => {
@@ -233,41 +143,6 @@ describe("web session runtime state helpers", () => {
     });
   });
 
-  it("dual-reads legacy artifact-backed runtime state and rewrites without artifact ids", async () => {
-    const memoryBackend = createMemoryBackendStub();
-    await memoryBackend.set("webchat:runtime-state:web-legacy", {
-      version: 6,
-      statefulResumeAnchor: {
-        previousResponseId: "resp-legacy",
-      },
-      artifactSnapshotId: "snapshot:legacy",
-      artifactSessionId: "session:legacy",
-    });
-
-    const hydrated = createSession();
-    await hydrateSessionRuntimeState(memoryBackend, "web-legacy", hydrated);
-
-    expect(buildSessionStatefulOptions(hydrated)).toEqual({
-      resumeAnchor: {
-        previousResponseId: "resp-legacy",
-      },
-      historyCompacted: true,
-    });
-
-    await persistSessionRuntimeState(memoryBackend, "web-legacy", hydrated);
-    expect(
-      await loadPersistedSessionRuntimeState(memoryBackend, "web-legacy"),
-    ).toMatchObject({
-      version: 2,
-      migratedFromLegacyAt: expect.any(Number),
-      snapshot: {
-        statefulResumeAnchor: {
-          previousResponseId: "resp-legacy",
-        },
-        statefulHistoryCompacted: true,
-      },
-    });
-  });
   it("persists and hydrates active task context across web-session resume", async () => {
     const memoryBackend = createMemoryBackendStub();
     const activeTaskContext = {
@@ -300,36 +175,6 @@ describe("web session runtime state helpers", () => {
     expect(
       hydrated.metadata[SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY],
     ).toEqual(activeTaskContext);
-  });
-
-  it("persists and hydrates session-start context messages across web-session resume", async () => {
-    const memoryBackend = createMemoryBackendStub();
-    const sessionStartContextMessages = [
-      {
-        role: "system" as const,
-        content: "[SessionStart hook context]\nRestore the project bootstrap note.",
-      },
-    ];
-
-    await persistSessionRuntimeState(
-      memoryBackend,
-      "web-session-session-start",
-      createSession({
-        [SESSION_STATEFUL_SESSION_START_CONTEXT_MESSAGES_METADATA_KEY]:
-          sessionStartContextMessages,
-      }),
-    );
-
-    const hydrated = createSession();
-    await hydrateSessionRuntimeState(
-      memoryBackend,
-      "web-session-session-start",
-      hydrated,
-    );
-
-    expect(buildSessionStatefulOptions(hydrated)).toMatchObject({
-      sessionStartContextMessages,
-    });
   });
 
   it("persists, hydrates, and rebuilds interactive context state", async () => {
@@ -537,10 +382,6 @@ describe("web session runtime state helpers", () => {
           enteredAt: 10,
           updatedAt: 20,
         },
-        [SESSION_STATEFUL_RESUME_ANCHOR_METADATA_KEY]: {
-          previousResponseId: "resp-123",
-        },
-        [SESSION_STATEFUL_HISTORY_COMPACTED_METADATA_KEY]: true,
         [SESSION_ACTIVE_TASK_CONTEXT_METADATA_KEY]: {
           taskId: "task-live",
         },
@@ -570,10 +411,6 @@ describe("web session runtime state helpers", () => {
         workflowState: expect.objectContaining({
           objective: "Investigate a branch",
         }),
-        statefulResumeAnchor: {
-          previousResponseId: "resp-123",
-        },
-        statefulHistoryCompacted: true,
         forkMarker: expect.objectContaining({
           parentSessionId: "web-session-source",
         }),
