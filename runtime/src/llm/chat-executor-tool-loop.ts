@@ -92,47 +92,23 @@ import { evaluateTurnEndStopGate } from "./chat-executor-stop-gate-evaluation.js
 // Stall-escalation tripwire
 // ============================================================================
 
-/**
- * Number of times one recovery-hint key may fire in a single turn before
- * the loop escalates to a text-only user handoff. Only rounds where the
- * model made NO successful workspace mutation count toward the limit —
- * when the model is actively editing files between the same recurring
- * hint (classic "fix errors one at a time, some iterations re-trigger
- * the same diagnostic"), we're progressing and should not escalate.
- *
- * Observed session pre-mutation-gating: 83 calls, 3 compiler hints fired
- * for the same `lexer.c:295:30` location while the model was editing
- * alias.c, shell_state.h, and alias.c again in between. The tripwire
- * killed the turn at "no_progress" even though workspace state was
- * actively changing.
- */
-const STALL_HINT_REPEAT_LIMIT = 3;
-
-/**
- * Tool names that count as a "successful workspace mutation" for the
- * purposes of gating the stall tripwire. Kept in sync with
- * `SUCCESSFUL_MUTATION_TOOL_NAMES` in chat-executor-continuation.ts.
- */
-const STALL_MUTATION_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "system.appendFile",
-  "system.editFile",
-  "system.mkdir",
-  "system.move",
-  "system.writeFile",
-  "desktop.text_editor",
-]);
-
-/**
- * Recovery-hint key prefixes that count toward the stall tripwire. Kept
- * narrow to observed pathological loops (build-fail → edit → rebuild at
- * the same compiler location) so generic/advisory hint keys do not
- * short-circuit healthy long-running turns.
- */
-const STALL_ESCALATION_HINT_PREFIXES: readonly string[] = [
-  "system-bash-compiler-diagnostic",
-  "system-bash-compiler-interface-drift",
-  "system-bash-compiler-header-ordering",
-];
+// Stall tripwire removed in Phase 4 of the architectural rework.
+// Rationale: the tripwire was a per-hint-key counter that fired on
+// recovery-hint repetition, which (a) duplicated
+// `ctx.continuationState.consecutiveLowProgressStalls` (the
+// authoritative progress signal used by the stop-hook chain), and
+// (b) could not compose with the stop-hook chain cleanly — when the
+// tripwire fired it preempted the stop-hook chain, and when the
+// stop-hook chain retried it could feed the tripwire counter without
+// the tripwire knowing a recovery was in flight.
+//
+// With Phase 1 (balanced system prompt), Phase 2 (repeat-read hint
+// removed), and Phase 6 (default MAX_ADAPTIVE_TOOL_ROUNDS = 200) in
+// place, the right backstops for runaway turns are the hard round
+// cap (structural) and the diminishing-returns check inside the
+// stop-hook recovery path (behavioral). Both already exist. This
+// block used to hold `STALL_HINT_REPEAT_LIMIT`,
+// `STALL_MUTATION_TOOL_NAMES`, and `STALL_ESCALATION_HINT_PREFIXES`.
 
 // ============================================================================
 // Callback interfaces
@@ -355,16 +331,6 @@ export async function executeToolCallLoop(
   };
   let consecutiveFailedToolCalls = 0;
   let forcedFailureRecoveryUsed = false;
-
-  // Per-turn stall-escalation state. Tracks how many times each
-  // recovery-hint key has fired so a model stuck in a repeating
-  // build-fail → edit → rebuild cycle is forced to summarize for the
-  // user instead of burning more rounds. Keys matching
-  // `STALL_ESCALATION_HINT_PREFIXES` count toward the cap — other keys
-  // are tracked for observability only.
-  const hintKeyRepeatCounts = new Map<string, number>();
-  let stallEscalationTriggered = false;
-  let stallEscalationKey: string | undefined;
 
   // Turn-end completion validation now shares one turn-local
   // continuation controller instead of per-validator attempt maps.
@@ -608,79 +574,13 @@ export async function executeToolCallLoop(
       callbacks.pushMessage(ctx, msg, "system_runtime");
     }
 
-    // Stall-escalation tripwire: track per-turn repetition of specific
-    // failure-diagnostic hint keys. When the same key fires
-    // `STALL_HINT_REPEAT_LIMIT` times, the model is stuck in a loop
-    // text-only hints cannot break (e.g. build-fail → edit → rebuild
-    // at the same compiler location, flailing between permutations of
-    // the same fix). Inject a strong system message instructing the
-    // model to summarize for the user, then force the next provider
-    // call to be text-only so the loop ends cleanly on the model's
-    // response instead of burning another round of tool calls.
-    let stallEscalatedThisRound = false;
-    // Mutation gate: if this round produced any successful workspace
-    // mutation, the model is actively progressing (just not on the
-    // exact error the hint keys on). Reset all stall counters for
-    // STALL_ESCALATION prefixes so the turn keeps going. Only pure
-    // rebuild-without-edit cycles escalate.
-    const roundHadSuccessfulMutation = roundCalls.some(
-      (call) =>
-        STALL_MUTATION_TOOL_NAMES.has(call.name) &&
-        !didToolCallFail(call.isError, call.result),
-    );
-    if (!stallEscalationTriggered) {
-      for (const hint of recoveryHints) {
-        if (
-          !STALL_ESCALATION_HINT_PREFIXES.some((prefix) =>
-            hint.key.startsWith(prefix),
-          )
-        ) {
-          continue;
-        }
-        if (roundHadSuccessfulMutation) {
-          // Model edited something this round — reset the stall
-          // counter for this hint key. Fresh 3-strike window starts
-          // only after an unbroken streak of zero-mutation rounds.
-          hintKeyRepeatCounts.set(hint.key, 0);
-          continue;
-        }
-        const nextCount = (hintKeyRepeatCounts.get(hint.key) ?? 0) + 1;
-        hintKeyRepeatCounts.set(hint.key, nextCount);
-        if (nextCount >= STALL_HINT_REPEAT_LIMIT) {
-          stallEscalatedThisRound = true;
-          stallEscalationTriggered = true;
-          stallEscalationKey = hint.key;
-        }
-      }
-    }
-    if (stallEscalatedThisRound && stallEscalationKey) {
-      const repeatCount =
-        hintKeyRepeatCounts.get(stallEscalationKey) ?? STALL_HINT_REPEAT_LIMIT;
-      const stallMessage: import("./types.js").LLMMessage = {
-        role: "system",
-        content:
-          `STALL DETECTED: the same failure-recovery hint has fired ${repeatCount} ` +
-          `times this turn without the underlying error changing ` +
-          `(\`${stallEscalationKey}\`). ` +
-          `Stop calling tools immediately. Reply to the user in plain text with: ` +
-          `(a) the exact error or failure you keep hitting, ` +
-          `(b) every fix approach you already tried in this turn and the outcome of each, ` +
-          `(c) your best hypothesis for what is actually blocking progress. ` +
-          `Wait for the user's guidance before invoking any more tools.`,
-      };
-      callbacks.pushMessage(ctx, stallMessage, "system_runtime");
-      callbacks.emitExecutionTrace(ctx, {
-        type: "stall_escalated",
-        phase: "tool_followup",
-        callIndex: ctx.callIndex + 1,
-        payload: {
-          hintKey: stallEscalationKey,
-          repeatCount,
-          repeatLimit: STALL_HINT_REPEAT_LIMIT,
-          hintKeyCounts: Object.fromEntries(hintKeyRepeatCounts),
-        },
-      });
-    }
+    // Stall tripwire removed in Phase 4. The hint-key repeat counter
+    // was a second progress oracle that didn't share state with the
+    // authoritative `ctx.continuationState` used by the stop-hook
+    // chain. With Phase 6 (default tool-round cap = 200) + Phase 1
+    // (balanced prompt) + the stop-hook diminishing-returns check,
+    // the runaway case this block was designed for no longer needs a
+    // per-hint-key detector.
 
     // Routing expansion on miss.
     if (loopState.expandAfterRound && ctx.expandedRoutedToolNames.length > 0) {
@@ -763,7 +663,7 @@ export async function executeToolCallLoop(
         onStreamChunk: ctx.activeStreamCallback,
         structuredOutput: ctx.structuredOutput,
         promptCacheKey: ctx.sessionId,
-        ...(shouldForceFailureRecovery || stallEscalatedThisRound
+        ...(shouldForceFailureRecovery
           ? { toolChoice: "none" as const }
           : {}),
         budgetReason:
@@ -797,30 +697,6 @@ export async function executeToolCallLoop(
         ctx.response = { ...nextResponse, content: "" };
         break;
       }
-    }
-    if (stallEscalatedThisRound) {
-      ctx.response = nextResponse;
-      if (responseHasToolCalls(nextResponse)) {
-        // Model ignored `toolChoice: none` after stall escalation.
-        // Close the turn anyway — continuing would defeat the tripwire.
-        emitToolProtocolViolation(
-          ctx,
-          callbacks,
-          "tool_choice_none_ignored_after_stall_escalation",
-          {
-            toolNames: nextResponse.toolCalls.map((toolCall) => toolCall.name),
-            finishReason: nextResponse.finishReason,
-            stallHintKey: stallEscalationKey ?? null,
-          },
-        );
-        sealPendingToolProtocol(ctx, callbacks, "stall_escalated");
-      }
-      callbacks.setStopReason(
-        ctx,
-        "no_progress",
-        `Stall escalation: recovery hint \`${stallEscalationKey}\` fired ${STALL_HINT_REPEAT_LIMIT}+ times without progress. Handed back to the user with a model-written summary.`,
-      );
-      break;
     }
     ctx.response = nextResponse;
     failClosedOnMalformedToolContinuation(ctx, callbacks);

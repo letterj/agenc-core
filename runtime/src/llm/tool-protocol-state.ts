@@ -9,7 +9,6 @@ export type ToolProtocolRepairReason =
   | "request_cancelled"
   | "request_timeout"
   | "round_aborted"
-  | "stall_escalated"
   | "validation_recovery";
 
 export interface PendingToolProtocolCall {

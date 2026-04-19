@@ -109,7 +109,6 @@ describe("chat execution trace inventory", () => {
       "recovery_hints_injected",
       "route_expanded",
       "runtime_contract_snapshot",
-      "stall_escalated",
       "stop_gate_intervention",
       "stop_hook_blocked",
       "stop_hook_execution_finished",
