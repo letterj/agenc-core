@@ -396,6 +396,20 @@ function wrapPlainTextLine(text, width, continuationPrefix = "", inlineSegments 
       splitAt = spaceIndex;
     }
     splitAt = adjustSplitForInlineReference(inlineSegments, splitAt, sourceStart);
+    // Never split inside a UTF-16 surrogate pair — that would emit an
+    // unpaired high surrogate to the terminal, producing a replacement
+    // glyph and corrupting the downstream cell math. If the split
+    // index lands between a high and low surrogate, back off one
+    // code unit.
+    if (splitAt > 0 && splitAt < remaining.length) {
+      const highSurrogate = remaining.charCodeAt(splitAt - 1);
+      if (highSurrogate >= 0xd800 && highSurrogate <= 0xdbff) {
+        const lowSurrogate = remaining.charCodeAt(splitAt);
+        if (lowSurrogate >= 0xdc00 && lowSurrogate <= 0xdfff) {
+          splitAt -= 1;
+        }
+      }
+    }
     const visibleChunk = remaining.slice(0, splitAt);
     const trimmedChunk = visibleChunk.trimEnd();
     const trailingTrim = visibleChunk.length - trimmedChunk.length;

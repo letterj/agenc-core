@@ -129,8 +129,42 @@ function distributeWidthRemainder(widths, remainder) {
   return output;
 }
 
+// Minimal per-codepoint column width. Mirrors the helper in
+// agenc-watch-text-utils.mjs so table-cell alignment accounts for
+// combining marks (width 0), CJK/emoji (width 2), and fullwidth
+// forms. Previously `displayWidth` counted code points, which made
+// CJK table columns misaligned by a factor of 2.
+function codePointColumnWidth(codePoint) {
+  if (codePoint < 0x20) return 0;
+  if (codePoint >= 0x0300 && codePoint <= 0x036F) return 0;
+  if (codePoint >= 0x200B && codePoint <= 0x200F) return 0;
+  if (codePoint >= 0x202A && codePoint <= 0x202E) return 0;
+  if (codePoint >= 0x2060 && codePoint <= 0x2064) return 0;
+  if (codePoint === 0xFEFF) return 0;
+  if (codePoint >= 0xFE00 && codePoint <= 0xFE0F) return 0;
+  if (codePoint >= 0xE0100 && codePoint <= 0xE01EF) return 0;
+  if (codePoint >= 0x1100 && codePoint <= 0x115F) return 2;
+  if (codePoint >= 0x2E80 && codePoint <= 0x303E) return 2;
+  if (codePoint >= 0x3041 && codePoint <= 0x33FF) return 2;
+  if (codePoint >= 0x3400 && codePoint <= 0x4DBF) return 2;
+  if (codePoint >= 0x4E00 && codePoint <= 0x9FFF) return 2;
+  if (codePoint >= 0xA000 && codePoint <= 0xA4CF) return 2;
+  if (codePoint >= 0xAC00 && codePoint <= 0xD7A3) return 2;
+  if (codePoint >= 0xF900 && codePoint <= 0xFAFF) return 2;
+  if (codePoint >= 0xFE30 && codePoint <= 0xFE4F) return 2;
+  if (codePoint >= 0xFF00 && codePoint <= 0xFF60) return 2;
+  if (codePoint >= 0xFFE0 && codePoint <= 0xFFE6) return 2;
+  if (codePoint >= 0x1F300 && codePoint <= 0x1FAFF) return 2;
+  return 1;
+}
+
 function displayWidth(value) {
-  return Array.from(String(value ?? "")).length;
+  const text = String(value ?? "");
+  let width = 0;
+  for (const codePoint of text) {
+    width += codePointColumnWidth(codePoint.codePointAt(0));
+  }
+  return width;
 }
 
 function sliceDisplay(value, start, end = Infinity) {
