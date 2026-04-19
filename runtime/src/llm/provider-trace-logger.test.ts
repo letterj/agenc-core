@@ -5,9 +5,45 @@ import {
   createProviderTraceEventLogger,
   logStructuredTraceEvent,
 } from "./provider-trace-logger.js";
+import { awaitTracePayloadDrain } from "../utils/trace-payload-store.js";
+
+interface JsonlLine {
+  readonly sha256: string;
+  readonly eventName: string;
+  readonly traceId: string;
+  readonly capturedAt: string;
+  readonly payload: Record<string, unknown>;
+}
+
+function parseAnchoredPath(input: string): {
+  filePath: string;
+  sha256: string;
+} {
+  const idx = input.indexOf("#sha256=");
+  if (idx === -1) throw new Error(`expected anchored path, got ${input}`);
+  return {
+    filePath: input.slice(0, idx),
+    sha256: input.slice(idx + "#sha256=".length),
+  };
+}
+
+function findJsonlLineBySha(filePath: string, sha256: string): JsonlLine {
+  const raw = readFileSync(filePath, "utf8");
+  const matches = raw
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as JsonlLine)
+    .filter((line) => line.sha256 === sha256);
+  if (matches.length !== 1) {
+    throw new Error(
+      `expected exactly one line for sha=${sha256}, got ${matches.length}`,
+    );
+  }
+  return matches[0]!;
+}
 
 describe("createProviderTraceEventLogger", () => {
-  it("serializes nested payloads as single-line JSON", () => {
+  it("serializes nested payloads as single-line JSON", async () => {
     const logger = {
       info: vi.fn(),
       error: vi.fn(),
@@ -60,19 +96,20 @@ describe("createProviderTraceEventLogger", () => {
     expect(payloadArtifactMatch?.[1]).toBeTruthy();
     const artifactPath = payloadArtifactMatch?.[1];
     expect(artifactPath).toBeTruthy();
-    const artifact = JSON.parse(readFileSync(artifactPath!, "utf8")) as {
-      payload: {
-        payload?: { nested?: { ok?: boolean }; tool_choice?: string };
-        context?: { requestedToolNames?: string[] };
-      };
+    await awaitTracePayloadDrain("trace-1");
+    const { filePath, sha256 } = parseAnchoredPath(artifactPath!);
+    const jsonlLine = findJsonlLineBySha(filePath, sha256);
+    const persisted = jsonlLine.payload as {
+      payload?: { nested?: { ok?: boolean }; tool_choice?: string };
+      context?: { requestedToolNames?: string[] };
     };
-    expect(artifact.payload.payload?.tool_choice).toBe("required");
-    expect(artifact.payload.payload?.nested?.ok).toBe(true);
-    expect(artifact.payload.context?.requestedToolNames).toEqual(["system.bash"]);
-    rmSync(artifactPath!, { force: true });
+    expect(persisted.payload?.tool_choice).toBe("required");
+    expect(persisted.payload?.nested?.ok).toBe(true);
+    expect(persisted.context?.requestedToolNames).toEqual(["system.bash"]);
+    rmSync(filePath, { force: true });
   });
 
-  it("preserves duplicate trace context arrays in persisted artifacts", () => {
+  it("preserves duplicate trace context arrays in persisted artifacts", async () => {
     const logger = {
       info: vi.fn(),
       error: vi.fn(),
@@ -109,21 +146,22 @@ describe("createProviderTraceEventLogger", () => {
     );
     expect(payloadArtifactMatch?.[1]).toBeTruthy();
     const artifactPath = payloadArtifactMatch?.[1]!;
-    const artifact = JSON.parse(readFileSync(artifactPath, "utf8")) as {
-      payload: {
-        context?: {
-          requestedToolNames?: string[];
-          missingRequestedToolNames?: string[];
-        };
+    await awaitTracePayloadDrain("trace-shared");
+    const { filePath, sha256 } = parseAnchoredPath(artifactPath);
+    const jsonlLine = findJsonlLineBySha(filePath, sha256);
+    const persisted = jsonlLine.payload as {
+      context?: {
+        requestedToolNames?: string[];
+        missingRequestedToolNames?: string[];
       };
     };
-    expect(artifact.payload.context?.requestedToolNames).toEqual([
+    expect(persisted.context?.requestedToolNames).toEqual([
       "mcp.example.start",
     ]);
-    expect(artifact.payload.context?.missingRequestedToolNames).toEqual([
+    expect(persisted.context?.missingRequestedToolNames).toEqual([
       "mcp.example.start",
     ]);
-    rmSync(artifactPath, { force: true });
+    rmSync(filePath, { force: true });
   });
 
   it("serializes execution trace events as single-line JSON", () => {
@@ -233,7 +271,7 @@ describe("createProviderTraceEventLogger", () => {
     rmSync(payloadArtifactMatch![1], { force: true });
   });
 
-  it("summarizes ANSI-heavy terminal payloads in the log preview while keeping the artifact payload", () => {
+  it("summarizes ANSI-heavy terminal payloads in the log preview while keeping the artifact payload", async () => {
     const logger = {
       info: vi.fn(),
       error: vi.fn(),
@@ -278,13 +316,14 @@ describe("createProviderTraceEventLogger", () => {
     );
     expect(payloadArtifactMatch?.[1]).toBeTruthy();
     const artifactPath = payloadArtifactMatch?.[1]!;
-    const artifact = JSON.parse(readFileSync(artifactPath, "utf8")) as {
-      payload: {
-        payload?: { stdout?: string };
-      };
+    await awaitTracePayloadDrain("trace-terminal");
+    const { filePath, sha256 } = parseAnchoredPath(artifactPath);
+    const jsonlLine = findJsonlLineBySha(filePath, sha256);
+    const persisted = jsonlLine.payload as {
+      payload?: { stdout?: string };
     };
-    expect(artifact.payload.payload?.stdout).toContain("\u001b[H");
-    rmSync(artifactPath, { force: true });
+    expect(persisted.payload?.stdout).toContain("\u001b[H");
+    rmSync(filePath, { force: true });
   });
 
   it("summarizes multiline provider payload text instead of logging escaped newlines", () => {

@@ -124,26 +124,20 @@ describe("createCallUsageRecord", () => {
       afterBudget: after,
       providerRequestMetrics: undefined,
       budgetDiagnostics: undefined,
-      statefulDiagnostics: undefined,
       compactionDiagnostics: undefined,
     });
   });
 
-  it("surfaces providerRequestMetrics, statefulDiagnostics, and compactionDiagnostics from the response", () => {
+  it("surfaces providerRequestMetrics and compactionDiagnostics from the response", () => {
     const response = makeResponse({
       requestMetrics: { toolSchemaChars: 2048 },
-      stateful: {
-        enabled: true,
-        attempted: true,
-        continued: true,
-        store: true,
-        fallbackToStateless: false,
-        events: [],
-      },
       compaction: {
-        triggered: true,
-        strategy: "provider_native",
-        eventCount: 1,
+        enabled: true,
+        requested: true,
+        active: true,
+        mode: "provider_managed_state",
+        threshold: 4096,
+        observedItemCount: 1,
       },
     });
 
@@ -158,18 +152,13 @@ describe("createCallUsageRecord", () => {
     });
 
     expect(record.providerRequestMetrics).toEqual({ toolSchemaChars: 2048 });
-    expect(record.statefulDiagnostics).toEqual({
-      enabled: true,
-      attempted: true,
-      continued: true,
-      store: true,
-      fallbackToStateless: false,
-      events: [],
-    });
     expect(record.compactionDiagnostics).toEqual({
-      triggered: true,
-      strategy: "provider_native",
-      eventCount: 1,
+      enabled: true,
+      requested: true,
+      active: true,
+      mode: "provider_managed_state",
+      threshold: 4096,
+      observedItemCount: 1,
     });
   });
 
