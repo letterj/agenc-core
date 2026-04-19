@@ -2553,7 +2553,7 @@ export class DaemonManager {
             ).stage,
           ),
         seedHistoryForSession: (sessionId) =>
-          sessionMgr.get(sessionId)?.history ?? [],
+          sessionMgr.getByIdOrSenderId(sessionId)?.history ?? [],
         readTodosForSession: async (sessionId) =>
           this._todoStore ? await this._todoStore.getTodos(sessionId) : [],
         readTasksForSession: async (sessionId) => {
@@ -4076,7 +4076,7 @@ export class DaemonManager {
         // always misses and the stage never actually flips.
         const session =
           this._webSessionManager?.getByIdOrSenderId(sessionId) ??
-          this._webSessionManager?.get(sessionId);
+          this._webSessionManager?.getByIdOrSenderId(sessionId);
         if (!session) {
           return {
             applied: false,
@@ -5454,7 +5454,7 @@ export class DaemonManager {
     workflowStage?: SessionWorkflowStage;
     workflowOwnershipSummary?: string;
   } {
-    const session = this._webSessionManager?.get(sessionId);
+    const session = this._webSessionManager?.getByIdOrSenderId(sessionId);
     const metadata = session?.metadata;
     if (!metadata || typeof metadata !== "object") {
       return {};
@@ -5602,7 +5602,7 @@ export class DaemonManager {
     if (!executor) {
       return null;
     }
-    const session = this._webSessionManager?.get(sessionId);
+    const session = this._webSessionManager?.getByIdOrSenderId(sessionId);
 
     const totalTokens = executor.getSessionTokenUsage(sessionId);
     const sessionCostUsd =
@@ -5909,7 +5909,7 @@ export class DaemonManager {
   private extractSessionPolicyContext(
     sessionId: string,
   ): { tenantId?: string; projectId?: string } | undefined {
-    const metadata = this._webSessionManager?.get(sessionId)?.metadata;
+    const metadata = this._webSessionManager?.getByIdOrSenderId(sessionId)?.metadata;
     if (!metadata || typeof metadata !== "object") {
       return undefined;
     }
@@ -6501,7 +6501,7 @@ export class DaemonManager {
   private getDiscoveredToolNamesForSession(
     sessionId: string,
   ): readonly string[] {
-    const metadata = this._webSessionManager?.get(sessionId)?.metadata;
+    const metadata = this._webSessionManager?.getByIdOrSenderId(sessionId)?.metadata;
     const interactiveState = coerceInteractiveContextState(
       metadata?.interactiveContextState,
     );
@@ -6527,7 +6527,7 @@ export class DaemonManager {
     // successfully flipped it.
     const session =
       this._webSessionManager?.getByIdOrSenderId(sessionId) ??
-      this._webSessionManager?.get(sessionId);
+      this._webSessionManager?.getByIdOrSenderId(sessionId);
     const metadata = session?.metadata;
     if (!metadata) return undefined;
     return resolveSessionWorkflowState(metadata).stage;
@@ -6983,7 +6983,7 @@ export class DaemonManager {
     const inFlightToolArgs = new Map<string, Record<string, unknown>>();
     const effectiveShellProfile = this.resolveEffectiveShellProfile({
       sessionId,
-      metadata: this._webSessionManager?.get(sessionId)?.metadata ?? {},
+      metadata: this._webSessionManager?.getByIdOrSenderId(sessionId)?.metadata ?? {},
       preferred: shellProfile,
     });
     const advertisedShellProfile = this.evaluateShellFeatureAdmission({

@@ -1960,7 +1960,7 @@ export function createDaemonCommandRegistry(
 
       // Build breakdown
       const sessionId = resolveSessionId(cmdCtx.sessionId);
-      const session = sessionMgr.get(sessionId);
+      const session = sessionMgr.getByIdOrSenderId(sessionId);
       const systemPrompt = ctx.getSystemPrompt();
       const usageSnapshot = buildCurrentContextUsageSnapshot({
         messages: buildCurrentApiView({
@@ -2113,7 +2113,7 @@ export function createDaemonCommandRegistry(
     },
     handler: async (cmdCtx) => {
       const sessionId = resolveSessionId(cmdCtx.sessionId);
-      const session = sessionMgr.get(sessionId);
+      const session = sessionMgr.getByIdOrSenderId(sessionId);
       const historyLen = session?.history.length ?? 0;
       const providerNames =
         providers.map((provider) => provider.name).join(" → ") || "none";
@@ -2187,7 +2187,7 @@ export function createDaemonCommandRegistry(
     },
     handler: async (cmdCtx) => {
       const sessionId = resolveSessionId(cmdCtx.sessionId);
-      const session = sessionMgr.get(sessionId);
+      const session = sessionMgr.getByIdOrSenderId(sessionId);
       if (!session) {
         await cmdCtx.reply("No active session.");
         return;
@@ -2963,7 +2963,7 @@ export function createDaemonCommandRegistry(
           : "No diff content to review.",
       ].join("\n");
       const resolvedSessionId = resolveSessionId(cmdCtx.sessionId);
-      const session = sessionMgr.get(resolvedSessionId);
+      const session = sessionMgr.getByIdOrSenderId(resolvedSessionId);
       const effectiveShellProfile = resolveEffectiveShellProfileForSession({
         ctx,
         sessionId: resolvedSessionId,
@@ -3069,7 +3069,7 @@ export function createDaemonCommandRegistry(
     },
     handler: async (cmdCtx) => {
       const sessionId = resolveSessionId(cmdCtx.sessionId);
-      const session = sessionMgr.get(sessionId);
+      const session = sessionMgr.getByIdOrSenderId(sessionId);
       if (!session) {
         await cmdCtx.reply("No active session.");
         return;
@@ -3416,7 +3416,7 @@ export function createDaemonCommandRegistry(
     },
     handler: async (cmdCtx) => {
       const sessionId = resolveSessionId(cmdCtx.sessionId);
-      const session = sessionMgr.get(sessionId);
+      const session = sessionMgr.getByIdOrSenderId(sessionId);
       if (!session) {
         await cmdCtx.reply("No active session.");
         return;
@@ -3760,7 +3760,7 @@ export function createDaemonCommandRegistry(
     },
     handler: async (cmdCtx) => {
       const resolvedSessionId = resolveSessionId(cmdCtx.sessionId);
-      const session = sessionMgr.get(resolvedSessionId);
+      const session = sessionMgr.getByIdOrSenderId(resolvedSessionId);
       if (!session) {
         await cmdCtx.reply("No active session.");
         return;
@@ -3926,7 +3926,7 @@ export function createDaemonCommandRegistry(
       const webChat = ctx.getWebChatChannel();
       const replyCurrentSession = async (): Promise<void> => {
         const resolvedSessionId = resolveSessionId(cmdCtx.sessionId);
-        const session = sessionMgr.get(resolvedSessionId);
+        const session = sessionMgr.getByIdOrSenderId(resolvedSessionId);
         const workspaceRoot =
           (session?.metadata?.workspaceRoot as string | undefined) ??
           (typeof webChat?.loadSessionWorkspaceRoot === "function"
@@ -4203,7 +4203,7 @@ export function createDaemonCommandRegistry(
       }
       const subcommand = cmdCtx.argv[0]?.toLowerCase() ?? "status";
       const sessionId = resolveSessionId(cmdCtx.sessionId);
-      const session = sessionMgr.get(sessionId);
+      const session = sessionMgr.getByIdOrSenderId(sessionId);
       const responseAnchor = getSessionResumeAnchorResponseId(session);
       const preferredProviderName =
         ctx.getSessionModelInfo(cmdCtx.sessionId)?.provider ??

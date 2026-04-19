@@ -584,6 +584,7 @@ function makeCommandRegistry(params?: {
     },
     {
       get: () => session,
+      getByIdOrSenderId: () => session,
     } as any,
     (value) => value,
     providers as any,

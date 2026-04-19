@@ -3729,6 +3729,14 @@ describe("DaemonManager", () => {
           },
         },
       })),
+      getByIdOrSenderId: vi.fn(() => ({
+        metadata: {
+          policyContext: {
+            tenantId: "tenant-session",
+            projectId: "project-session",
+          },
+        },
+      })),
     };
     (dm as any)._policyEngine = { simulate };
     (dm as any)._approvalEngine = {
