@@ -3320,7 +3320,24 @@ export function createWatchFrameController(dependencies = {}) {
   }
 
   function activityPanelLines(width, targetHeight) {
-    const replyRows = canonicalReplyRows(width);
+    // The canonical-reply pin keeps the latest agent reply visible
+    // at the top of the panel during follow mode (default UX). But
+    // it ALSO takes most of the panel height, leaving only a tiny
+    // (~6-row) scrollback window — and the agent reply is already
+    // rendered as a regular event inside the transcript anyway.
+    // Result: users wheel-up and `sliced.normalizedOffset` clamps
+    // them at maxOffset within seconds; they see "scroll doesn't
+    // work."
+    //
+    // Fix: suppress the pin when the user is in manual-scroll mode
+    // (transcriptFollowMode === false). The transcript region
+    // expands to the full panel height and the user can scroll
+    // freely through the reply (still rendered in the transcript)
+    // and any earlier content. Returning to follow mode (scroll to
+    // bottom) restores the pin.
+    const replyRows = watchState.transcriptFollowMode
+      ? canonicalReplyRows(width)
+      : [];
     const transcriptView = flattenTranscriptView(width);
     const hasTranscript = transcriptView.rows.length > 0;
     const reservedTranscriptRows = hasTranscript
