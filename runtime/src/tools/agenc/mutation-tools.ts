@@ -7,7 +7,7 @@ import {
   TOKEN_PROGRAM_ID,
 } from '@tetsuo-ai/sdk';
 import type { AgencCoordination } from '../../types/agenc_coordination.js';
-import { parseAgentState } from '../../agent/types.js';
+import { parseAgentState, AgentStatus } from '../../agent/types.js';
 import { findProtocolPda } from '../../agent/pda.js';
 import { GovernanceOperations } from '../../governance/operations.js';
 import { ProposalType } from '../../governance/types.js';
@@ -321,7 +321,23 @@ async function resolveAuthorityAgentPda(
     return [null, errorResult('No agent registration found for signer wallet. Run `agenc-runtime agent register --rpc <url>` first, or provide the explicit agent PDA.')];
   }
   if (matches.length > 1) {
-    return [null, ambiguousSignerAgentsResult(authority, signerAgentChoicesFromMatches(authority, matches), field)];
+    const fetchedAccounts = await (program.account as any).agentRegistration.fetchMultiple(
+      matches.map((m) => m.pubkey)
+    );
+    const activeMatches = matches.filter((_, i) => {
+      const raw = fetchedAccounts[i];
+      if (!raw) return false;
+      try {
+        return parseAgentState(raw).status === AgentStatus.Active;
+      } catch {
+        return false;
+      }
+    });
+    if (activeMatches.length === 1) {
+      return [activeMatches[0]!.pubkey, null];
+    }
+    const candidates = activeMatches.length > 0 ? activeMatches : matches;
+    return [null, ambiguousSignerAgentsResult(authority, signerAgentChoicesFromMatches(authority, candidates), field)];
   }
 
   return [matches[0]!.pubkey, null];

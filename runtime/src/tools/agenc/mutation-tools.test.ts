@@ -107,6 +107,9 @@ function createMockProgram(options: { signer?: PublicKey | null } = {}) {
           if (pda.equals(DEFENDANT_AGENT_PDA)) return makeRawAgent(DEFENDANT_WALLET);
           throw new Error(`Unknown agent: ${pda.toBase58()}`);
         }),
+        // Default: return empty array so existing tests are unaffected.
+        // Override per-test to exercise the active-status filter path.
+        fetchMultiple: vi.fn(async () => []),
       },
       skillRegistration: {
         fetch: vi.fn(async (pda: PublicKey) => {
@@ -186,6 +189,56 @@ describe('agenc mutation tools', () => {
     expect(String(parsed.error)).toContain('workerAgentPda');
     expect(parsed.agents.map((agent) => agent.agentPda)).toEqual(expectedAgentPdas);
     expect(parsed.agents.every((agent) => agent.registered === true)).toBe(true);
+  });
+
+  it('agenc.claimTask auto-selects the single active agent when only one of multiple registrations is active', async () => {
+    const program = createMockProgram();
+    const activePda = PublicKey.unique();
+    const suspendedPda = PublicKey.unique();
+    program.provider.connection.getProgramAccounts.mockResolvedValue([
+      { pubkey: activePda,    account: { data: makeAgentRegistrationData(1) } },
+      { pubkey: suspendedPda, account: { data: makeAgentRegistrationData(2) } },
+    ]);
+    // fetchMultiple returns: active for index 0, suspended for index 1
+    program.account.agentRegistration.fetchMultiple.mockResolvedValue([
+      makeRawAgent(SIGNER),
+      { ...makeRawAgent(SIGNER), status: { suspended: {} } },
+    ]);
+    const tool = createClaimTaskTool(program as never, silentLogger);
+
+    const result = await tool.execute({ taskPda: TASK_PDA.toBase58() });
+
+    // Should NOT get the ambiguity error — single active agent was auto-selected
+    expect(parseJson(result).code).not.toBe('MULTIPLE_AGENT_REGISTRATIONS');
+  });
+
+  it('agenc.claimTask includes only active agents in the ambiguity error when multiple are active', async () => {
+    const program = createMockProgram();
+    const activePda1   = PublicKey.unique();
+    const activePda2   = PublicKey.unique();
+    const suspendedPda = PublicKey.unique();
+    program.provider.connection.getProgramAccounts.mockResolvedValue([
+      { pubkey: activePda1,   account: { data: makeAgentRegistrationData(1) } },
+      { pubkey: activePda2,   account: { data: makeAgentRegistrationData(2) } },
+      { pubkey: suspendedPda, account: { data: makeAgentRegistrationData(3) } },
+    ]);
+    program.account.agentRegistration.fetchMultiple.mockResolvedValue([
+      makeRawAgent(SIGNER),
+      makeRawAgent(SIGNER),
+      { ...makeRawAgent(SIGNER), status: { suspended: {} } },
+    ]);
+    const tool = createClaimTaskTool(program as never, silentLogger);
+
+    const result = await tool.execute({ taskPda: TASK_PDA.toBase58() });
+    const parsed = parseJson(result) as { agents: Array<Record<string, unknown>> } & Record<string, unknown>;
+
+    expect(result.isError).toBe(true);
+    expect(parsed.code).toBe('MULTIPLE_AGENT_REGISTRATIONS');
+    // Only the two active PDAs should appear — suspended is filtered out
+    expect(parsed.count).toBe(2);
+    const returnedPdas = parsed.agents.map((a) => a.agentPda).sort();
+    const expectedPdas = [activePda1.toBase58(), activePda2.toBase58()].sort();
+    expect(returnedPdas).toEqual(expectedPdas);
   });
 
   it('agenc.completeTask validates proofHash length', async () => {
