@@ -263,15 +263,23 @@ describe("buildAdvertisedToolBundle — plan-mode filter", () => {
       workflowStage: "plan",
     });
     // Mutating tools are dropped except the plan-mode allow-list
-    // (workflow.exitPlan + task.* stay so the model can finalize).
+    // (workflow.exitPlan + task.wait/task.output + TodoWrite stay
+    // so the model can finalize a plan, draft a todo list, and pick
+    // up delegated subagent results).
     expect(toolNames).toContain("system.readFile");
     expect(toolNames).toContain("system.grep");
     expect(toolNames).toContain("system.listDir");
     expect(toolNames).toContain("system.searchTools");
     expect(toolNames).toContain("workflow.enterPlan");
     expect(toolNames).toContain("workflow.exitPlan");
-    expect(toolNames).toContain("task.create");
-    expect(toolNames).toContain("task.list");
+    // Write-surface task tools are no longer model-advertised under
+    // the Phase 5 mutex gate. TodoWrite is the model-facing planning
+    // affordance; task.* is runtime-internal except for the
+    // read-only wait/output handles.
+    expect(toolNames).not.toContain("task.create");
+    expect(toolNames).not.toContain("task.list");
+    expect(toolNames).not.toContain("task.get");
+    expect(toolNames).not.toContain("task.update");
     expect(toolNames).not.toContain("system.writeFile");
     expect(toolNames).not.toContain("system.editFile");
     expect(toolNames).not.toContain("system.bash");
@@ -332,8 +340,6 @@ describe("buildAdvertisedToolBundle — plan-mode filter", () => {
     for (const essential of [
       "workflow.enterPlan",
       "workflow.exitPlan",
-      "task.create",
-      "task.list",
       "TodoWrite",
       "execute_with_agent",
       "system.searchTools",

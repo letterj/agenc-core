@@ -41,10 +41,14 @@ const GENERAL_DEFAULT_TOOL_NAMES = [
   "system.browse",
   "system.extractLinks",
   "system.htmlToMarkdown",
-  "task.create",
-  "task.list",
-  "task.get",
-  "task.update",
+  // Only the read-only task handles are exposed to the model —
+  // task.wait + task.output for picking up delegated subagent /
+  // verifier / background-run results. The write surface
+  // (task.create/list/get/update) is reserved for runtime-internal
+  // use via TaskStore direct calls. Model-facing planning goes
+  // through TodoWrite.
+  "task.wait",
+  "task.output",
   "TodoWrite",
   "execute_with_agent",
   "coordinator",
@@ -120,7 +124,7 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "When changing code, validate behavior with the smallest useful check before concluding.",
       "Before reporting non-trivial implementation complete, expect independent verifier confirmation instead of self-certifying the result.",
     ],
-    toolPrefixes: ["task.", "verification."],
+    toolPrefixes: ["verification."],
     exactToolNames: [
       "system.readFile",
       "system.writeFile",
@@ -147,6 +151,8 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "system.symbolReferences",
       "system.searchTools",
       "TodoWrite",
+      "task.wait",
+      "task.output",
       "execute_with_agent",
       "coordinator",
       "workflow.enterPlan",
@@ -168,9 +174,11 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "De-emphasize mutating tools unless the user explicitly asks for edits or execution changes.",
       "Use delegation primarily for bounded investigation, synthesis, and source-backed analysis.",
     ],
-    toolPrefixes: ["system.browse", "system.http", "playwright.", "browser_", "task."],
+    toolPrefixes: ["system.browse", "system.http", "playwright.", "browser_"],
     exactToolNames: [
       "TodoWrite",
+      "task.wait",
+      "task.output",
       "execute_with_agent",
       "workflow.enterPlan",
       "workflow.exitPlan",
@@ -191,9 +199,11 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "De-emphasize mutating tools until you have enough evidence to justify the change.",
       "Prefer explicit checks, logs, tests, and run output over intuition.",
     ],
-    toolPrefixes: ["system.", "desktop.", "task."],
+    toolPrefixes: ["system.", "desktop."],
     exactToolNames: [
       "TodoWrite",
+      "task.wait",
+      "task.output",
       "execute_with_agent",
       "workflow.enterPlan",
       "workflow.exitPlan",
@@ -214,9 +224,11 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "Prefer reading the current code and docs surface before rewriting user-facing guidance.",
       "Keep structure and wording clear, but still verify referenced commands or paths when they matter.",
     ],
-    toolPrefixes: ["system.", "task."],
+    toolPrefixes: ["system."],
     exactToolNames: [
       "TodoWrite",
+      "task.wait",
+      "task.output",
       "execute_with_agent",
       "workflow.enterPlan",
       "workflow.exitPlan",
@@ -237,9 +249,11 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "Prefer the existing structured runtime surfaces before ad hoc shell orchestration when both can solve the task.",
       "Keep awareness of system state, long-running handles, and operational visibility.",
     ],
-    toolPrefixes: ["agenc.", "system.", "social.", "wallet.", "task."],
+    toolPrefixes: ["agenc.", "system.", "social.", "wallet."],
     exactToolNames: [
       "TodoWrite",
+      "task.wait",
+      "task.output",
       "execute_with_agent",
       "coordinator",
       "workflow.enterPlan",
