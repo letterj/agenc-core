@@ -15,7 +15,13 @@ export function sanitizeLargeText(value) {
 }
 
 export function sanitizeInlineText(value) {
-  return sanitizeLargeText(value).replace(/\s+/g, " ").trim();
+  // Strip ANSI / OSC / DCS and control chars before whitespace-collapse.
+  // Previously this function fed model-emitted ANSI straight into the
+  // status line, splash, and footer, where the raw SGR bytes rendered
+  // as garbled control-character cells instead of text.
+  return stripTerminalControlSequences(sanitizeLargeText(value))
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function stripTerminalControlSequences(value) {
@@ -131,33 +137,117 @@ export function formatClockLabel(value) {
   });
 }
 
-export function visibleLength(text) {
-  return text.replace(/\x1b\[[0-9;]*m/g, "").length;
+// Minimal East Asian Width / zero-width lookup. Returns the number of
+// terminal columns a single code point consumes. Previously every
+// helper below assumed 1 codepoint = 1 column, so combining
+// diacritics (should be 0), CJK (should be 2), emoji (should be 2),
+// and VS16 (should be 0) all misaligned the column math.
+//
+// The ranges below cover the common cases an agent TUI actually sees:
+// combining marks, zero-width joiners/non-joiners, variation
+// selectors, CJK blocks, Hangul, halfwidth/fullwidth forms, and the
+// main emoji pictograph / symbol planes. Not a full East Asian Width
+// implementation — just enough to stop breaking alignment for the
+// code paths `visibleLength`, `truncateAnsi`, `fitAnsi`, `padAnsi`,
+// and `wrapLine` feed.
+function codePointColumnWidth(codePoint) {
+  if (codePoint < 0x20) return 0;
+  // Combining diacritical marks
+  if (codePoint >= 0x0300 && codePoint <= 0x036F) return 0;
+  // Variation selectors (VS1-16, VS17-256), ZWNJ/ZWJ/ZW space, LTR/RTL marks
+  if (codePoint >= 0x200B && codePoint <= 0x200F) return 0;
+  if (codePoint >= 0x202A && codePoint <= 0x202E) return 0;
+  if (codePoint >= 0x2060 && codePoint <= 0x2064) return 0;
+  if (codePoint === 0xFEFF) return 0;
+  if (codePoint >= 0xFE00 && codePoint <= 0xFE0F) return 0;
+  if (codePoint >= 0xE0100 && codePoint <= 0xE01EF) return 0;
+  // Wide: Hangul Jamo
+  if (codePoint >= 0x1100 && codePoint <= 0x115F) return 2;
+  // Wide: CJK + Hiragana + Katakana + etc.
+  if (codePoint >= 0x2E80 && codePoint <= 0x303E) return 2;
+  if (codePoint >= 0x3041 && codePoint <= 0x33FF) return 2;
+  if (codePoint >= 0x3400 && codePoint <= 0x4DBF) return 2;
+  if (codePoint >= 0x4E00 && codePoint <= 0x9FFF) return 2;
+  if (codePoint >= 0xA000 && codePoint <= 0xA4CF) return 2;
+  if (codePoint >= 0xAC00 && codePoint <= 0xD7A3) return 2;
+  if (codePoint >= 0xF900 && codePoint <= 0xFAFF) return 2;
+  if (codePoint >= 0xFE30 && codePoint <= 0xFE4F) return 2;
+  if (codePoint >= 0xFF00 && codePoint <= 0xFF60) return 2;
+  if (codePoint >= 0xFFE0 && codePoint <= 0xFFE6) return 2;
+  // Emoji pictograph / symbol planes (approximate; covers U+1F300–1FAFF)
+  if (codePoint >= 0x1F300 && codePoint <= 0x1FAFF) return 2;
+  return 1;
 }
 
-export function truncateAnsi(text, maxChars, resetCode = "\x1b[0m") {
-  if (visibleLength(text) <= maxChars) {
-    return text;
-  }
+// Walk the string by code point. Returns { width, units } so callers
+// can step a matching number of JS string units forward when they
+// consumed `width` cells. `units` is 2 for any astral code point
+// (which is a UTF-16 surrogate pair).
+function nextCodePointCell(text, index) {
+  const codePoint = text.codePointAt(index);
+  if (codePoint === undefined) return { codePoint: 0, width: 0, units: 0 };
+  const units = codePoint > 0xFFFF ? 2 : 1;
+  return { codePoint, width: codePointColumnWidth(codePoint), units };
+}
+
+export function visibleLength(text) {
+  const source = String(text ?? "");
   let index = 0;
-  let visible = 0;
-  let output = "";
-  while (index < text.length) {
-    if (text[index] === "\x1b") {
-      const match = text.slice(index).match(/^\x1b\[[0-9;]*m/);
-      if (match) {
-        output += match[0];
-        index += match[0].length;
+  let width = 0;
+  while (index < source.length) {
+    if (source[index] === "\x1b") {
+      const sgr = source.slice(index).match(/^\x1b\[[0-9;]*m/);
+      if (sgr) {
+        index += sgr[0].length;
+        continue;
+      }
+      const osc = source.slice(index).match(/^\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)/);
+      if (osc) {
+        index += osc[0].length;
         continue;
       }
     }
-    if (visible >= Math.max(0, maxChars - 1)) {
+    const cell = nextCodePointCell(source, index);
+    if (cell.units === 0) break;
+    width += cell.width;
+    index += cell.units;
+  }
+  return width;
+}
+
+export function truncateAnsi(text, maxChars, resetCode = "\x1b[0m") {
+  const source = String(text ?? "");
+  if (visibleLength(source) <= maxChars) {
+    return source;
+  }
+  const target = Math.max(0, maxChars - 1);
+  let index = 0;
+  let visible = 0;
+  let output = "";
+  while (index < source.length) {
+    if (source[index] === "\x1b") {
+      const sgr = source.slice(index).match(/^\x1b\[[0-9;]*m/);
+      if (sgr) {
+        output += sgr[0];
+        index += sgr[0].length;
+        continue;
+      }
+      const osc = source.slice(index).match(/^\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)/);
+      if (osc) {
+        output += osc[0];
+        index += osc[0].length;
+        continue;
+      }
+    }
+    const cell = nextCodePointCell(source, index);
+    if (cell.units === 0) break;
+    if (visible + cell.width > target) {
       output += "\u2026";
       break;
     }
-    output += text[index];
-    visible += 1;
-    index += 1;
+    output += source.slice(index, index + cell.units);
+    visible += cell.width;
+    index += cell.units;
   }
   return `${output}${resetCode}`;
 }
@@ -172,22 +262,74 @@ export function padAnsi(text, width) {
   return `${fitted}${" ".repeat(needed)}`;
 }
 
-export function wrapLine(line, width) {
-  if (visibleLength(line) <= width) {
-    return [line];
-  }
-  const stripped = line;
-  const lines = [];
-  let remaining = stripped;
-  while (visibleLength(remaining) > width) {
-    let splitAt = width;
-    const rawSlice = remaining.slice(0, width + 1);
-    const spaceIndex = rawSlice.lastIndexOf(" ");
-    if (spaceIndex > Math.floor(width * 0.45)) {
-      splitAt = spaceIndex;
+// Slice `text` at its nearest "safe" point below `maxWidth` terminal
+// columns, preserving ANSI escape boundaries. Returns
+// { head, rest, visibleWidth, lastSpaceVisibleWidth } so `wrapLine`
+// can decide whether a word-boundary split is preferable.
+function sliceAtVisibleWidth(text, maxWidth) {
+  const source = String(text ?? "");
+  let index = 0;
+  let visible = 0;
+  let lastSpaceIndex = -1;
+  let lastSpaceVisibleWidth = -1;
+  while (index < source.length && visible < maxWidth) {
+    if (source[index] === "\x1b") {
+      const sgr = source.slice(index).match(/^\x1b\[[0-9;]*m/);
+      if (sgr) {
+        index += sgr[0].length;
+        continue;
+      }
+      const osc = source.slice(index).match(/^\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)/);
+      if (osc) {
+        index += osc[0].length;
+        continue;
+      }
     }
-    lines.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt).trimStart();
+    const cell = nextCodePointCell(source, index);
+    if (cell.units === 0) break;
+    if (visible + cell.width > maxWidth) break;
+    if (source[index] === " ") {
+      lastSpaceIndex = index;
+      lastSpaceVisibleWidth = visible;
+    }
+    visible += cell.width;
+    index += cell.units;
+  }
+  return {
+    head: source.slice(0, index),
+    rest: source.slice(index),
+    visibleWidth: visible,
+    lastSpaceIndex,
+    lastSpaceVisibleWidth,
+  };
+}
+
+export function wrapLine(line, width) {
+  const source = String(line ?? "");
+  if (visibleLength(source) <= width) {
+    return [source];
+  }
+  const lines = [];
+  let remaining = source;
+  while (visibleLength(remaining) > width) {
+    const sliced = sliceAtVisibleWidth(remaining, width);
+    // Prefer a word-boundary split when the last space landed past
+    // 45% of the line width — otherwise mid-word is visually
+    // smoother than a very short left chunk.
+    if (
+      sliced.lastSpaceIndex > 0 &&
+      sliced.lastSpaceVisibleWidth >= Math.floor(width * 0.45)
+    ) {
+      lines.push(remaining.slice(0, sliced.lastSpaceIndex));
+      remaining = remaining.slice(sliced.lastSpaceIndex + 1);
+      continue;
+    }
+    lines.push(sliced.head);
+    // `sliced.rest` begins at a safe boundary — either the next code
+    // point, past an escape, or after a wide glyph that would have
+    // overflowed. No leading-whitespace trim needed because we did
+    // not break inside a word.
+    remaining = sliced.rest;
   }
   if (remaining.length > 0) {
     lines.push(remaining);
