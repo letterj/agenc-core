@@ -464,6 +464,27 @@ export class SessionManager {
     return this.sessions.get(sessionId);
   }
 
+  /**
+   * Lookup a session whose internal derived ID **or** lookup
+   * `senderId` matches the given key. Webchat tools receive
+   * `__agencSessionId` equal to the client-side `msg.sessionId`
+   * (which is the `senderId` passed to `getOrCreate`), not the
+   * internal id that `deriveSessionId` hashes it into — so a plain
+   * `get(msg.sessionId)` always misses. This helper bridges both
+   * keys, preferring the exact internal-id match.
+   */
+  getByIdOrSenderId(key: string): Session | undefined {
+    const direct = this.sessions.get(key);
+    if (direct) return direct;
+    for (const [id, session] of this.sessions) {
+      const params = this.lookups.get(id);
+      if (params?.senderId === key) {
+        return session;
+      }
+    }
+    return undefined;
+  }
+
   /** Clear a session's history but preserve metadata. */
   reset(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);

@@ -4069,7 +4069,14 @@ export class DaemonManager {
       resolveStopHookRuntime: () =>
         buildStopHookRuntime(this.gateway?.config.llm?.stopHooks),
       setSessionWorkflowStage: async ({ sessionId, stage, objective }) => {
-        const session = this._webSessionManager?.get(sessionId);
+        // Use alias-aware lookup: webchat tools receive
+        // `msg.sessionId` as the `__agencSessionId` arg, which is the
+        // `senderId` that `sessionMgr.getOrCreate` hashes into a
+        // different internal `session.id`. A direct `.get(sessionId)`
+        // always misses and the stage never actually flips.
+        const session =
+          this._webSessionManager?.getByIdOrSenderId(sessionId) ??
+          this._webSessionManager?.get(sessionId);
         if (!session) {
           return {
             applied: false,
@@ -6513,7 +6520,15 @@ export class DaemonManager {
     sessionId: string | undefined,
   ): SessionWorkflowStage | undefined {
     if (!sessionId) return undefined;
-    const metadata = this._webSessionManager?.get(sessionId)?.metadata;
+    // Alias-aware lookup mirrors `setSessionWorkflowStage` so reads
+    // and writes both hit the same session record. Without this the
+    // plan-mode catalog filter reads `undefined` and always treats
+    // the stage as not-plan, even right after `workflow.enterPlan`
+    // successfully flipped it.
+    const session =
+      this._webSessionManager?.getByIdOrSenderId(sessionId) ??
+      this._webSessionManager?.get(sessionId);
+    const metadata = session?.metadata;
     if (!metadata) return undefined;
     return resolveSessionWorkflowState(metadata).stage;
   }
