@@ -47,38 +47,27 @@ afterEach(() => {
 });
 
 describe("buildBaseSystemPrompt", () => {
-  it("includes the independent verifier rule in the main execution protocol", async () => {
+  it("keeps the core execution-protocol instructions: tool authority, trust prior results, faithful reporting, read-before-write", async () => {
     const prompt = await buildDefaultPersonalityPrompt();
-    expect(prompt).toContain(
-      "do not self-certify completion. Wait for independent verifier confirmation before claiming the implementation is done.",
-    );
-  });
 
-  it("includes the verification contract clause naming execute_with_agent and verifierObligations", async () => {
-    const prompt = await buildDefaultPersonalityPrompt();
+    // The slim protocol keeps five load-bearing ideas. Each is
+    // checked as a substring so body copy can evolve without
+    // tripping the test, but the instruction must be present.
+    expect(prompt).toContain("Do real tool calls");
+    expect(prompt).toContain("Trust prior tool results");
+    expect(prompt).toContain("End the turn when the answer is ready");
+    expect(prompt).toContain("Report outcomes faithfully");
     expect(prompt).toContain(
-      "### Independent verification before reporting completion",
+      "Read-before-Write rule applies to both on paths that already exist",
     );
-    expect(prompt).toContain("execute_with_agent");
-    expect(prompt).toContain("delegationAdmission.verifierObligations");
-    expect(prompt).toContain("you cannot self-assign PARTIAL");
-    expect(prompt).toContain("only the verifier assigns a verdict");
   });
 
   it("renders the post-refactor shape: task execution protocol + marketplace rules, no desktop or model disclosure", async () => {
     const prompt = await buildDefaultPersonalityPrompt();
 
-    // Required sections for coding-workflow parity.
+    // Required top-level sections for coding-workflow parity.
     expect(prompt).toContain("## Task Execution Protocol");
     expect(prompt).toContain("## Marketplace Tool Calling Rules");
-    expect(prompt).toContain("### File modification: prefer editFile over writeFile");
-    expect(prompt).toContain(
-      "### Tool calls must be real tool calls, not narrated prose",
-    );
-    expect(prompt).toContain("### Report outcomes faithfully");
-    expect(prompt).toContain(
-      "BOTH `system.writeFile` (for existing files) AND `system.editFile` REQUIRE that you have called `system.readFile`",
-    );
 
     // Sections deleted during the refactor must not reappear.
     expect(prompt).not.toMatch(/You have broad access to this machine via the system\.bash tool/);
@@ -87,6 +76,15 @@ describe("buildBaseSystemPrompt", () => {
     expect(prompt).not.toMatch(/\bPROVIDER\b.*\bMODEL\b/);
     expect(prompt).not.toMatch(/Current model:/i);
     expect(prompt).not.toMatch(/Current provider:/i);
+
+    // The old numbered-rules block with the 270-line defensive
+    // accretion must not reappear. The prompt rewrite replaced it
+    // with a short balanced instruction set.
+    expect(prompt).not.toContain("The user has pre-authorized continuation");
+    expect(prompt).not.toContain(
+      "### Independent verification before reporting completion",
+    );
+    expect(prompt).not.toContain("delegationAdmission.verifierObligations");
 
     // Hard size ceiling from MAX_SYSTEM_PROMPT_CHARS.
     expect(prompt.length).toBeLessThan(60_000);
@@ -122,23 +120,15 @@ describe("buildBaseSystemPrompt", () => {
     const second = await buildBaseSystemPrompt(config, opts);
     expect(second).toBe(first);
 
-    // Lock in the exact structural tail — task execution protocol
-    // header, then the marketplace rules header. Changes to either
-    // copy body are allowed, but the ordering + headers cannot drift
-    // without updating this test deliberately.
-    const tail = first.slice(first.indexOf("## Task Execution Protocol"));
-    const headerOrder = [
-      "## Task Execution Protocol",
-      "### Report outcomes faithfully",
-      "### File modification: prefer editFile over writeFile",
-      "### Tool calls must be real tool calls, not narrated prose",
-      "## Marketplace Tool Calling Rules",
-    ];
-    let cursor = 0;
-    for (const header of headerOrder) {
-      const index = tail.indexOf(header, cursor);
-      expect(index).toBeGreaterThanOrEqual(cursor);
-      cursor = index + header.length;
-    }
+    // Lock in the two top-level section headers in order. The slim
+    // protocol body intentionally no longer splits into subheadings;
+    // the body is a sequence of short instruction paragraphs so the
+    // model reads it as one coherent block instead of indexing into
+    // individual rules (which was the pattern that produced the 270-
+    // line defensive accretion we just removed).
+    const taskIdx = first.indexOf("## Task Execution Protocol");
+    const marketIdx = first.indexOf("## Marketplace Tool Calling Rules");
+    expect(taskIdx).toBeGreaterThanOrEqual(0);
+    expect(marketIdx).toBeGreaterThan(taskIdx);
   });
 });
