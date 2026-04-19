@@ -184,8 +184,8 @@ describe("DaemonManager host workspace prompt and memory resolution", () => {
       );
 
       expect(prompt).toContain("local engineering and automation tasks");
-      expect(prompt).toContain("Start executing immediately");
-      expect(prompt).toContain("Never end the turn with only a plan");
+      expect(prompt).toContain("Do real tool calls");
+      expect(prompt).toContain("End the turn when the answer is ready");
       expect(prompt).toContain("Report outcomes faithfully");
       expect(prompt).not.toContain("AgenC protocol");
       expect(prompt).not.toContain("Solana");
