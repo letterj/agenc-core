@@ -964,11 +964,18 @@ function dismissIntro() {
 }
 
 function termWidth() {
-  return Math.max(74, process.stdout.columns || 100);
+  // Never exceed the real terminal's column count. Previously this
+  // was `Math.max(74, stdout.columns || 100)` — on a 60-column
+  // terminal that returned 74, the renderer drew 74-column rows, but
+  // cursor-positioning escapes still addressed the physical column
+  // grid. Lines wrapped physically, the diff cache's row indices
+  // decorrelated from the real screen, and the frame visibly tore.
+  // Fall back to 100 only when stdout.columns is unavailable (non-TTY).
+  return process.stdout.columns || 100;
 }
 
 function termHeight() {
-  return Math.max(12, process.stdout.rows || 40);
+  return process.stdout.rows || 40;
 }
 
 function currentTranscriptLayout() {

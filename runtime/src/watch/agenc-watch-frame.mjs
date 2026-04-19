@@ -133,17 +133,48 @@ export function createWatchFrameController(dependencies = {}) {
   // time changes, slow enough to keep CPU cost negligible.
   const ACTIVE_RUN_TICK_INTERVAL_MS = 500;
 
+  // Safety bound: if the ticker has been running this long without any
+  // activity bump on watchState, assume transport dropped mid-run and
+  // self-stop. Previously the ticker leaned on `hasActiveSurfaceRun()`
+  // (which depends on runPhase !== "idle"), and if the daemon
+  // disconnected before emitting a terminal run event, runPhase
+  // never cleared and the ticker burned 500 ms cycles forever.
+  const ACTIVE_RUN_TICKER_STALENESS_MS = 2 * 60 * 1000;
+
   function ensureActiveRunTicker() {
     const shouldRun =
       watchState?.activeRunStartedAtMs != null ||
       (typeof hasActiveSurfaceRun === "function" && hasActiveSurfaceRun());
     if (shouldRun && !frameState.activeRunTicker) {
+      const tickerStartMs = Date.now();
+      let lastObservedActivityMs = Number(watchState?.lastActivityAt) || tickerStartMs;
       frameState.activeRunTicker = setInterval(() => {
         // Re-check on every tick; if the run ended between ticks, stop.
         const stillActive =
           watchState?.activeRunStartedAtMs != null ||
           (typeof hasActiveSurfaceRun === "function" && hasActiveSurfaceRun());
         if (!stillActive) {
+          if (frameState.activeRunTicker) {
+            clearInterval(frameState.activeRunTicker);
+            frameState.activeRunTicker = null;
+          }
+          return;
+        }
+        // Staleness safety: if nothing has bumped lastActivityAt for
+        // long enough, stop the ticker regardless of runPhase. The
+        // view will still re-render on the next real event or user
+        // input; the animated spinner is not worth a silent CPU leak.
+        const nowMs = Date.now();
+        const currentActivityMs = Number(watchState?.lastActivityAt) || 0;
+        if (currentActivityMs > lastObservedActivityMs) {
+          lastObservedActivityMs = currentActivityMs;
+        }
+        const msSinceActivity = nowMs - lastObservedActivityMs;
+        const msSinceStart = nowMs - tickerStartMs;
+        if (
+          msSinceActivity > ACTIVE_RUN_TICKER_STALENESS_MS &&
+          msSinceStart > ACTIVE_RUN_TICKER_STALENESS_MS
+        ) {
           if (frameState.activeRunTicker) {
             clearInterval(frameState.activeRunTicker);
             frameState.activeRunTicker = null;
@@ -258,10 +289,20 @@ export function createWatchFrameController(dependencies = {}) {
       }
       const artCol = col - leftCols;
       const artCell = artCells[artCol] ?? { sgr: "", char: " " };
-      const source =
-        tuiCell.char !== " " && tuiCell.char !== "\u00a0"
-          ? tuiCell
-          : artCell;
+      // Any space-like glyph should fall through to the art cell.
+      // Previously only ASCII space and NBSP counted as transparent,
+      // so tabs, en/em/figure spaces, zero-width joiners, and BOM-
+      // family invisibles occluded the art strip.
+      const tuiChar = tuiCell.char ?? " ";
+      const isTransparent =
+        tuiChar === " " ||
+        tuiChar === "\t" ||
+        tuiChar === "\u00a0" ||
+        tuiChar === "\u202f" ||
+        tuiChar === "\ufeff" ||
+        (tuiChar >= "\u2000" && tuiChar <= "\u200d") ||
+        tuiChar === "\u3000";
+      const source = isTransparent ? artCell : tuiCell;
       if (source.sgr !== activeSgr) {
         output += "\x1b[0m" + source.sgr;
         activeSgr = source.sgr;
