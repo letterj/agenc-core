@@ -169,6 +169,12 @@ const SESSION_ID_TOOL_NAMES = new Set([
   "system.writeFile",
   "system.appendFile",
   "system.editFile",
+  // Workflow-stage tools read `__agencSessionId` out of args to call
+  // `setSessionWorkflowStage`. Without injection they fail with
+  // "requires a session context", which in turn leaves the stage at
+  // `implement` and neuters the plan-mode catalog filter downstream.
+  "workflow.enterPlan",
+  "workflow.exitPlan",
 ]);
 const TOOL_PATH_ARG_KEYS: Readonly<Record<string, readonly string[]>> = {
   "desktop.text_editor": ["path"],
