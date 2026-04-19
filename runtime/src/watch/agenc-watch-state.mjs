@@ -131,6 +131,7 @@ const DEFAULT_BOUND_STATE_KEYS = Object.freeze([
   "configuredModelRoute",
   "lastStatusFeedFingerprint",
   "eventCategoryFilter",
+  "sharedCommandCatalog",
 ]);
 
 function normalizeStoredValue(value) {

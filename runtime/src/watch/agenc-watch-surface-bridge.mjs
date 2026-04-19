@@ -23,6 +23,13 @@ const REQUIRED_STATE_KEYS = Object.freeze([
   "configuredModelRoute",
   "lastStatusFeedFingerprint",
   "manualSessionsQuery",
+  // Without this key here, `state.sharedCommandCatalog = ...` in the
+  // session-command-catalog dispatch case writes a plain own property
+  // on the bridge proxy instead of forwarding to real watchState, and
+  // the autocomplete read from watchState.sharedCommandCatalog always
+  // sees the initial []. Observed: /plan never appeared in the TUI
+  // slash-command palette because of this exact miss.
+  "sharedCommandCatalog",
 ]);
 
 const REQUIRED_HELPER_KEYS = Object.freeze([
