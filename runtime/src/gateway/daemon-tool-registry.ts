@@ -45,6 +45,7 @@ import {
   SessionTaskStore,
   TaskStore,
 } from "../tools/system/task-tracker.js";
+import { createWorkflowPlanModeTools } from "../tools/system/workflow-plan-mode.js";
 import { TodoStore } from "../tools/system/todo-store.js";
 import { createTodoWriteTool } from "../tools/system/todo-write.js";
 import { runStopHookPhase, type StopHookRuntime } from "../llm/hooks/stop-hooks.js";
@@ -134,6 +135,17 @@ interface ToolRegistryDeps {
   getAgentFeed(): unknown;
   getCollaborationProtocol(): unknown;
   resolveStopHookRuntime?(): StopHookRuntime | undefined;
+  /**
+   * Update a session's workflow stage (and optionally the recorded
+   * objective/plan). Used by the `workflow.enterPlan` /
+   * `workflow.exitPlan` tools. Must resolve to `{ applied: false, reason }`
+   * when the sessionId is unknown rather than throwing.
+   */
+  setSessionWorkflowStage?: (params: {
+    readonly sessionId: string;
+    readonly stage: "plan" | "implement" | "review" | "verify" | "idle";
+    readonly objective?: string;
+  }) => Promise<{ readonly applied: boolean; readonly reason?: string }>;
 }
 
 // ============================================================================
@@ -463,6 +475,13 @@ export async function createDaemonToolRegistry(
   );
   registry.register(createExecuteWithAgentTool());
   registry.register(createCoordinatorModeTool());
+  if (deps.setSessionWorkflowStage) {
+    registry.registerAll(
+      createWorkflowPlanModeTools({
+        setSessionWorkflowStage: deps.setSessionWorkflowStage,
+      }),
+    );
+  }
   const walletResult = await loadWallet(config);
   if (config.social?.enabled) {
     try {

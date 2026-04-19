@@ -235,6 +235,7 @@ function normalizeToolMetadata(tool: Tool): ToolCatalogEntry["metadata"] {
     source: metadata.source ?? inferToolSource(tool.name),
     hiddenByDefault: metadata.hiddenByDefault === true,
     mutating: metadata.mutating === true,
+    deferred: metadata.deferred === true,
     ...(metadata.keywords ? { keywords: [...metadata.keywords] } : {}),
     ...(metadata.preferredProfiles
       ? { preferredProfiles: [...metadata.preferredProfiles] }

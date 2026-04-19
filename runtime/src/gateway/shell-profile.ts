@@ -48,6 +48,8 @@ const GENERAL_DEFAULT_TOOL_NAMES = [
   "TodoWrite",
   "execute_with_agent",
   "coordinator",
+  "workflow.enterPlan",
+  "workflow.exitPlan",
   "web_search",
   "x_search",
   "file_search",
@@ -147,6 +149,8 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "TodoWrite",
       "execute_with_agent",
       "coordinator",
+      "workflow.enterPlan",
+      "workflow.exitPlan",
     ],
     delegationDefault: "coding",
     approvalHints: {
@@ -165,7 +169,12 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "Use delegation primarily for bounded investigation, synthesis, and source-backed analysis.",
     ],
     toolPrefixes: ["system.browse", "system.http", "playwright.", "browser_", "task."],
-    exactToolNames: ["TodoWrite", "execute_with_agent"],
+    exactToolNames: [
+      "TodoWrite",
+      "execute_with_agent",
+      "workflow.enterPlan",
+      "workflow.exitPlan",
+    ],
     delegationDefault: "research",
     approvalHints: {
       readOnlyBias: true,
@@ -183,7 +192,12 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "Prefer explicit checks, logs, tests, and run output over intuition.",
     ],
     toolPrefixes: ["system.", "desktop.", "task."],
-    exactToolNames: ["TodoWrite", "execute_with_agent"],
+    exactToolNames: [
+      "TodoWrite",
+      "execute_with_agent",
+      "workflow.enterPlan",
+      "workflow.exitPlan",
+    ],
     delegationDefault: "verify",
     approvalHints: {
       readOnlyBias: true,
@@ -201,7 +215,12 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "Keep structure and wording clear, but still verify referenced commands or paths when they matter.",
     ],
     toolPrefixes: ["system.", "task."],
-    exactToolNames: ["TodoWrite", "execute_with_agent"],
+    exactToolNames: [
+      "TodoWrite",
+      "execute_with_agent",
+      "workflow.enterPlan",
+      "workflow.exitPlan",
+    ],
     delegationDefault: "coding",
     approvalHints: {
       readOnlyBias: false,
@@ -219,7 +238,13 @@ const DEFINITIONS: Record<SessionShellProfile, ShellProfileDefinition> = {
       "Keep awareness of system state, long-running handles, and operational visibility.",
     ],
     toolPrefixes: ["agenc.", "system.", "social.", "wallet.", "task."],
-    exactToolNames: ["TodoWrite", "execute_with_agent", "coordinator"],
+    exactToolNames: [
+      "TodoWrite",
+      "execute_with_agent",
+      "coordinator",
+      "workflow.enterPlan",
+      "workflow.exitPlan",
+    ],
     delegationDefault: "operator",
     approvalHints: {
       readOnlyBias: false,

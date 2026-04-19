@@ -26,6 +26,7 @@ import {
   type SessionShellProfile,
 } from "./shell-profile.js";
 import type { ToolCatalogEntry } from "../tools/types.js";
+import type { SessionWorkflowStage } from "./workflow-state.js";
 
 export interface ToolRoutingDecision {
   readonly routedToolNames: readonly string[];
@@ -81,6 +82,15 @@ const ALWAYS_INLINE_TOOL_NAMES = new Set([
   "task.list",
   "task.get",
   "task.update",
+  // Read-only marketplace browse surfaces — inexpensive schemas, often
+  // the first thing the model reaches for, and they bootstrap further
+  // discovery via `system.searchTools("select:agenc.<name>")`.
+  "agenc.inspectMarketplace",
+  "agenc.listTasks",
+  "agenc.getTask",
+  "agenc.listSkills",
+  "agenc.getSkill",
+  "agenc.getAgent",
 ]);
 
 const DEFERRED_NAME_PREFIXES = [
@@ -92,6 +102,30 @@ const DEFERRED_NAME_PREFIXES = [
   "system.server",
   "system.process",
   "system.research",
+  // Heavy I/O surfaces — default-coding-agent has no reason to pay for
+  // these every call. Discoverable via `system.searchTools` when needed.
+  "system.http",
+  "system.browserSession",
+  "system.browserTransfer",
+  "system.browserAction",
+  "system.calendar",
+  "system.email",
+  "system.pdf",
+  "system.officeDocument",
+  "system.spreadsheet",
+  "system.sqlite",
+  "system.symbol",
+  "system.gitWorktree",
+  "system.applescript",
+  "system.jxa",
+  "system.evaluateJs",
+  "system.notification",
+  "system.screenshot",
+  "system.exportPdf",
+  // `agenc.*` marketplace/governance/reputation mutations — large schemas,
+  // rarely needed for coding. Read-only browse tools are kept inline
+  // via ALWAYS_INLINE_TOOL_NAMES above.
+  "agenc.",
   "social.",
   "wallet.",
 ];
@@ -121,6 +155,13 @@ function isDeferredCatalogEntry(entry: ToolCatalogEntry): boolean {
   if (ALWAYS_INLINE_TOOL_NAMES.has(entry.name)) {
     return false;
   }
+  // Explicit registrant-set marker wins over heuristics — tool factories
+  // that know their surface is specialist (marketplace mutations,
+  // browser sessions, HTTP, etc.) can opt in directly without relying
+  // on the name-prefix / family / source probes below.
+  if (entry.metadata.deferred === true) {
+    return true;
+  }
   if (entry.metadata.hiddenByDefault || entry.metadata.source === "mcp") {
     return true;
   }
@@ -130,19 +171,61 @@ function isDeferredCatalogEntry(entry: ToolCatalogEntry): boolean {
   return isDeferredToolName(entry.name);
 }
 
+/**
+ * Names of mutating tools the model may NOT invoke while the session
+ * workflow stage is `"plan"`. Strictly read/search/browse/think tools
+ * remain available so the model can explore the workspace and produce
+ * a concrete plan.
+ *
+ * `workflow.enterPlan` and `workflow.exitPlan` are explicitly allowed
+ * so the model can transition in and out of plan mode (the exit path
+ * does not itself flip to implement — it records the plan for operator
+ * approval and keeps the stage in `"plan"`).
+ *
+ * Mirrors the reference runtime's plan-mode edit-guard.
+ */
+const PLAN_MODE_ALWAYS_ALLOWED = new Set([
+  "workflow.enterPlan",
+  "workflow.exitPlan",
+  "TodoWrite",
+  "task.create",
+  "task.list",
+  "task.get",
+  "task.update",
+  "execute_with_agent",
+  "system.searchTools",
+]);
+
+function isPlanModeAllowedEntry(entry: ToolCatalogEntry): boolean {
+  if (PLAN_MODE_ALWAYS_ALLOWED.has(entry.name)) return true;
+  return entry.metadata.mutating !== true;
+}
+
 export function buildAdvertisedToolBundle(params: {
   readonly toolCatalog: readonly ToolCatalogEntry[];
   readonly providerNativeToolNames?: readonly string[];
   readonly shellProfile?: SessionShellProfile;
   readonly discoveredToolNames?: readonly string[];
   readonly explicitAllowedToolNames?: readonly string[];
+  /**
+   * Current session workflow stage. When `"plan"`, mutating tools are
+   * hidden from the advertised bundle so the model physically cannot
+   * invoke them — enforcing the plan-mode contract at the catalog
+   * boundary instead of relying on the model to honor a prompt
+   * instruction.
+   */
+  readonly workflowStage?: SessionWorkflowStage;
 }): readonly string[] {
   if (params.explicitAllowedToolNames && params.explicitAllowedToolNames.length > 0) {
     return uniqueToolNames(params.explicitAllowedToolNames);
   }
 
+  const planMode = params.workflowStage === "plan";
+  const catalog = planMode
+    ? params.toolCatalog.filter(isPlanModeAllowedEntry)
+    : params.toolCatalog;
   const profile = params.shellProfile ?? "general";
-  const inlineCatalogToolNames = params.toolCatalog
+  const inlineCatalogToolNames = catalog
     .filter((entry) => !isDeferredCatalogEntry(entry))
     .map((entry) => entry.name);
   const preferredInlineToolNames = getShellProfilePreferredToolNames({

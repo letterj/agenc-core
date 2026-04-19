@@ -211,3 +211,134 @@ describe("buildAdvertisedToolBundle", () => {
     ]);
   });
 });
+
+// ============================================================================
+// Plan-mode tool filtering (Claude Code parity)
+// ============================================================================
+
+describe("buildAdvertisedToolBundle — plan-mode filter", () => {
+  function catalogEntry(
+    name: string,
+    overrides: Partial<{
+      readonly family: string;
+      readonly source: "builtin" | "mcp" | "plugin" | "skill" | "provider_native";
+      readonly hiddenByDefault: boolean;
+      readonly mutating: boolean;
+      readonly deferred: boolean;
+    }> = {},
+  ) {
+    return {
+      name,
+      description: "",
+      inputSchema: {},
+      metadata: {
+        family: overrides.family ?? "general",
+        source: overrides.source ?? ("builtin" as const),
+        hiddenByDefault: overrides.hiddenByDefault ?? false,
+        mutating: overrides.mutating ?? false,
+        deferred: overrides.deferred ?? false,
+      },
+    };
+  }
+
+  const baseCatalog = [
+    catalogEntry("system.readFile"),
+    catalogEntry("system.grep"),
+    catalogEntry("system.listDir"),
+    catalogEntry("system.writeFile", { mutating: true }),
+    catalogEntry("system.editFile", { mutating: true }),
+    catalogEntry("system.bash", { mutating: true }),
+    catalogEntry("system.delete", { mutating: true }),
+    catalogEntry("system.searchTools"),
+    catalogEntry("workflow.enterPlan"),
+    catalogEntry("workflow.exitPlan"),
+    catalogEntry("task.create", { mutating: true }),
+    catalogEntry("task.list"),
+  ];
+
+  it("hides mutating tools when stage is 'plan'", () => {
+    const toolNames = buildAdvertisedToolBundle({
+      shellProfile: "general",
+      toolCatalog: baseCatalog,
+      workflowStage: "plan",
+    });
+    // Mutating tools are dropped except the plan-mode allow-list
+    // (workflow.exitPlan + task.* stay so the model can finalize).
+    expect(toolNames).toContain("system.readFile");
+    expect(toolNames).toContain("system.grep");
+    expect(toolNames).toContain("system.listDir");
+    expect(toolNames).toContain("system.searchTools");
+    expect(toolNames).toContain("workflow.enterPlan");
+    expect(toolNames).toContain("workflow.exitPlan");
+    expect(toolNames).toContain("task.create");
+    expect(toolNames).toContain("task.list");
+    expect(toolNames).not.toContain("system.writeFile");
+    expect(toolNames).not.toContain("system.editFile");
+    expect(toolNames).not.toContain("system.bash");
+    expect(toolNames).not.toContain("system.delete");
+  });
+
+  it("leaves mutating tools in when stage is 'implement'", () => {
+    const toolNames = buildAdvertisedToolBundle({
+      shellProfile: "general",
+      toolCatalog: baseCatalog,
+      workflowStage: "implement",
+    });
+    expect(toolNames).toContain("system.writeFile");
+    expect(toolNames).toContain("system.editFile");
+    expect(toolNames).toContain("system.bash");
+    expect(toolNames).toContain("system.delete");
+  });
+
+  it("leaves mutating tools in when workflowStage is omitted", () => {
+    const toolNames = buildAdvertisedToolBundle({
+      shellProfile: "general",
+      toolCatalog: baseCatalog,
+    });
+    expect(toolNames).toContain("system.writeFile");
+    expect(toolNames).toContain("system.bash");
+  });
+
+  it("respects explicit metadata.deferred on catalog entries", () => {
+    const toolNames = buildAdvertisedToolBundle({
+      shellProfile: "general",
+      toolCatalog: [
+        catalogEntry("system.readFile"),
+        catalogEntry("system.searchTools"),
+        catalogEntry("agenc.resolveDispute", { deferred: true, mutating: true }),
+        catalogEntry("agenc.stakeReputation", { deferred: true, mutating: true }),
+      ],
+    });
+    // Explicit `deferred: true` keeps those tools out of the default
+    // advertised set even though they aren't MCP-sourced or covered by
+    // the name-prefix heuristics.
+    expect(toolNames).toContain("system.readFile");
+    expect(toolNames).toContain("system.searchTools");
+    expect(toolNames).not.toContain("agenc.resolveDispute");
+    expect(toolNames).not.toContain("agenc.stakeReputation");
+  });
+
+  it("keeps the plan-mode allow-list tools present even in plan mode", () => {
+    const planCatalog = [
+      ...baseCatalog,
+      catalogEntry("TodoWrite"),
+      catalogEntry("execute_with_agent"),
+    ];
+    const toolNames = buildAdvertisedToolBundle({
+      shellProfile: "general",
+      toolCatalog: planCatalog,
+      workflowStage: "plan",
+    });
+    for (const essential of [
+      "workflow.enterPlan",
+      "workflow.exitPlan",
+      "task.create",
+      "task.list",
+      "TodoWrite",
+      "execute_with_agent",
+      "system.searchTools",
+    ]) {
+      expect(toolNames).toContain(essential);
+    }
+  });
+});

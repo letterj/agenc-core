@@ -30,6 +30,7 @@ import {
   coerceSessionWorkflowStage,
   ensureSessionWorkflowState,
   resolveSessionWorkflowState,
+  updateSessionWorkflowState,
   type SessionWorkflowStage,
   type SessionWorkflowUpdate,
 } from "./workflow-state.js";
@@ -114,6 +115,7 @@ export {
   coerceSessionWorkflowStage,
   ensureSessionWorkflowState,
   resolveSessionWorkflowState,
+  updateSessionWorkflowState,
 };
 export type { SessionWorkflowStage, SessionWorkflowUpdate };
 export {

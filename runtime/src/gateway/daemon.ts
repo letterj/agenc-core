@@ -211,6 +211,7 @@ import {
   type SessionShellProfile,
   type SessionWorkflowStage,
   resolveSessionWorkflowState,
+  updateSessionWorkflowState,
   resolveSessionShellProfile,
   SessionManager,
 } from "./session.js";
@@ -4059,6 +4060,20 @@ export class DaemonManager {
       getCollaborationProtocol: () => this._collaborationProtocol,
       resolveStopHookRuntime: () =>
         buildStopHookRuntime(this.gateway?.config.llm?.stopHooks),
+      setSessionWorkflowStage: async ({ sessionId, stage, objective }) => {
+        const session = this._webSessionManager?.get(sessionId);
+        if (!session) {
+          return {
+            applied: false,
+            reason: `no active session: ${sessionId}`,
+          };
+        }
+        updateSessionWorkflowState(session.metadata, {
+          stage,
+          ...(typeof objective === "string" ? { objective } : {}),
+        });
+        return { applied: true };
+      },
     }, this._memoryBackend!, metrics);
     this._remoteJobManager = result.remoteJobManager;
     this._remoteSessionManager = result.remoteSessionManager;
@@ -6482,6 +6497,7 @@ export class DaemonManager {
     toolNames?: readonly string[],
     shellProfile: SessionShellProfile = DEFAULT_SESSION_SHELL_PROFILE,
     discoveredToolNames?: readonly string[],
+    workflowStage?: SessionWorkflowStage,
   ): readonly string[] {
     const resolvedToolNames = this.getCallableToolNames(toolNames);
     const allowedToolNames = new Set(resolvedToolNames);
@@ -6502,6 +6518,7 @@ export class DaemonManager {
                 : ("builtin" as const),
               hiddenByDefault: false,
               mutating: false,
+              deferred: false,
             },
           }));
     return buildAdvertisedToolBundle({
@@ -6509,6 +6526,7 @@ export class DaemonManager {
       providerNativeToolNames: providerNative,
       shellProfile,
       discoveredToolNames,
+      ...(workflowStage ? { workflowStage } : {}),
     });
   }
 
@@ -7523,6 +7541,9 @@ export class DaemonManager {
                   })
                 : DEFAULT_SESSION_SHELL_PROFILE,
               this.getDiscoveredToolNamesForSession(sessionId),
+              resolveSessionWorkflowState(
+                sessionMgr.get(sessionId)?.metadata ?? {},
+              ).stage,
             ),
             shellProfile: this.resolveEffectiveShellProfile({
               sessionId,
@@ -7545,6 +7566,9 @@ export class DaemonManager {
                 : DEFAULT_SESSION_SHELL_PROFILE
               : shellProfile,
             discoveredToolNames,
+            resolveSessionWorkflowState(
+              sessionMgr.get(sessionId)?.metadata ?? {},
+            ).stage,
           ),
         recordToolRoutingOutcome: () => {
           /* no-op */

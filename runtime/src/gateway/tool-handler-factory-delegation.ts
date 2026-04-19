@@ -137,9 +137,10 @@ function buildSyntheticToolCatalog(
     inputSchema: { type: "object", properties: {} },
     metadata: {
       family: "runtime",
-      source: "builtin",
+      source: "builtin" as const,
       hiddenByDefault: false,
       mutating: MUTATING_CHILD_TOOL_NAMES.has(name),
+      deferred: false,
     },
   }));
 }
