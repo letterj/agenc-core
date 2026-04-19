@@ -39,12 +39,28 @@ function makeMultimodalUser(content: string, imageUrl: string): LLMMessage {
   };
 }
 
-function makeToolResult(id: string, size: number): LLMMessage {
+function makeToolResult(
+  id: string,
+  size: number,
+  toolName: string = "system.readFile",
+): LLMMessage {
   return {
     role: "tool",
-    tool_call_id: id,
+    toolCallId: id,
+    toolName,
     content: "x".repeat(size),
-  } as LLMMessage;
+  };
+}
+
+function makeAssistantToolCall(
+  id: string,
+  toolName: string = "system.readFile",
+): LLMMessage {
+  return {
+    role: "assistant",
+    content: "",
+    toolCalls: [{ id, name: toolName, arguments: "{}" }],
+  };
 }
 
 describe("applyPerIterationCompaction", () => {
@@ -169,24 +185,31 @@ describe("applyPerIterationCompaction", () => {
       nowMs: T0,
     }).state;
 
-    // Build a history with several old tool results and a few
-    // recent messages (microcompact preserves the last 6).
+    // Build a history with several compactable tool-call/result pairs.
+    // Microcompact keeps the last N (default 5) compactable results
+    // verbatim and content-clears older ones.
     const messages: LLMMessage[] = [
       makeUser("q1"),
+      makeAssistantToolCall("call-1"),
       makeToolResult("call-1", 2000),
       makeUser("q2"),
+      makeAssistantToolCall("call-2"),
       makeToolResult("call-2", 2000),
       makeUser("q3"),
+      makeAssistantToolCall("call-3"),
       makeToolResult("call-3", 2000),
       makeUser("q4"),
+      makeAssistantToolCall("call-4"),
       makeToolResult("call-4", 2000),
       makeUser("q5"),
-      makeAssistant("recent-1"),
-      makeAssistant("recent-2"),
-      makeAssistant("recent-3"),
-      makeAssistant("recent-4"),
-      makeAssistant("recent-5"),
-      makeAssistant("recent-6"),
+      makeAssistantToolCall("call-5"),
+      makeToolResult("call-5", 2000),
+      makeUser("q6"),
+      makeAssistantToolCall("call-6"),
+      makeToolResult("call-6", 2000),
+      makeUser("q7"),
+      makeAssistantToolCall("call-7"),
+      makeToolResult("call-7", 2000),
     ];
 
     const result = applyPerIterationCompaction({
@@ -205,12 +228,14 @@ describe("applyPerIterationCompaction", () => {
         m.content.startsWith("[microcompact]"),
     );
     expect(microBoundary).toBeDefined();
-    // Cold tool result bodies should be replaced with the placeholder.
+    // Cold tool result bodies should be replaced with the
+    // TIME_BASED_MC_CLEARED_MESSAGE placeholder (byte-identical to
+    // Claude Code's placeholder string).
     const placeholderHits = result.messages.filter(
       (m) =>
         m.role === "tool" &&
         typeof m.content === "string" &&
-        m.content.startsWith("[microcompact]"),
+        m.content === "[Old tool result content cleared]",
     );
     expect(placeholderHits.length).toBeGreaterThan(0);
   });
@@ -380,5 +405,184 @@ describe("applyPerIterationCompaction", () => {
     const snipIdx = tags.indexOf("snip");
     const autoIdx = tags.indexOf("autocompact");
     expect(snipIdx).toBeLessThan(autoIdx);
+  });
+});
+
+// ============================================================================
+// applyMicrocompact — Claude Code time-based MC parity
+// ============================================================================
+
+import {
+  applyMicrocompact,
+  createMicrocompactState,
+  TIME_BASED_MC_CLEARED_MESSAGE,
+  COMPACTABLE_TOOL_NAMES,
+} from "./microcompact.js";
+
+describe("applyMicrocompact (time-based parity)", () => {
+  const GAP_MS = 60 * 60 * 1000; // 60 min, matching Claude Code default
+
+  it("noops when the gap has not elapsed", () => {
+    const state = {
+      lastTouchMs: T0 - 1000,
+      clearedToolUseIds: new Set<string>(),
+      compactCount: 0,
+    };
+    const messages: LLMMessage[] = [
+      makeAssistantToolCall("c1"),
+      makeToolResult("c1", 5000),
+      makeAssistantToolCall("c2"),
+      makeToolResult("c2", 5000),
+    ];
+    const r = applyMicrocompact({
+      messages,
+      state,
+      nowMs: T0,
+      gapMs: GAP_MS,
+    });
+    expect(r.action).toBe("noop");
+    expect(r.messages).toBe(messages);
+  });
+
+  it("noops on first touch (lastTouchMs=0)", () => {
+    const r = applyMicrocompact({
+      messages: [makeAssistantToolCall("c1"), makeToolResult("c1", 5000)],
+      state: createMicrocompactState(),
+      nowMs: T0,
+      gapMs: GAP_MS,
+    });
+    expect(r.action).toBe("noop");
+  });
+
+  it("noops when there are fewer compactable results than keepRecent", () => {
+    const state = {
+      lastTouchMs: T0 - GAP_MS - 1000,
+      clearedToolUseIds: new Set<string>(),
+      compactCount: 0,
+    };
+    const messages: LLMMessage[] = [
+      makeAssistantToolCall("c1"),
+      makeToolResult("c1", 2000),
+      makeAssistantToolCall("c2"),
+      makeToolResult("c2", 2000),
+      makeAssistantToolCall("c3"),
+      makeToolResult("c3", 2000),
+    ];
+    const r = applyMicrocompact({
+      messages,
+      state,
+      nowMs: T0,
+      gapMs: GAP_MS,
+      keepRecent: 5,
+    });
+    expect(r.action).toBe("noop");
+  });
+
+  it("clears all-but-keepRecent when gap exceeded", () => {
+    const state = {
+      lastTouchMs: T0 - GAP_MS - 10,
+      clearedToolUseIds: new Set<string>(),
+      compactCount: 0,
+    };
+    const messages: LLMMessage[] = [];
+    for (let i = 1; i <= 8; i++) {
+      messages.push(makeAssistantToolCall(`c${i}`));
+      messages.push(makeToolResult(`c${i}`, 2000));
+    }
+    const r = applyMicrocompact({
+      messages,
+      state,
+      nowMs: T0,
+      gapMs: GAP_MS,
+      keepRecent: 5,
+    });
+    expect(r.action).toBe("microcompacted");
+    // Exactly 8-5 = 3 of the 8 tool results should be content-cleared.
+    const cleared = r.messages.filter(
+      (m) =>
+        m.role === "tool" &&
+        typeof m.content === "string" &&
+        m.content === TIME_BASED_MC_CLEARED_MESSAGE,
+    );
+    expect(cleared).toHaveLength(3);
+    // The 5 most-recent tool results should be untouched.
+    const kept = r.messages.filter(
+      (m) => m.role === "tool" && m.content !== TIME_BASED_MC_CLEARED_MESSAGE,
+    );
+    expect(kept).toHaveLength(5);
+  });
+
+  it("does not touch non-compactable tool results", () => {
+    const state = {
+      lastTouchMs: T0 - GAP_MS - 10,
+      clearedToolUseIds: new Set<string>(),
+      compactCount: 0,
+    };
+    const messages: LLMMessage[] = [];
+    for (let i = 1; i <= 8; i++) {
+      messages.push(makeAssistantToolCall(`c${i}`, "task.update"));
+      messages.push(makeToolResult(`c${i}`, 2000, "task.update"));
+    }
+    const r = applyMicrocompact({
+      messages,
+      state,
+      nowMs: T0,
+      gapMs: GAP_MS,
+      keepRecent: 5,
+    });
+    expect(r.action).toBe("noop");
+  });
+
+  it("uses TIME_BASED_MC_CLEARED_MESSAGE placeholder verbatim (Claude parity)", () => {
+    expect(TIME_BASED_MC_CLEARED_MESSAGE).toBe("[Old tool result content cleared]");
+  });
+
+  it("COMPACTABLE_TOOL_NAMES includes Claude Code's equivalents", () => {
+    for (const expected of [
+      "system.readFile",
+      "system.editFile",
+      "system.writeFile",
+      "system.bash",
+      "system.grep",
+      "system.glob",
+      "system.browse",
+      "system.httpGet",
+    ]) {
+      expect(COMPACTABLE_TOOL_NAMES.has(expected)).toBe(true);
+    }
+    // Non-compactable tools (task lifecycle, small reads) excluded.
+    expect(COMPACTABLE_TOOL_NAMES.has("task.update")).toBe(false);
+    expect(COMPACTABLE_TOOL_NAMES.has("task.create")).toBe(false);
+  });
+
+  it("is idempotent on a previously microcompacted history", () => {
+    const state = {
+      lastTouchMs: T0 - GAP_MS - 10,
+      clearedToolUseIds: new Set<string>(),
+      compactCount: 0,
+    };
+    const messages: LLMMessage[] = [];
+    for (let i = 1; i <= 8; i++) {
+      messages.push(makeAssistantToolCall(`c${i}`));
+      messages.push(makeToolResult(`c${i}`, 2000));
+    }
+    const first = applyMicrocompact({
+      messages,
+      state,
+      nowMs: T0,
+      gapMs: GAP_MS,
+      keepRecent: 5,
+    });
+    expect(first.action).toBe("microcompacted");
+    // Advance time past the gap again so the trigger would fire, but
+    // the history is already compacted — action should be noop.
+    const second = applyMicrocompact({
+      messages: first.messages,
+      state: first.state,
+      nowMs: T0 + GAP_MS + 10,
+      gapMs: GAP_MS,
+      keepRecent: 5,
+    });
+    expect(second.action).toBe("noop");
   });
 });
