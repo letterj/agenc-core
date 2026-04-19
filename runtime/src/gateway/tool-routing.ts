@@ -78,10 +78,14 @@ const ALWAYS_INLINE_TOOL_NAMES = new Set([
   "system.searchTools",
   "execute_with_agent",
   "coordinator",
-  "task.create",
-  "task.list",
-  "task.get",
-  "task.update",
+  // Phase 5 task-system mutex gate: only task.wait / task.output
+  // stay advertised to the model (read-only handles for picking up
+  // delegated subagent / verifier / background-run results). The
+  // write surface (task.create / task.list / task.get / task.update)
+  // is reserved for runtime-internal TaskStore calls. Model-facing
+  // planning goes through TodoWrite.
+  "task.wait",
+  "task.output",
   // Read-only marketplace browse surfaces — inexpensive schemas, often
   // the first thing the model reaches for, and they bootstrap further
   // discovery via `system.searchTools("select:agenc.<name>")`.
@@ -188,10 +192,8 @@ const PLAN_MODE_ALWAYS_ALLOWED = new Set([
   "workflow.enterPlan",
   "workflow.exitPlan",
   "TodoWrite",
-  "task.create",
-  "task.list",
-  "task.get",
-  "task.update",
+  "task.wait",
+  "task.output",
   "execute_with_agent",
   "system.searchTools",
 ]);
