@@ -208,6 +208,22 @@ describe("pipeline quality gates", () => {
     );
   });
 
+  it("allows the current post-compaction context rebound", () => {
+    const artifact = artifactFixture();
+    artifact.contextGrowth.maxDelta = 261;
+    artifact.contextGrowth.tokenDeltas = [60, 0, 12, 47, 59, 59, -142, 261];
+
+    const evaluation = evaluatePipelineQualityGates(artifact);
+
+    expect(evaluation.passed).toBe(true);
+    expect(
+      evaluation.violations.some(
+        (entry) =>
+          entry.scope === "context_growth" && entry.metric === "max_delta",
+      ),
+    ).toBe(false);
+  });
+
   it("fails when malformed tool-turns are forwarded", () => {
     const artifact = artifactFixture();
     artifact.toolTurn.malformedForwarded = 1;

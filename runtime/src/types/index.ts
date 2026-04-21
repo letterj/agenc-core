@@ -187,6 +187,8 @@ export {
   type RawOnChainTask,
   type RawOnChainTaskClaim,
   type TaskExecutionContext,
+  type CompiledJob,
+  type CompiledJobAuditRecord,
   type TaskExecutionResult,
   type PrivateTaskExecutionResult,
   type TaskHandler,

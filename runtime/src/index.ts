@@ -183,6 +183,8 @@ export {
   type OnChainTaskClaim,
   type RawOnChainTask,
   type RawOnChainTaskClaim,
+  type CompiledJob,
+  type CompiledJobAuditRecord,
   type TaskExecutionContext,
   type TaskExecutionResult,
   type PrivateTaskExecutionResult,
@@ -1945,4 +1947,3 @@ export {
   createToolBridge,
   MCPManager,
 } from "./mcp-client/index.js";
-

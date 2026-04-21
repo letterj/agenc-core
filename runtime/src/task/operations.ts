@@ -60,8 +60,13 @@ import {
 } from "../marketplace/job-spec-store.js";
 import {
   fetchTaskJobSpecPointer,
+  resolveOnChainTaskJobSpecForTask,
   type OnChainTaskJobSpecPointer,
 } from "../marketplace/task-job-spec.js";
+import {
+  compileResolvedMarketplaceTaskJob,
+  type CompiledJob,
+} from "./compiled-job.js";
 import {
   isAnchorError,
   parseAnchorError,
@@ -562,6 +567,18 @@ export class TaskOperations {
     }
 
     return pointer;
+  }
+
+  async resolveCompiledJobForTask(taskPda: PublicKey): Promise<CompiledJob | null> {
+    const resolved = await resolveOnChainTaskJobSpecForTask(
+      this.program,
+      taskPda,
+      this.jobSpecStoreOptions,
+    );
+    if (!resolved) {
+      return null;
+    }
+    return compileResolvedMarketplaceTaskJob(resolved);
   }
 
   /**

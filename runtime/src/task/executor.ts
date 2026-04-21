@@ -47,6 +47,7 @@ import type {
   DiscoveredTask,
 } from "./types.js";
 import { isPrivateExecutionResult } from "./types.js";
+import type { CompiledJobAuditRecord } from "./compiled-job.js";
 import { DeadLetterQueue } from "./dlq.js";
 import { NoopMetrics, NoopTracing, METRIC_NAMES } from "./metrics.js";
 import type { MetricsSnapshot } from "./metrics.js";
@@ -169,6 +170,10 @@ export class TaskExecutor {
   private discoveryUnsubscribe: (() => void) | null = null;
   private backpressureActive = false;
   private rescoreTimerId: ReturnType<typeof setInterval> | null = null;
+  private readonly compiledJobAuditByTaskPda = new Map<
+    string,
+    CompiledJobAuditRecord
+  >();
 
   // Metrics
   private metrics = {
@@ -607,6 +612,7 @@ export class TaskExecutor {
     } finally {
       this.clearPipelineTimers(state);
       this.activeTasks.delete(pda);
+      this.compiledJobAuditByTaskPda.delete(pda);
       this.drainQueue();
     }
   }
@@ -959,6 +965,7 @@ export class TaskExecutor {
       this.clearPipelineTimers(state);
       span.end();
       this.activeTasks.delete(pda);
+      this.compiledJobAuditByTaskPda.delete(pda);
       // Update gauges at pipeline exit
       this.metricsProvider.gauge(
         METRIC_NAMES.ACTIVE_COUNT,
@@ -1250,6 +1257,16 @@ export class TaskExecutor {
     claimResult: ClaimResult,
     signal: AbortSignal,
   ): Promise<TaskExecutionResult | PrivateTaskExecutionResult> {
+    const compiledJob = await this.operations.resolveCompiledJobForTask(
+      task.pda,
+    );
+    const taskPdaBase58 = task.pda.toBase58();
+    if (compiledJob) {
+      this.compiledJobAuditByTaskPda.set(taskPdaBase58, compiledJob.audit);
+    } else {
+      this.compiledJobAuditByTaskPda.delete(taskPdaBase58);
+    }
+
     const context: TaskExecutionContext = {
       task: task.task,
       taskPda: task.pda,
@@ -1258,6 +1275,7 @@ export class TaskExecutor {
       agentPda: this.agentPda,
       logger: this.logger,
       signal,
+      ...(compiledJob ? { compiledJob } : {}),
     };
 
     this.events.onTaskExecutionStarted?.(context);
@@ -1355,6 +1373,7 @@ export class TaskExecutor {
         stage === "executed" && executionResult
           ? buildTrustedExecutionResultAttestation(now)
           : undefined,
+      compiledJobAudit: this.compiledJobAuditByTaskPda.get(taskPda),
       createdAt: createdAt ?? now,
       updatedAt: now,
     });

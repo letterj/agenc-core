@@ -62,6 +62,7 @@ export function createMockOperations(): TaskOperations & {
   fetchTask: ReturnType<typeof vi.fn>;
   fetchTaskByIds: ReturnType<typeof vi.fn>;
   fetchClaim: ReturnType<typeof vi.fn>;
+  resolveCompiledJobForTask: ReturnType<typeof vi.fn>;
 } {
   const claimPda = Keypair.generate().publicKey;
   return {
@@ -71,6 +72,7 @@ export function createMockOperations(): TaskOperations & {
     fetchClaim: vi.fn().mockResolvedValue(null),
     fetchActiveClaims: vi.fn().mockResolvedValue([]),
     fetchTaskByIds: vi.fn().mockResolvedValue(null),
+    resolveCompiledJobForTask: vi.fn().mockResolvedValue(null),
     claimTask: vi.fn().mockResolvedValue({
       success: true,
       taskId: new Uint8Array(32),
@@ -96,6 +98,7 @@ export function createMockOperations(): TaskOperations & {
     fetchTask: ReturnType<typeof vi.fn>;
     fetchTaskByIds: ReturnType<typeof vi.fn>;
     fetchClaim: ReturnType<typeof vi.fn>;
+    resolveCompiledJobForTask: ReturnType<typeof vi.fn>;
   };
 }
 
