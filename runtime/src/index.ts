@@ -185,6 +185,8 @@ export {
   type RawOnChainTaskClaim,
   type CompiledJob,
   type CompiledJobAuditRecord,
+  type CompiledJobChatExecutionPolicy,
+  type CompiledJobEnforcement,
   type TaskExecutionContext,
   type TaskExecutionResult,
   type PrivateTaskExecutionResult,
@@ -226,6 +228,8 @@ export {
 export {
   // TaskOperations class
   TaskOperations,
+  createCompiledJobPolicyEngine,
+  resolveCompiledJobEnforcement,
   type TaskOpsConfig,
   // Task filter functions
   matchesFilter,
