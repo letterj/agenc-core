@@ -191,6 +191,8 @@ export {
   type CompiledJobAuditRecord,
   type CompiledJobChatExecutionPolicy,
   type CompiledJobEnforcement,
+  type CompiledJobExecutionRuntime,
+  type CompiledJobScopedTooling,
   type TaskExecutionResult,
   type PrivateTaskExecutionResult,
   type TaskHandler,

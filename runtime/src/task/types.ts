@@ -13,6 +13,7 @@ import type { TaskOperations } from "./operations.js";
 import type { TaskDiscovery, TaskDiscoveryResult } from "./discovery.js";
 import type { CompiledJob, CompiledJobAuditRecord } from "./compiled-job.js";
 import type { CompiledJobEnforcement } from "./compiled-job-enforcement.js";
+import type { CompiledJobExecutionRuntime } from "./compiled-job-runtime.js";
 
 // Re-export TaskType for consumers importing from task module directly
 export { TaskType } from "../events/types.js";
@@ -907,6 +908,8 @@ export interface TaskExecutionContext {
   compiledJob?: CompiledJob;
   /** Runtime-native enforcement derived from the compiled marketplace policy. */
   compiledJobEnforcement?: CompiledJobEnforcement;
+  /** Ready-to-use runtime helpers that apply compiled-job policy to chat/tool execution. */
+  compiledJobRuntime?: CompiledJobExecutionRuntime;
 }
 
 /**
