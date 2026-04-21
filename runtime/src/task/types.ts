@@ -12,6 +12,7 @@ import { toUint8Array } from "../utils/encoding.js";
 import type { TaskOperations } from "./operations.js";
 import type { TaskDiscovery, TaskDiscoveryResult } from "./discovery.js";
 import type { CompiledJob, CompiledJobAuditRecord } from "./compiled-job.js";
+import type { CompiledJobEnforcement } from "./compiled-job-enforcement.js";
 
 // Re-export TaskType for consumers importing from task module directly
 export { TaskType } from "../events/types.js";
@@ -904,6 +905,8 @@ export interface TaskExecutionContext {
   signal: AbortSignal;
   /** Versioned compiled execution plan for marketplace-backed tasks, when available. */
   compiledJob?: CompiledJob;
+  /** Runtime-native enforcement derived from the compiled marketplace policy. */
+  compiledJobEnforcement?: CompiledJobEnforcement;
 }
 
 /**

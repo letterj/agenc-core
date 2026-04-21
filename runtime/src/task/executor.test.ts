@@ -251,6 +251,19 @@ describe("TaskExecutor", () => {
 
       expect(mockOps.resolveCompiledJobForTask).toHaveBeenCalledWith(task.pda);
       expect(capturedContext?.compiledJob).toEqual(compiledJob);
+      expect(capturedContext?.compiledJobEnforcement).toMatchObject({
+        allowedRuntimeTools: ["system.httpGet", "system.pdfExtractText"],
+        allowedHosts: ["example.com"],
+        chat: {
+          maxToolRounds: 40,
+          toolBudgetPerRequest: 40,
+          requestTimeoutMs: 600_000,
+          contextInjection: {
+            skills: false,
+            memory: false,
+          },
+        },
+      });
 
       await executor.stop();
       await startPromise;
