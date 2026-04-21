@@ -187,6 +187,8 @@ export {
   type CompiledJobAuditRecord,
   type CompiledJobChatExecutionPolicy,
   type CompiledJobEnforcement,
+  type CompiledJobExecutionRuntime,
+  type CompiledJobScopedTooling,
   type TaskExecutionContext,
   type TaskExecutionResult,
   type PrivateTaskExecutionResult,
@@ -230,6 +232,7 @@ export {
   TaskOperations,
   createCompiledJobPolicyEngine,
   resolveCompiledJobEnforcement,
+  createCompiledJobExecutionRuntime,
   type TaskOpsConfig,
   // Task filter functions
   matchesFilter,

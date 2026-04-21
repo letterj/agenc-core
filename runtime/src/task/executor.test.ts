@@ -264,6 +264,9 @@ describe("TaskExecutor", () => {
           },
         },
       });
+      expect(capturedContext?.compiledJobRuntime?.enforcement).toEqual(
+        capturedContext?.compiledJobEnforcement,
+      );
 
       await executor.stop();
       await startPromise;

@@ -49,6 +49,7 @@ import type {
 import { isPrivateExecutionResult } from "./types.js";
 import type { CompiledJobAuditRecord } from "./compiled-job.js";
 import { resolveCompiledJobEnforcement } from "./compiled-job-enforcement.js";
+import { createCompiledJobExecutionRuntime } from "./compiled-job-runtime.js";
 import { DeadLetterQueue } from "./dlq.js";
 import { NoopMetrics, NoopTracing, METRIC_NAMES } from "./metrics.js";
 import type { MetricsSnapshot } from "./metrics.js";
@@ -1264,6 +1265,9 @@ export class TaskExecutor {
     const compiledJobEnforcement = compiledJob
       ? resolveCompiledJobEnforcement(compiledJob)
       : undefined;
+    const compiledJobRuntime = compiledJobEnforcement
+      ? createCompiledJobExecutionRuntime(compiledJobEnforcement)
+      : undefined;
     const taskPdaBase58 = task.pda.toBase58();
     if (compiledJob) {
       this.compiledJobAuditByTaskPda.set(taskPdaBase58, compiledJob.audit);
@@ -1281,6 +1285,7 @@ export class TaskExecutor {
       signal,
       ...(compiledJob ? { compiledJob } : {}),
       ...(compiledJobEnforcement ? { compiledJobEnforcement } : {}),
+      ...(compiledJobRuntime ? { compiledJobRuntime } : {}),
     };
 
     this.events.onTaskExecutionStarted?.(context);
