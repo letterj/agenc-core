@@ -11,6 +11,7 @@ import type { Logger } from "../utils/logger.js";
 import { toUint8Array } from "../utils/encoding.js";
 import type { TaskOperations } from "./operations.js";
 import type { TaskDiscovery, TaskDiscoveryResult } from "./discovery.js";
+import type { CompiledJob, CompiledJobAuditRecord } from "./compiled-job.js";
 
 // Re-export TaskType for consumers importing from task module directly
 export { TaskType } from "../events/types.js";
@@ -901,6 +902,8 @@ export interface TaskExecutionContext {
   logger: Logger;
   /** Abort signal for cancellation support */
   signal: AbortSignal;
+  /** Versioned compiled execution plan for marketplace-backed tasks, when available. */
+  compiledJob?: CompiledJob;
 }
 
 /**
@@ -1225,6 +1228,8 @@ export interface TaskCheckpoint {
   executionResult?: TaskExecutionResult | PrivateTaskExecutionResult;
   /** Provenance for deciding whether a persisted execution result may be submitted directly. */
   executionResultAttestation?: TaskExecutionResultAttestation;
+  /** Stored compiled job audit for marketplace-backed executions, when available. */
+  compiledJobAudit?: CompiledJobAuditRecord;
   /** Unix timestamp (ms) when the checkpoint was first created */
   createdAt: number;
   /** Unix timestamp (ms) when the checkpoint was last updated */

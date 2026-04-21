@@ -482,6 +482,41 @@ function parseTaskExecutionResultAttestation(
   };
 }
 
+function parseCompiledJobAuditRecord(
+  value: unknown,
+): TaskCheckpoint["compiledJobAudit"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.compiledPlanHash !== "string" ||
+    typeof raw.compiledPlanUri !== "string" ||
+    typeof raw.compilerVersion !== "string" ||
+    typeof raw.policyVersion !== "string" ||
+    typeof raw.sourceKind !== "string" ||
+    typeof raw.templateId !== "string" ||
+    typeof raw.templateVersion !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    compiledPlanHash: raw.compiledPlanHash,
+    compiledPlanUri: raw.compiledPlanUri,
+    compilerVersion: raw.compilerVersion,
+    policyVersion:
+      raw.policyVersion as NonNullable<
+        TaskCheckpoint["compiledJobAudit"]
+      >["policyVersion"],
+    sourceKind:
+      raw.sourceKind as NonNullable<
+        TaskCheckpoint["compiledJobAudit"]
+      >["sourceKind"],
+    templateId: raw.templateId,
+    templateVersion: raw.templateVersion,
+  };
+}
+
 export function migrateTaskCheckpoint(
   value: unknown,
 ): SchemaMigrationResult<PersistedTaskCheckpoint> {
@@ -532,6 +567,7 @@ export function migrateTaskCheckpoint(
       claimResult: raw.claimResult as TaskCheckpoint["claimResult"],
       executionResult: raw.executionResult as TaskCheckpoint["executionResult"],
       executionResultAttestation,
+      compiledJobAudit: parseCompiledJobAuditRecord(raw.compiledJobAudit),
       createdAt: raw.createdAt,
       updatedAt: raw.updatedAt,
     }),
