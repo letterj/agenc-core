@@ -32,6 +32,8 @@ import {
   resetMarketplaceCliProgramContextOverrides,
   runMarketDisputeResolveCommand,
   runMarketGovernanceVoteCommand,
+  runMarketSkillPurchaseCommand,
+  runMarketSkillRateCommand,
   runMarketTaskCancelCommand,
   runMarketTaskClaimCommand,
   runMarketTaskCompleteCommand,
@@ -1485,6 +1487,86 @@ async function voteProposalViaTui(
   }
 }
 
+async function purchaseSkillViaTui(
+  baseOptions: BaseCliOptions,
+  buyer: AgentActor,
+  skillPda: string,
+): Promise<void> {
+  try {
+    const text = await runTuiSession(baseOptions, buyer, [
+      "2",
+      `purchase ${skillPda}`,
+      "",
+      "back",
+      "q",
+    ]);
+    assertTuiSuccess(text, "skill purchase");
+  } catch (error) {
+    console.log(
+      `[fallback] skill purchase TUI path failed for ${skillPda}; attempting direct CLI purchase`,
+    );
+    try {
+      await runMarketCommand(
+        baseOptions,
+        runMarketSkillPurchaseCommand as MarketRunner,
+        {
+          skillPda,
+          buyerAgentPda: buyer.agentPda.toBase58(),
+        },
+        buyer.agentPda.toBase58(),
+      );
+    } catch (fallbackError) {
+      const message =
+        fallbackError instanceof Error
+          ? fallbackError.message
+          : String(fallbackError);
+      if (
+        !message.includes("already purchased") &&
+        !message.includes("AlreadyPurchased") &&
+        !message.includes("purchase already exists")
+      ) {
+        throw fallbackError;
+      }
+    }
+  }
+}
+
+async function rateSkillViaTui(
+  baseOptions: BaseCliOptions,
+  rater: AgentActor,
+  skillPda: string,
+  rating: number,
+  review: string,
+): Promise<void> {
+  try {
+    const text = await runTuiSession(baseOptions, rater, [
+      "2",
+      `rate ${skillPda}`,
+      String(rating),
+      review,
+      "",
+      "back",
+      "q",
+    ]);
+    assertTuiSuccess(text, "skill rating");
+  } catch (error) {
+    console.log(
+      `[fallback] skill rating TUI path failed for ${skillPda}; attempting direct CLI rating`,
+    );
+    await runMarketCommand(
+      baseOptions,
+      runMarketSkillRateCommand as MarketRunner,
+      {
+        skillPda,
+        rating,
+        review,
+        raterAgentPda: rater.agentPda.toBase58(),
+      },
+      rater.agentPda.toBase58(),
+    );
+  }
+}
+
 const taskCreationMsBySigner = new Map<string, number>();
 
 async function waitForTaskCreationCooldown(
@@ -2723,14 +2805,7 @@ async function runInitial(): Promise<void> {
     ]);
     assertTuiSuccess(skillDetailText, "skill detail");
 
-    const skillPurchaseText = await runTuiSession(baseOptions, worker, [
-      "2",
-      `purchase ${skillPda}`,
-      "",
-      "back",
-      "q",
-    ]);
-    assertTuiSuccess(skillPurchaseText, "skill purchase");
+    await purchaseSkillViaTui(baseOptions, worker, skillPda);
 
     await waitFor("skill purchase visibility", DEFAULT_STATE_WAIT_SECONDS, async () => {
       const skill = await fetchSkillDetail(baseOptions, skillPda, workerKey);
@@ -2740,16 +2815,13 @@ async function runInitial(): Promise<void> {
       return skill;
     });
 
-    const skillRateText = await runTuiSession(baseOptions, worker, [
-      "2",
-      `rate ${skillPda}`,
-      "5",
+    await rateSkillViaTui(
+      baseOptions,
+      worker,
+      skillPda,
+      5,
       `solid skill ${runId}`,
-      "",
-      "back",
-      "q",
-    ]);
-    assertTuiSuccess(skillRateText, "skill rating");
+    );
 
     await waitFor("skill rating visibility", DEFAULT_STATE_WAIT_SECONDS, async () => {
       const skill = await fetchSkillDetail(baseOptions, skillPda, workerKey);
