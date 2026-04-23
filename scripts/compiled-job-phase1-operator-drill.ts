@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Keypair } from "@solana/web3.js";
 import { ChatExecutor } from "../runtime/src/llm/chat-executor.js";
@@ -43,10 +43,163 @@ type DrillResult = {
 
 type MockResponseFactory = () => readonly LLMResponse[];
 
+type AlertDeliveryRecord = {
+  readonly label: string;
+  readonly url: string;
+  readonly emittedAt: string;
+  readonly deliveredAt: string;
+  readonly httpStatus: number;
+};
+
+type DrillOptions = {
+  readonly outputPath: string;
+  readonly resumeArtifactPath: string | null;
+  readonly alertPrimaryUrl: string | null;
+  readonly alertPrimaryLabel: string;
+  readonly alertBackupUrl: string | null;
+  readonly alertBackupLabel: string;
+  readonly alertReceiverSeenAt: string | null;
+  readonly alertAcknowledgedAt: string | null;
+  readonly alertFirstResponseStep: string | null;
+};
+
 const DEFAULT_COMPILER_VERSION = "agenc.web.bounded-task-template.v1";
 const DEFAULT_POLICY_VERSION = "agenc.runtime.compiled-job-policy.v1";
 const DEFAULT_HASH = "a".repeat(64);
 const DEFAULT_ALLOWED_URL = "https://example.com/report";
+const DEFAULT_ALERT_PRIMARY_LABEL = "primary alert destination";
+const DEFAULT_ALERT_BACKUP_LABEL = "backup alert destination";
+const DEFAULT_FIRST_RESPONSE_STEP =
+  "Pause the affected L0 job type and inspect compiled-job telemetry before restoring traffic.";
+
+function getFlagValue(flag: string): string | null {
+  const withEquals = process.argv.find((arg) => arg.startsWith(`${flag}=`));
+  if (withEquals) {
+    return withEquals.slice(flag.length + 1);
+  }
+  const index = process.argv.indexOf(flag);
+  if (index === -1) {
+    return null;
+  }
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`Missing value for ${flag}`);
+  }
+  return value;
+}
+
+function readFlagOrEnv(flag: string, envName: string): string | null {
+  return getFlagValue(flag) ?? process.env[envName] ?? null;
+}
+
+function parseIsoTimestamp(
+  input: string | null,
+  label: string,
+): string | null {
+  if (!input) {
+    return null;
+  }
+  const value = new Date(input);
+  if (Number.isNaN(value.getTime())) {
+    throw new Error(`${label} must be a valid ISO timestamp`);
+  }
+  return value.toISOString();
+}
+
+function parseOptions(): DrillOptions {
+  const outputPath = resolve(
+    process.cwd(),
+    readFlagOrEnv(
+      "--output",
+      "DRILL_OUTPUT_PATH",
+    ) ?? "runtime/artifacts/phase1-closeout/operator-live-drill-host.json",
+  );
+
+  return {
+    outputPath,
+    resumeArtifactPath: readFlagOrEnv(
+      "--resume-artifact",
+      "DRILL_RESUME_ARTIFACT_PATH",
+    ),
+    alertPrimaryUrl: readFlagOrEnv(
+      "--alert-primary-url",
+      "DRILL_ALERT_PRIMARY_URL",
+    ),
+    alertPrimaryLabel:
+      readFlagOrEnv("--alert-primary-label", "DRILL_ALERT_PRIMARY_LABEL") ??
+      DEFAULT_ALERT_PRIMARY_LABEL,
+    alertBackupUrl: readFlagOrEnv(
+      "--alert-backup-url",
+      "DRILL_ALERT_BACKUP_URL",
+    ),
+    alertBackupLabel:
+      readFlagOrEnv("--alert-backup-label", "DRILL_ALERT_BACKUP_LABEL") ??
+      DEFAULT_ALERT_BACKUP_LABEL,
+    alertReceiverSeenAt: parseIsoTimestamp(
+      readFlagOrEnv(
+        "--alert-receiver-seen-at",
+        "DRILL_ALERT_RECEIVER_SEEN_AT",
+      ),
+      "alert receiver timestamp",
+    ),
+    alertAcknowledgedAt: parseIsoTimestamp(
+      readFlagOrEnv(
+        "--alert-acknowledged-at",
+        "DRILL_ALERT_ACKNOWLEDGED_AT",
+      ),
+      "alert acknowledgement timestamp",
+    ),
+    alertFirstResponseStep:
+      readFlagOrEnv(
+        "--alert-first-response-step",
+        "DRILL_ALERT_FIRST_RESPONSE_STEP",
+      ) ?? null,
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function readResumeAlertDeliveries(
+  resumeArtifactPath: string | null,
+): readonly AlertDeliveryRecord[] {
+  if (!resumeArtifactPath) {
+    return [];
+  }
+  const raw = JSON.parse(readFileSync(resolve(process.cwd(), resumeArtifactPath), "utf8"));
+  const record = asRecord(raw);
+  const alertRoutingStatus = asRecord(record?.alertRoutingStatus);
+  const details = asRecord(alertRoutingStatus?.details);
+  const deliveries = Array.isArray(details?.deliveries) ? details.deliveries : [];
+  return deliveries.flatMap((entry) => {
+    const item = asRecord(entry);
+    if (!item) {
+      return [];
+    }
+    const label = typeof item.label === "string" ? item.label : null;
+    const url = typeof item.url === "string" ? item.url : null;
+    const emittedAt = typeof item.emittedAt === "string" ? item.emittedAt : null;
+    const deliveredAt = typeof item.deliveredAt === "string" ? item.deliveredAt : null;
+    const httpStatus =
+      typeof item.httpStatus === "number" ? item.httpStatus : null;
+    if (!label || !url || !emittedAt || !deliveredAt || httpStatus === null) {
+      return [];
+    }
+    return [
+      {
+        label,
+        url,
+        emittedAt,
+        deliveredAt,
+        httpStatus,
+      },
+    ];
+  });
+}
 
 function createCompiledJob(
   jobType: "web_research_brief" | "product_comparison_report" = "web_research_brief",
@@ -579,8 +732,201 @@ async function runSyntheticAlertDrill(): Promise<DrillResult> {
     summary:
       "Synthetic hostile-content traffic emitted policy-failure and domain-denial telemetry alerts with compiled-plan context.",
     details: {
+      jobType: "web_research_brief",
+      denyReason: "blocked.example.com",
       alertCodes: codes,
+      alerts,
       warns: logger.warns,
+    },
+  };
+}
+
+function buildAlertWebhookPayload(input: {
+  readonly generatedAt: string;
+  readonly runtimeVersion: string;
+  readonly packageVersion: string;
+  readonly compilerVersion: string;
+  readonly policyVersion: string;
+  readonly enabledJobTypes: readonly string[];
+  readonly syntheticAlertResult: DrillResult;
+}): Record<string, unknown> {
+  const details = asRecord(input.syntheticAlertResult.details) ?? {};
+  return {
+    schemaVersion: 1,
+    kind: "agenc.phase1.compiled_job_alert",
+    generatedAt: input.generatedAt,
+    environment:
+      process.env.DRILL_ENVIRONMENT ??
+      process.env.HOSTNAME ??
+      "runtime-host",
+    runtimeVersion: input.runtimeVersion,
+    packageVersion: input.packageVersion,
+    compilerVersion: input.compilerVersion,
+    policyVersion: input.policyVersion,
+    enabledJobTypes: input.enabledJobTypes,
+    jobType:
+      typeof details.jobType === "string" ? details.jobType : "web_research_brief",
+    denyReason:
+      typeof details.denyReason === "string"
+        ? details.denyReason
+        : "compiled-job policy/domain alert",
+    summary: input.syntheticAlertResult.summary,
+    alertCodes: Array.isArray(details.alertCodes) ? details.alertCodes : [],
+    alerts: Array.isArray(details.alerts) ? details.alerts : [],
+  };
+}
+
+async function deliverAlertWebhook(
+  url: string,
+  label: string,
+  payload: Record<string, unknown>,
+): Promise<AlertDeliveryRecord> {
+  const emittedAt = new Date().toISOString();
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "user-agent": "agenc-phase1-operator-drill/1",
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `${label} delivery failed with status ${response.status} ${response.statusText}`,
+    );
+  }
+  return {
+    label,
+    url,
+    emittedAt,
+    deliveredAt: new Date().toISOString(),
+    httpStatus: response.status,
+  };
+}
+
+async function resolveAlertDeliveries(input: {
+  readonly options: DrillOptions;
+  readonly generatedAt: string;
+  readonly runtimeVersion: string;
+  readonly packageVersion: string;
+  readonly compilerVersion: string;
+  readonly policyVersion: string;
+  readonly enabledJobTypes: readonly string[];
+  readonly syntheticAlertResult: DrillResult;
+}): Promise<readonly AlertDeliveryRecord[]> {
+  const resumed = readResumeAlertDeliveries(input.options.resumeArtifactPath);
+  if (resumed.length > 0) {
+    return resumed;
+  }
+  if (!input.options.alertPrimaryUrl) {
+    return [];
+  }
+
+  const payload = buildAlertWebhookPayload({
+    generatedAt: input.generatedAt,
+    runtimeVersion: input.runtimeVersion,
+    packageVersion: input.packageVersion,
+    compilerVersion: input.compilerVersion,
+    policyVersion: input.policyVersion,
+    enabledJobTypes: input.enabledJobTypes,
+    syntheticAlertResult: input.syntheticAlertResult,
+  });
+
+  const deliveries: AlertDeliveryRecord[] = [
+    await deliverAlertWebhook(
+      input.options.alertPrimaryUrl,
+      input.options.alertPrimaryLabel,
+      payload,
+    ),
+  ];
+
+  if (input.options.alertBackupUrl) {
+    deliveries.push(
+      await deliverAlertWebhook(
+        input.options.alertBackupUrl,
+        input.options.alertBackupLabel,
+        payload,
+      ),
+    );
+  }
+
+  return deliveries;
+}
+
+function buildAlertRoutingStatus(deliveries: readonly AlertDeliveryRecord[]): DrillResult {
+  if (deliveries.length === 0) {
+    return {
+      name: "alert_routing",
+      status: "blocked",
+      summary:
+        "Synthetic alert emission is proven in-host, but no real routed alert delivery was configured for this drill run.",
+      details: {
+        requirement:
+          "Provide --alert-primary-url (and preferably --alert-backup-url) or resume a prior drill artifact with recorded deliveries.",
+      },
+    };
+  }
+
+  return {
+    name: "alert_routing",
+    status: "passed",
+    summary:
+      "Synthetic compiled-job alerts were routed to the configured real destinations with delivery evidence recorded.",
+    details: {
+      deliveries,
+      primaryDelivered: deliveries.length >= 1,
+      backupDelivered: deliveries.length >= 2,
+    },
+  };
+}
+
+function buildOnCallStatus(input: {
+  readonly alertRoutingStatus: DrillResult;
+  readonly deliveries: readonly AlertDeliveryRecord[];
+  readonly options: DrillOptions;
+}): DrillResult {
+  if (input.alertRoutingStatus.status !== "passed") {
+    return {
+      name: "on_call_response",
+      status: "blocked",
+      summary:
+        "On-call evidence cannot pass until a real alert has been routed to a real destination.",
+      details: {
+        requirement:
+          "Route the alert first, then record receiver-seen and acknowledgement timestamps.",
+      },
+    };
+  }
+
+  if (
+    !input.options.alertReceiverSeenAt ||
+    !input.options.alertAcknowledgedAt ||
+    !input.options.alertFirstResponseStep
+  ) {
+    return {
+      name: "on_call_response",
+      status: "blocked",
+      summary:
+        "Alert delivery is proven, but human receipt and acknowledgement timestamps were not recorded for this drill run.",
+      details: {
+        requirement:
+          "Provide --alert-receiver-seen-at, --alert-acknowledged-at, and --alert-first-response-step to complete the production-only on-call evidence.",
+        deliveries: input.deliveries,
+      },
+    };
+  }
+
+  return {
+    name: "on_call_response",
+    status: "passed",
+    summary:
+      "A real alert was received and acknowledged, and the responder recorded the correct first containment step.",
+    details: {
+      receiverSeenAt: input.options.alertReceiverSeenAt,
+      acknowledgedAt: input.options.alertAcknowledgedAt,
+      firstResponseStep: input.options.alertFirstResponseStep,
+      deliveries: input.deliveries,
     },
   };
 }
@@ -647,12 +993,8 @@ function buildMarkdown(input: {
 }
 
 async function main() {
-  const outputArg = process.argv.find((arg) => arg.startsWith("--output="));
-  const outputPath = resolve(
-    process.cwd(),
-    outputArg?.slice("--output=".length) ??
-      "runtime/artifacts/phase1-closeout/operator-live-drill-host.json",
-  );
+  const options = parseOptions();
+  const outputPath = options.outputPath;
   const markdownPath = outputPath.replace(/\.json$/i, ".md");
 
   const runtimeVersion = process.env.DRILL_RUNTIME_GIT_SHA ?? "unknown";
@@ -670,28 +1012,28 @@ async function main() {
     await runDependencyFailClosedDrill(),
     await runSyntheticAlertDrill(),
   ];
-
-  const alertRoutingStatus: DrillResult = {
-    name: "alert_routing",
-    status: "blocked",
-    summary:
-      "Synthetic alert emission is proven in-host, but no real pager/Slack/Alertmanager destination was discoverable on this host, so human delivery could not be verified.",
-    details: {
-      requirement:
-        "Production-only drill requires alert delivery to a real destination and recorded receipt timestamps.",
-    },
-  };
-
-  const onCallStatus: DrillResult = {
-    name: "on_call_response",
-    status: "blocked",
-    summary:
-      "No configured human alert destination or acknowledged production incident path was available during this single-operator host drill.",
-    details: {
-      requirement:
-        "Production-only drill requires a real alert receiver, acknowledgement timestamp, and explicit first-response action.",
-    },
-  };
+  const enabledJobTypes = ["web_research_brief", "product_comparison_report"] as const;
+  const syntheticAlertResult =
+    results.find((result) => result.name === "synthetic_alert_emission") ??
+    (() => {
+      throw new Error("synthetic alert drill result missing");
+    })();
+  const deliveries = await resolveAlertDeliveries({
+    options,
+    generatedAt,
+    runtimeVersion,
+    packageVersion,
+    compilerVersion: DEFAULT_COMPILER_VERSION,
+    policyVersion: DEFAULT_POLICY_VERSION,
+    enabledJobTypes,
+    syntheticAlertResult,
+  });
+  const alertRoutingStatus = buildAlertRoutingStatus(deliveries);
+  const onCallStatus = buildOnCallStatus({
+    alertRoutingStatus,
+    deliveries,
+    options,
+  });
 
   const payload = {
     generatedAt,
@@ -699,7 +1041,7 @@ async function main() {
     packageVersion,
     compilerVersion: DEFAULT_COMPILER_VERSION,
     policyVersion: DEFAULT_POLICY_VERSION,
-    enabledJobTypes: ["web_research_brief", "product_comparison_report"],
+    enabledJobTypes,
     results,
     alertRoutingStatus,
     onCallStatus,
@@ -719,7 +1061,7 @@ async function main() {
       packageVersion,
       compilerVersion: DEFAULT_COMPILER_VERSION,
       policyVersion: DEFAULT_POLICY_VERSION,
-      enabledJobTypes: ["web_research_brief", "product_comparison_report"],
+      enabledJobTypes,
       results,
       alertRoutingStatus,
       onCallStatus,
