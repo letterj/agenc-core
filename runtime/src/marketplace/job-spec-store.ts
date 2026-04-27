@@ -4,9 +4,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   buildVerifiedTaskMetadata,
+  computeCanonicalMarketplaceTaskHash,
   loadVerifiedTaskIssuerKeysFromEnv,
+  parseMarketplaceCanonicalTaskInput,
   parseVerifiedTaskAttestation,
   verifyVerifiedTaskAttestation,
+  type MarketplaceCanonicalTaskInput,
   type VerifiedTaskAttestation,
   type VerifiedTaskIssuerKeyring,
   type VerifiedTaskMetadata,
@@ -146,6 +149,14 @@ export interface MarketplaceJobSpecTaskLinkInput {
    */
   readonly verifiedTaskAttestation?: VerifiedTaskAttestation | null;
   readonly verifiedTaskAcceptedAt?: string | null;
+  /**
+   * The canonical task input the runtime computed when accepting the
+   * attestation. Persisted alongside the attestation so the read path can
+   * recompute `canonicalTaskHash` independently and compare it against
+   * `attestation.canonicalTaskHash` — without this the read-time check would
+   * be tautological (attestation vs itself).
+   */
+  readonly verifiedTaskCanonicalInput?: MarketplaceCanonicalTaskInput | null;
 }
 
 export interface MarketplaceJobSpecTaskLink {
@@ -272,6 +283,20 @@ export async function linkMarketplaceJobSpecToTask(
     throw new Error("taskId must be a 32-byte hex string");
   }
 
+  if (input.verifiedTaskAttestation && !input.verifiedTaskCanonicalInput) {
+    throw new Error(
+      "verifiedTaskAttestation requires verifiedTaskCanonicalInput so the read path can re-derive canonicalTaskHash independently",
+    );
+  }
+  if (
+    input.verifiedTaskCanonicalInput &&
+    input.verifiedTaskCanonicalInput.jobSpecHash !== input.hash
+  ) {
+    throw new Error(
+      `verifiedTaskCanonicalInput.jobSpecHash ${input.verifiedTaskCanonicalInput.jobSpecHash} does not match link jobSpecHash ${input.hash}`,
+    );
+  }
+
   const persistedLink: PersistedMarketplaceJobSpecTaskLink = {
     schemaVersion: JOB_SPEC_SCHEMA_VERSION,
     kind: "agenc.marketplace.jobSpecTaskLink",
@@ -289,6 +314,13 @@ export async function linkMarketplaceJobSpecToTask(
       : {}),
     ...(input.verifiedTaskAcceptedAt
       ? { verifiedTaskAcceptedAt: input.verifiedTaskAcceptedAt }
+      : {}),
+    ...(input.verifiedTaskCanonicalInput
+      ? {
+          verifiedTaskCanonicalInput: parseMarketplaceCanonicalTaskInput(
+            input.verifiedTaskCanonicalInput,
+          ),
+        }
       : {}),
   };
   const rootDir = options.rootDir ?? getDefaultMarketplaceJobSpecStoreDir();
@@ -317,6 +349,7 @@ interface PersistedMarketplaceJobSpecTaskLink {
   readonly transactionSignature: string;
   readonly verifiedTaskAttestation?: VerifiedTaskAttestation;
   readonly verifiedTaskAcceptedAt?: string;
+  readonly verifiedTaskCanonicalInput?: MarketplaceCanonicalTaskInput;
 }
 
 export async function readMarketplaceJobSpecPointerForTask(
@@ -834,6 +867,26 @@ async function reverifyVerifiedTaskFromLink(
     return null;
   }
 
+  // The canonical task input MUST be present and bound to this link before we
+  // will surface verified status. Without it the read-time canonical hash
+  // check would be tautological (attestation vs itself), so a valid signed
+  // attestation could be re-used in any link sharing the same jobSpecHash.
+  const rawCanonical = candidate.verifiedTaskCanonicalInput;
+  if (!rawCanonical) return null;
+
+  let canonicalInput: MarketplaceCanonicalTaskInput;
+  try {
+    canonicalInput = parseMarketplaceCanonicalTaskInput(rawCanonical);
+  } catch {
+    return null;
+  }
+  // Bind the persisted canonical input to the link being rendered. If any of
+  // these don't match the link's identity, an attacker has reassociated the
+  // attestation with a different task context and we must not surface verified.
+  if (canonicalInput.jobSpecHash !== acceptance.jobSpecHash) {
+    return null;
+  }
+
   let attestation: VerifiedTaskAttestation;
   try {
     attestation = parseVerifiedTaskAttestation(rawAttestation);
@@ -844,11 +897,24 @@ async function reverifyVerifiedTaskFromLink(
     return null;
   }
 
+  // Recompute canonicalTaskHash from the persisted task material — this is the
+  // independent comparison that makes the verification non-tautological.
+  let recomputedCanonicalHash: string;
+  try {
+    recomputedCanonicalHash = computeCanonicalMarketplaceTaskHash(canonicalInput);
+  } catch {
+    return null;
+  }
+
   try {
     const verification = await verifyVerifiedTaskAttestation(attestation, {
       issuerKeys,
       expectedJobSpecHash: acceptance.jobSpecHash,
-      expectedCanonicalTaskHash: attestation.canonicalTaskHash,
+      expectedCanonicalTaskHash: recomputedCanonicalHash,
+      // If the attestation pins a buyer wallet, the persisted canonical input's
+      // creatorWallet is the value we expect on devnet — re-bind here so a
+      // copied attestation from another buyer is rejected.
+      expectedBuyerWallet: canonicalInput.creatorWallet,
       // The attestation's expiry bounds the *acceptance* window — at read time
       // we only need the signature to still verify under the current allowlist.
       skipExpiry: true,

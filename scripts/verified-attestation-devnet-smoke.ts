@@ -44,6 +44,7 @@ import {
   type VerifiedTaskAttestation,
 } from "../runtime/src/marketplace/verified-task-attestation.js";
 import {
+  linkMarketplaceJobSpecToTask,
   persistMarketplaceJobSpec,
   readMarketplaceJobSpecPointerForTask,
 } from "../runtime/src/marketplace/job-spec-store.js";
@@ -368,10 +369,18 @@ async function main(): Promise<number> {
     );
     return 1;
   }
+  // Print the FULL transaction signature so reviewers can copy it directly into
+  // the explorer / RPC without truncation guesswork.
+  process.stdout.write(`  · createTaskTxSignature=${txSig}\n`);
+  const jobSpecTxSig =
+    inner?.jobSpecTransactionSignature ?? created?.jobSpecTransactionSignature;
+  if (jobSpecTxSig) {
+    process.stdout.write(`  · setTaskJobSpecTxSignature=${jobSpecTxSig}\n`);
+  }
   record(
     "create verified task on devnet",
     "pass",
-    `taskPda=${taskPda} verifiedTaskHash=${verifiedHash} tx=${(txSig ?? "").slice(0, 16)}…`,
+    `taskPda=${taskPda} verifiedTaskHash=${verifiedHash} createTaskTx=${txSig}`,
   );
 
   // ---------- Section 2: replay marker is `consumed`, not `pending` ----------
@@ -517,6 +526,105 @@ async function main(): Promise<number> {
     return 1;
   }
   record("tampered link signature is rejected", "pass", "verifiedTask=null");
+
+  // ---------- Section 4b: cross-link attestation copy (independent canonical binding) ----------
+  // Persist a second link sharing the same jobSpecHash but with different
+  // canonical task material, then copy the live A-attestation into B's link
+  // and assert verifiedTask comes back null. This validates the
+  // independent-binding fix against the same on-disk format the live
+  // create-task path just produced.
+  const taskBPda = Keypair.generate().publicKey.toBase58();
+  const taskBId = createHash("sha256").update("smoke-task-B").digest("hex");
+  const canonicalA = {
+    environment: "devnet" as const,
+    creatorWallet: creator.publicKey.toBase58(),
+    creatorAgentPda: creatorAgentPda.toBase58(),
+    taskDescription,
+    rewardLamports: reward,
+    requiredCapabilities,
+    rewardMint: null,
+    maxWorkers: 1,
+    deadline,
+    taskType,
+    minReputation,
+    constraintHash: null,
+    validationMode: "auto" as const,
+    reviewWindowSecs: null,
+    jobSpecHash: jobSpec.hash,
+  };
+  const canonicalB = {
+    ...canonicalA,
+    taskDescription: `${taskDescription} — task B (different)`,
+    rewardLamports: "20000000",
+    maxWorkers: 2,
+  };
+  const attestationB = signAttestation(issuer, {
+    kind: "agenc.marketplace.verifiedTaskAttestation",
+    schemaVersion: 1,
+    environment: "devnet",
+    issuer: "agenc-services-storefront",
+    issuerKeyId,
+    orderId: `smoke-${nonce}-B`,
+    serviceTemplateId: "smoke-template",
+    jobSpecHash: jobSpec.hash,
+    canonicalTaskHash: computeCanonicalMarketplaceTaskHash(canonicalB),
+    buyerWallet: creator.publicKey.toBase58(),
+    nonce: makeNonce("devnet-smoke-B"),
+    issuedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  });
+  const linkBPath = await linkMarketplaceJobSpecToTask(
+    {
+      hash: jobSpec.hash,
+      uri: jobSpec.uri,
+      taskPda: taskBPda,
+      taskId: taskBId,
+      transactionSignature: "tx-B-mock",
+      verifiedTaskAttestation: attestationB,
+      verifiedTaskAcceptedAt: new Date().toISOString(),
+      verifiedTaskCanonicalInput: canonicalB,
+    },
+    { rootDir: jobSpecStoreDir },
+  );
+
+  // Sanity: B reads as verified before tampering.
+  const okB = await readMarketplaceJobSpecPointerForTask(taskBPda, {
+    rootDir: jobSpecStoreDir,
+    verifiedTaskIssuerKeys: { [issuerKeyId]: issuer.publicKey.toBase58() },
+  });
+  if (!okB?.verifiedTask) {
+    record(
+      "task-B link verified before swap",
+      "fail",
+      `pointer=${JSON.stringify(okB).slice(0, 600)}`,
+    );
+    return 1;
+  }
+
+  // Read the live A-attestation off the live A-link on disk and copy it into
+  // B's link, leaving B's persisted canonical task material in place.
+  const liveALinkPath = pointerWithKeys.jobSpecTaskLinkPath;
+  const liveALink = JSON.parse(await readFile(liveALinkPath, "utf8"));
+  const linkBObj = JSON.parse(await readFile(linkBPath, "utf8"));
+  linkBObj.verifiedTaskAttestation = liveALink.verifiedTaskAttestation;
+  await writeFile(linkBPath, `${JSON.stringify(linkBObj)}\n`);
+  const tamperedB = await readMarketplaceJobSpecPointerForTask(taskBPda, {
+    rootDir: jobSpecStoreDir,
+    verifiedTaskIssuerKeys: { [issuerKeyId]: issuer.publicKey.toBase58() },
+  });
+  if (tamperedB?.verifiedTask) {
+    record(
+      "cross-link attestation swap is rejected",
+      "fail",
+      `verifiedTask=${JSON.stringify(tamperedB.verifiedTask).slice(0, 600)}`,
+    );
+    return 1;
+  }
+  record(
+    "cross-link attestation swap is rejected",
+    "pass",
+    "verifiedTask=null (independent canonical binding caught the swap)",
+  );
 
   // ---------- Section 5: pre-submit failure does NOT consume a new nonce ----------
   const failNonce = makeNonce("devnet-smoke-fail");

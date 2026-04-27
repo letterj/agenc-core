@@ -3023,29 +3023,31 @@ export function createCreateTaskTool(
 
         let verifiedTaskVerification: VerifiedTaskAttestationVerificationResult | null = null;
         let verifiedTaskMetadata: VerifiedTaskMetadata | null = null;
+        let verifiedTaskCanonicalInput: MarketplaceCanonicalTaskInput | null = null;
         if (verifiedAttestation) {
           if (!jobSpecReference) {
             return errorResult(
               'verifiedAttestation requires a submitted jobSpecHash via jobSpec metadata or jobSpecUri',
             );
           }
+          verifiedTaskCanonicalInput = buildMarketplaceCanonicalTaskInput({
+            creator,
+            creatorAgentPda,
+            taskDescription: taskDescriptionText,
+            reward,
+            requiredCapabilities,
+            rewardMint,
+            maxWorkers,
+            deadline,
+            taskType,
+            minReputation,
+            constraintHash,
+            validationMode,
+            reviewWindowSecs,
+            jobSpecHash: jobSpecReference.hash,
+          });
           const canonicalTaskHash = computeCanonicalMarketplaceTaskHash(
-            buildMarketplaceCanonicalTaskInput({
-              creator,
-              creatorAgentPda,
-              taskDescription: taskDescriptionText,
-              reward,
-              requiredCapabilities,
-              rewardMint,
-              maxWorkers,
-              deadline,
-              taskType,
-              minReputation,
-              constraintHash,
-              validationMode,
-              reviewWindowSecs,
-              jobSpecHash: jobSpecReference.hash,
-            }),
+            verifiedTaskCanonicalInput,
           );
           try {
             verifiedTaskVerification = await verifyVerifiedTaskAttestation(
@@ -3275,6 +3277,7 @@ export function createCreateTaskTool(
                 transactionSignature: jobSpecTransactionSignature ?? txSignature,
                 verifiedTaskAttestation: verifiedTaskVerification?.attestation ?? null,
                 verifiedTaskAcceptedAt: verifiedTaskAcceptedAt,
+                verifiedTaskCanonicalInput,
               },
               options.jobSpecStoreDir
                 ? { rootDir: options.jobSpecStoreDir }

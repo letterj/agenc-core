@@ -194,6 +194,103 @@ export function computeCanonicalMarketplaceTaskHash(
   return sha256Hex(canonicalJson(buildCanonicalMarketplaceTaskPayload(input)));
 }
 
+/**
+ * Parse a JSON-shaped record into a validated `MarketplaceCanonicalTaskInput`.
+ * Used at link read time so we can recompute the canonical task hash from the
+ * persisted task material rather than trusting `attestation.canonicalTaskHash`
+ * to compare against itself.
+ */
+export function parseMarketplaceCanonicalTaskInput(
+  input: unknown,
+): MarketplaceCanonicalTaskInput {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("canonicalTaskInput must be a JSON object");
+  }
+  assertPlainObject(input, "canonicalTaskInput");
+  const record = input as Record<string, unknown>;
+  const candidate: MarketplaceCanonicalTaskInput = {
+    environment: requireLiteral(
+      record.environment,
+      VERIFIED_TASK_ENVIRONMENT,
+      "canonicalTaskInput.environment",
+    ),
+    creatorWallet: requireString(
+      record.creatorWallet,
+      "canonicalTaskInput.creatorWallet",
+      128,
+    ),
+    creatorAgentPda: requireString(
+      record.creatorAgentPda,
+      "canonicalTaskInput.creatorAgentPda",
+      128,
+    ),
+    taskDescription: requireString(
+      record.taskDescription,
+      "canonicalTaskInput.taskDescription",
+      512,
+    ),
+    rewardLamports: requireString(
+      record.rewardLamports,
+      "canonicalTaskInput.rewardLamports",
+      64,
+    ),
+    requiredCapabilities: requireString(
+      record.requiredCapabilities,
+      "canonicalTaskInput.requiredCapabilities",
+      64,
+    ),
+    rewardMint:
+      record.rewardMint === null || record.rewardMint === undefined
+        ? null
+        : requireString(record.rewardMint, "canonicalTaskInput.rewardMint", 128),
+    maxWorkers: requireSafeInteger(
+      record.maxWorkers,
+      "canonicalTaskInput.maxWorkers",
+    ),
+    deadline: requireSafeInteger(
+      record.deadline,
+      "canonicalTaskInput.deadline",
+    ),
+    taskType: requireSafeInteger(
+      record.taskType,
+      "canonicalTaskInput.taskType",
+    ),
+    minReputation: requireSafeInteger(
+      record.minReputation,
+      "canonicalTaskInput.minReputation",
+    ),
+    constraintHash:
+      record.constraintHash === null || record.constraintHash === undefined
+        ? null
+        : requireHash(
+            record.constraintHash,
+            "canonicalTaskInput.constraintHash",
+          ),
+    validationMode: ((): "auto" | "creator-review" => {
+      if (record.validationMode === "auto" || record.validationMode === "creator-review") {
+        return record.validationMode;
+      }
+      throw new Error(
+        'canonicalTaskInput.validationMode must be "auto" or "creator-review"',
+      );
+    })(),
+    reviewWindowSecs:
+      record.reviewWindowSecs === null || record.reviewWindowSecs === undefined
+        ? null
+        : requireSafeInteger(
+            record.reviewWindowSecs,
+            "canonicalTaskInput.reviewWindowSecs",
+          ),
+    jobSpecHash: requireHash(
+      record.jobSpecHash,
+      "canonicalTaskInput.jobSpecHash",
+    ),
+  };
+  // Re-run the structural assertions (e.g. unsigned-decimal-string) to catch
+  // anything that requireString accepted but the canonical builder rejects.
+  return buildCanonicalMarketplaceTaskPayload(candidate);
+}
+
 export function unsignedVerifiedTaskAttestation(
   attestation: VerifiedTaskAttestation,
 ): VerifiedTaskUnsignedAttestation {
@@ -934,6 +1031,14 @@ function assertSafeInteger(value: number, field: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${field} must be a non-negative safe integer`);
   }
+}
+
+function requireSafeInteger(value: unknown, field: string): number {
+  if (typeof value !== "number") {
+    throw new Error(`${field} must be a number`);
+  }
+  assertSafeInteger(value, field);
+  return value;
 }
 
 function requireHash(value: unknown, field: string): string {
