@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  parseVerifiedTaskMetadata,
+  type VerifiedTaskMetadata,
+} from "./verified-task-attestation.js";
 
 export type MarketplaceJobSpecJsonPrimitive = string | number | boolean | null;
 export type MarketplaceJobSpecJsonObject = {
@@ -123,6 +127,7 @@ export interface MarketplaceJobSpecTaskLinkInput {
   readonly taskPda: string;
   readonly taskId: string;
   readonly transactionSignature: string;
+  readonly verifiedTask?: VerifiedTaskMetadata | null;
 }
 
 export interface MarketplaceJobSpecTaskLink {
@@ -133,6 +138,7 @@ export interface MarketplaceJobSpecTaskLink {
   readonly jobSpecHash: string;
   readonly jobSpecUri: string;
   readonly transactionSignature: string;
+  readonly verifiedTask?: VerifiedTaskMetadata | null;
 }
 
 export interface MarketplaceJobSpecReference {
@@ -157,6 +163,7 @@ export interface ResolvedMarketplaceJobSpec {
   readonly jobSpecPath: string;
   readonly jobSpecTaskLinkPath: string;
   readonly transactionSignature: string;
+  readonly verifiedTask?: VerifiedTaskMetadata | null;
   readonly integrity: MarketplaceJobSpecEnvelope["integrity"];
   readonly envelope: MarketplaceJobSpecEnvelope;
   readonly payload: MarketplaceJobSpecPayload;
@@ -170,6 +177,7 @@ export interface MarketplaceJobSpecTaskPointer {
   readonly jobSpecUri: string;
   readonly jobSpecTaskLinkPath: string;
   readonly transactionSignature: string;
+  readonly verifiedTask?: VerifiedTaskMetadata | null;
   readonly link: MarketplaceJobSpecTaskLink;
 }
 
@@ -253,6 +261,9 @@ export async function linkMarketplaceJobSpecToTask(
       "transactionSignature",
       256,
     ),
+    ...(input.verifiedTask
+      ? { verifiedTask: parseVerifiedTaskMetadata(input.verifiedTask) }
+      : {}),
   };
   const rootDir = options.rootDir ?? getDefaultMarketplaceJobSpecStoreDir();
   const linksDir = join(rootDir, "task-links");
@@ -294,6 +305,7 @@ export async function readMarketplaceJobSpecPointerForTask(
     jobSpecUri: link.jobSpecUri,
     jobSpecTaskLinkPath,
     transactionSignature: link.transactionSignature,
+    verifiedTask: link.verifiedTask ?? null,
     link,
   };
 }
@@ -377,6 +389,7 @@ export async function resolveMarketplaceJobSpecForTask(
     jobSpecPath: resolved.jobSpecPath,
     jobSpecTaskLinkPath,
     transactionSignature: link.transactionSignature,
+    verifiedTask: link.verifiedTask ?? null,
     integrity: resolved.integrity,
     envelope: resolved.envelope,
     payload: resolved.payload,
@@ -737,6 +750,9 @@ async function readMarketplaceJobSpecTaskLink(
       "transactionSignature",
       256,
     ),
+    ...(candidate.verifiedTask
+      ? { verifiedTask: parseVerifiedTaskMetadata(candidate.verifiedTask) }
+      : {}),
   };
 }
 

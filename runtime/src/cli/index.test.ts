@@ -829,6 +829,14 @@ describe("runtime root CLI", () => {
         "creator-review",
         "--review-window-secs",
         "120",
+        "--job-spec-uri",
+        "agenc://job-spec/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--verified-attestation",
+        "/tmp/agenc-attestation.json",
+        "--verified-task-issuer-keys",
+        '{"storefront-devnet-1":"11111111111111111111111111111111"}',
+        "--verified-task-replay-store-dir",
+        "/tmp/agenc-verified-task-replay",
       ],
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -844,6 +852,12 @@ describe("runtime root CLI", () => {
         requiredCapabilities: "1",
         validationMode: "creator-review",
         reviewWindowSecs: 120,
+        jobSpecUri:
+          "agenc://job-spec/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        verifiedAttestation: "/tmp/agenc-attestation.json",
+        verifiedTaskIssuerKeys:
+          '{"storefront-devnet-1":"11111111111111111111111111111111"}',
+        verifiedTaskReplayStoreDir: "/tmp/agenc-verified-task-replay",
       }),
     );
   });

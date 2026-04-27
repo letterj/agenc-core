@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -9,6 +9,14 @@ import {
   createGetApprovedTaskTemplateTool,
   createListApprovedTaskTemplatesTool,
 } from "./tools.js";
+import { signAgentMessage } from "../../social/crypto.js";
+import { persistMarketplaceJobSpec, readMarketplaceJobSpecPointerForTask } from "../../marketplace/job-spec-store.js";
+import {
+  canonicalJson,
+  computeCanonicalMarketplaceTaskHash,
+  type MarketplaceCanonicalTaskInput,
+  type VerifiedTaskAttestation,
+} from "../../marketplace/verified-task-attestation.js";
 
 function createLogger() {
   return {
@@ -67,6 +75,20 @@ function createMockTaskCreateProgram(jobSpecPublishError: Error) {
     createTaskAccountsPartial,
     setTaskJobSpec,
     setTaskJobSpecAccountsPartial,
+  };
+}
+
+function signVerifiedTaskAttestation(
+  keypair: Keypair,
+  unsigned: Omit<VerifiedTaskAttestation, "signature">,
+): VerifiedTaskAttestation {
+  const signature = signAgentMessage(
+    keypair,
+    new TextEncoder().encode(canonicalJson(unsigned)),
+  );
+  return {
+    ...unsigned,
+    signature: Buffer.from(signature).toString("hex"),
   };
 }
 
@@ -144,6 +166,127 @@ describe("agenc task template tools", () => {
         creator,
       }),
     );
+  });
+
+  it("accepts a valid verified storefront attestation and persists verified task metadata", async () => {
+    const jobSpecStoreDir = await mkdtemp(
+      join(tmpdir(), "agenc-create-task-verified-job-spec-"),
+    );
+    const replayStoreDir = await mkdtemp(
+      join(tmpdir(), "agenc-create-task-verified-replay-"),
+    );
+    const unsupportedInstructionError = new Error(
+      "InstructionFallbackNotFound\nFallback functions are not supported.",
+    );
+    const {
+      program,
+      creator,
+      creatorAgentPda,
+    } = createMockTaskCreateProgram(unsupportedInstructionError);
+    const issuer = Keypair.generate();
+    const deadline = 4_102_444_800;
+    const jobSpec = {
+      fullDescription: "Exercise verified storefront task attestation.",
+    };
+    const stored = await persistMarketplaceJobSpec(
+      {
+        description: "Verified devnet task",
+        jobSpec,
+        context: {
+          rewardLamports: "1",
+          requiredCapabilities: "1",
+          templateAudit: null,
+          rewardMint: null,
+          maxWorkers: 1,
+          deadline,
+          taskType: 0,
+          minReputation: 0,
+          validationMode: "auto",
+          reviewWindowSecs: null,
+          creatorAgentPda: creatorAgentPda.toBase58(),
+        },
+      },
+      { rootDir: jobSpecStoreDir },
+    );
+    const canonicalTask: MarketplaceCanonicalTaskInput = {
+      environment: "devnet",
+      creatorWallet: creator.toBase58(),
+      creatorAgentPda: creatorAgentPda.toBase58(),
+      taskDescription: "Verified devnet task",
+      rewardLamports: "1",
+      requiredCapabilities: "1",
+      rewardMint: null,
+      maxWorkers: 1,
+      deadline,
+      taskType: 0,
+      minReputation: 0,
+      constraintHash: null,
+      validationMode: "auto",
+      reviewWindowSecs: null,
+      jobSpecHash: stored.hash,
+    };
+    const attestation = signVerifiedTaskAttestation(issuer, {
+      kind: "agenc.marketplace.verifiedTaskAttestation",
+      schemaVersion: 1,
+      environment: "devnet",
+      issuer: "agenc-services-storefront",
+      issuerKeyId: "storefront-devnet-1",
+      orderId: "order-verified-1",
+      serviceTemplateId: "runtime-smoke-test",
+      jobSpecHash: stored.hash,
+      canonicalTaskHash: computeCanonicalMarketplaceTaskHash(canonicalTask),
+      buyerWallet: creator.toBase58(),
+      nonce: "verified-nonce-1",
+      issuedAt: "2026-04-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    const tool = createCreateTaskTool(program as never, createLogger() as never, {
+      allowRawTaskCreation: true,
+      jobSpecStoreDir,
+      verifiedTaskReplayStoreDir: replayStoreDir,
+      verifiedTaskIssuerKeys: {
+        "storefront-devnet-1": issuer.publicKey.toBase58(),
+      },
+    });
+
+    const result = await tool.execute({
+      taskDescription: "Verified devnet task",
+      reward: "1",
+      requiredCapabilities: "1",
+      deadline,
+      taskId: "22".repeat(32),
+      jobSpec,
+      verifiedAttestation: attestation,
+    });
+    const payload = JSON.parse(result.content);
+
+    expect(result.isError).toBeUndefined();
+    expect(payload.verifiedStatus).toBe("verified");
+    expect(payload.verifiedIssuerKeyId).toBe("storefront-devnet-1");
+    expect(payload.verifiedTaskHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(payload.verifiedTaskUri).toBe(
+      `agenc://verified-task/devnet/${payload.verifiedTaskHash}`,
+    );
+    expect(payload.verifiedTask).toMatchObject({
+      status: "verified",
+      issuer: "agenc-services-storefront",
+      issuerKeyId: "storefront-devnet-1",
+      orderId: "order-verified-1",
+      serviceTemplateId: "runtime-smoke-test",
+      jobSpecHash: stored.hash,
+      taskPda: payload.taskPda,
+      taskId: "22".repeat(32),
+      transactionSignature: "create-task-tx",
+    });
+
+    const pointer = await readMarketplaceJobSpecPointerForTask(payload.taskPda, {
+      rootDir: jobSpecStoreDir,
+    });
+    expect(pointer?.verifiedTask).toMatchObject({
+      verifiedTaskHash: payload.verifiedTaskHash,
+      verifiedTaskUri: payload.verifiedTaskUri,
+      status: "verified",
+    });
   });
 
   it("uses taskDescription (not description) as the input schema property name", () => {

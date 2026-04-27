@@ -1239,6 +1239,9 @@ async function handleTasksCreate(
       'deliverables',
       'constraints',
       'attachments',
+      'jobSpecUri',
+      'jobSpecPublishUri',
+      'verifiedAttestation',
     ]) {
       if (taskParams[field] !== undefined) {
         createArgs[field] = taskParams[field];
@@ -1256,19 +1259,23 @@ async function handleTasksCreate(
     let createdTaskPda: string | undefined;
     let createdJobSpecHash: string | undefined;
     let createdJobSpecUri: string | undefined;
+    let createdVerifiedTask: unknown;
     try {
       const createdPayload = JSON.parse(result.content) as {
         taskPda?: string;
         jobSpecHash?: string | null;
         jobSpecUri?: string | null;
+        verifiedTask?: unknown;
       };
       createdTaskPda = createdPayload.taskPda;
       createdJobSpecHash = createdPayload.jobSpecHash ?? undefined;
       createdJobSpecUri = createdPayload.jobSpecUri ?? undefined;
+      createdVerifiedTask = createdPayload.verifiedTask;
     } catch {
       createdTaskPda = undefined;
       createdJobSpecHash = undefined;
       createdJobSpecUri = undefined;
+      createdVerifiedTask = undefined;
     }
 
     // Auto-refresh task list after creation
@@ -1278,6 +1285,7 @@ async function handleTasksCreate(
       description: descStr,
       jobSpecHash: createdJobSpecHash,
       jobSpecUri: createdJobSpecUri,
+      verifiedTask: createdVerifiedTask,
     });
   } catch (err) {
     send({ type: 'error', error: `Failed to create task: ${(err as Error).message}`, id });

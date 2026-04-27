@@ -10,6 +10,33 @@
 /**
  * JSON-safe representation of verified task marketplace metadata.
  */
+export interface SerializedVerifiedTaskMetadata {
+  kind: "agenc.marketplace.verifiedTask";
+  schemaVersion: 1;
+  status: "verified";
+  environment: "devnet";
+  issuer: "agenc-services-storefront";
+  issuerKeyId: string;
+  orderId: string;
+  serviceTemplateId: string;
+  jobSpecHash: string;
+  canonicalTaskHash: string;
+  verifiedTaskHash: string;
+  verifiedTaskUri: string;
+  nonce: string;
+  issuedAt: string;
+  expiresAt: string;
+  buyerWallet?: string;
+  paymentSignaturePresent: boolean;
+  acceptedAt?: string;
+  taskPda?: string;
+  taskId?: string;
+  transactionSignature?: string | null;
+}
+
+/**
+ * JSON-safe representation of verified job-spec/task metadata.
+ */
 export interface SerializedTaskJobSpec {
   source: "on-chain" | "local-task-link";
   taskJobSpecPda?: string | null;
@@ -20,6 +47,7 @@ export interface SerializedTaskJobSpec {
   updatedAt?: number;
   verified: boolean;
   error?: string;
+  verifiedTask?: SerializedVerifiedTaskMetadata | null;
   jobSpecPath?: string | null;
   jobSpecTaskLinkPath?: string | null;
   transactionSignature?: string | null;

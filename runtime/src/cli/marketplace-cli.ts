@@ -36,6 +36,10 @@ import {
   type ResolvedOnChainTaskJobSpec,
 } from "../marketplace/task-job-spec.js";
 import {
+  parseVerifiedTaskIssuerKeys,
+  type VerifiedTaskMetadata,
+} from "../marketplace/verified-task-attestation.js";
+import {
   buildMarketplaceInspectOverview,
   buildMarketplaceInspectSurface,
   buildMarketplaceReputationInspectPlaceholder,
@@ -86,7 +90,11 @@ export interface MarketTaskCreateOptions extends BaseCliOptions {
   reviewWindowSecs?: number;
   creatorAgentPda?: string;
   jobSpec?: unknown;
+  jobSpecUri?: string;
   jobSpecPublishUri?: string;
+  verifiedAttestation?: string;
+  verifiedTaskIssuerKeys?: string;
+  verifiedTaskReplayStoreDir?: string;
   fullDescription?: string;
   acceptanceCriteria?: string[];
   deliverables?: string[];
@@ -495,6 +503,7 @@ type SerializedJobSpecPointer =
       jobSpecUri: string;
       jobSpecTaskLinkPath: string;
       transactionSignature: string;
+      verifiedTask: VerifiedTaskMetadata | null;
     }
   | { available: false; error?: string };
 
@@ -505,6 +514,7 @@ type SerializedResolvedJobSpec = {
   jobSpecPath: string;
   jobSpecTaskLinkPath: string | null;
   transactionSignature: string | null;
+  verifiedTask: VerifiedTaskMetadata | null;
   integrity: ResolvedMarketplaceJobSpec["integrity"];
   payload: ResolvedMarketplaceJobSpec["payload"];
 };
@@ -528,6 +538,7 @@ function serializeJobSpecPointer(
     jobSpecUri: pointer.jobSpecUri,
     jobSpecTaskLinkPath: pointer.jobSpecTaskLinkPath,
     transactionSignature: pointer.transactionSignature,
+    verifiedTask: pointer.verifiedTask ?? null,
   };
 }
 
@@ -541,6 +552,7 @@ function serializeResolvedJobSpec(
     jobSpecPath: spec.jobSpecPath,
     jobSpecTaskLinkPath: spec.jobSpecTaskLinkPath,
     transactionSignature: spec.transactionSignature,
+    verifiedTask: spec.verifiedTask ?? null,
     integrity: spec.integrity,
     payload: spec.payload,
   };
@@ -557,6 +569,7 @@ function serializeResolvedOnChainJobSpec(
     jobSpecPath: spec.jobSpecPath,
     jobSpecTaskLinkPath: localPointer?.jobSpecTaskLinkPath ?? null,
     transactionSignature: localPointer?.transactionSignature ?? null,
+    verifiedTask: localPointer?.verifiedTask ?? null,
     integrity: spec.integrity,
     payload: spec.payload,
   };
@@ -1093,6 +1106,17 @@ export async function runMarketTaskCreateCommand(
     const { program } = await createSignerProgramContext(options);
     const createTaskOptions = {
       ...(options.jobSpecStoreDir ? { jobSpecStoreDir: options.jobSpecStoreDir } : {}),
+      ...(options.verifiedTaskReplayStoreDir
+        ? { verifiedTaskReplayStoreDir: options.verifiedTaskReplayStoreDir }
+        : {}),
+      ...(options.verifiedTaskIssuerKeys
+        ? {
+            verifiedTaskIssuerKeys: parseVerifiedTaskIssuerKeys(
+              options.verifiedTaskIssuerKeys,
+              "verified-task-issuer-keys",
+            ),
+          }
+        : {}),
       allowRawTaskCreation: true,
     };
     const tool = createCreateTaskTool(program, silentLogger, createTaskOptions);
@@ -1110,7 +1134,9 @@ export async function runMarketTaskCreateCommand(
       reviewWindowSecs: options.reviewWindowSecs,
       creatorAgentPda: options.creatorAgentPda,
       jobSpec: options.jobSpec,
+      jobSpecUri: options.jobSpecUri,
       jobSpecPublishUri: options.jobSpecPublishUri,
+      verifiedAttestation: options.verifiedAttestation,
       fullDescription: options.fullDescription,
       acceptanceCriteria: options.acceptanceCriteria,
       deliverables: options.deliverables,
