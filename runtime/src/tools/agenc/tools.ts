@@ -96,17 +96,20 @@ import {
   setTaskJobSpecPointer,
 } from '../../marketplace/task-job-spec.js';
 import {
+  beginVerifiedTaskAttestationReplay,
   buildVerifiedTaskMetadata,
   computeCanonicalMarketplaceTaskHash,
+  finalizeVerifiedTaskAttestationReplay,
   loadVerifiedTaskIssuerKeysFromEnv,
   readVerifiedTaskAttestationInput,
-  reserveVerifiedTaskAttestationReplay,
+  releaseVerifiedTaskAttestationReplay,
   verifyVerifiedTaskAttestation,
   type MarketplaceCanonicalTaskInput,
   type VerifiedTaskAttestation,
   type VerifiedTaskAttestationVerificationResult,
   type VerifiedTaskIssuerKeyring,
   type VerifiedTaskMetadata,
+  type VerifiedTaskReplayReservation,
 } from '../../marketplace/verified-task-attestation.js';
 import {
   lamportsToSol,
@@ -159,6 +162,13 @@ export interface CreateTaskToolOptions {
   readonly allowRawTaskCreation?: boolean;
   readonly verifiedTaskIssuerKeys?: VerifiedTaskIssuerKeyring;
   readonly verifiedTaskReplayStoreDir?: string;
+  /**
+   * Allow `verifiedAttestation` strings to be interpreted as a local filesystem
+   * path. Must only be enabled for trusted local entry points (e.g. CLI). Remote
+   * channels (webchat, HTTP API) must leave this disabled to avoid letting
+   * untrusted callers ask the runtime to read arbitrary local files.
+   */
+  readonly allowVerifiedAttestationFilePath?: boolean;
 }
 
 export interface TaskTemplateToolOptions extends CreateTaskToolOptions {
@@ -173,6 +183,7 @@ export interface TaskJobSpecQueryToolOptions {
   readonly program?: Program<AgencCoordination>;
   readonly jobSpecStoreDir?: string;
   readonly allowRemoteJobSpecResolution?: boolean;
+  readonly verifiedTaskIssuerKeys?: VerifiedTaskIssuerKeyring;
 }
 
 const KNOWN_MINTS: Record<string, { symbol: string; decimals: number }> = {
@@ -554,11 +565,25 @@ function shouldRetryLegacyCreateTask(err: unknown): boolean {
 function getJobSpecStoreOptions(
   rootDir?: string,
   allowRemoteJobSpecResolution = false,
-): { rootDir?: string; allowRemote?: boolean } | undefined {
-  if (!rootDir && !allowRemoteJobSpecResolution) return undefined;
+  verifiedTaskIssuerKeys?: VerifiedTaskIssuerKeyring,
+): {
+  rootDir?: string;
+  allowRemote?: boolean;
+  verifiedTaskIssuerKeys?: VerifiedTaskIssuerKeyring;
+} | undefined {
+  // Always include issuer keys when available so on-disk verifiedTask metadata
+  // can be re-verified at read time. Otherwise the task link's verifiedTask
+  // is reported as null (treated as untrusted).
+  const issuerKeys =
+    verifiedTaskIssuerKeys ?? loadVerifiedTaskIssuerKeysFromEnv();
+  const hasIssuerKeys = Object.keys(issuerKeys).length > 0;
+  if (!rootDir && !allowRemoteJobSpecResolution && !hasIssuerKeys) {
+    return undefined;
+  }
   return {
     ...(rootDir ? { rootDir } : {}),
     ...(allowRemoteJobSpecResolution ? { allowRemote: true } : {}),
+    ...(hasIssuerKeys ? { verifiedTaskIssuerKeys: issuerKeys } : {}),
   };
 }
 
@@ -672,6 +697,7 @@ async function buildTaskJobSpecView(
   const storeOptions = getJobSpecStoreOptions(
     options.jobSpecStoreDir,
     options.allowRemoteJobSpecResolution,
+    options.verifiedTaskIssuerKeys,
   );
   let localPointer: Awaited<ReturnType<typeof readMarketplaceJobSpecPointerForTask>> = null;
   let localPointerError: unknown = null;
@@ -762,6 +788,7 @@ async function resolveTaskJobSpecPayloadOrThrow(
   const storeOptions = getJobSpecStoreOptions(
     options.jobSpecStoreDir,
     options.allowRemoteJobSpecResolution,
+    options.verifiedTaskIssuerKeys,
   );
   const taskAddress = taskPda.toBase58();
   const localPointer = await readMarketplaceJobSpecPointerForTask(
@@ -2915,6 +2942,7 @@ export function createCreateTaskTool(
         try {
           verifiedAttestation = await readVerifiedTaskAttestationInput(
             args.verifiedAttestation,
+            { allowFilePath: options.allowVerifiedAttestationFilePath === true },
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -3048,23 +3076,25 @@ export function createCreateTaskTool(
           creator,
         );
 
+        let verifiedTaskReplayReservation: VerifiedTaskReplayReservation | null = null;
+        let verifiedTaskAcceptedAt: string | null = null;
         if (verifiedTaskVerification) {
-          const acceptedAt = new Date().toISOString();
+          verifiedTaskAcceptedAt = new Date().toISOString();
           verifiedTaskMetadata = buildVerifiedTaskMetadata(
             verifiedTaskVerification,
             {
-              acceptedAt,
+              acceptedAt: verifiedTaskAcceptedAt,
               taskPda: taskPda.toBase58(),
               taskId: bytesToHex(taskId),
               transactionSignature: null,
             },
           );
           try {
-            await reserveVerifiedTaskAttestationReplay(
+            verifiedTaskReplayReservation = await beginVerifiedTaskAttestationReplay(
               verifiedTaskVerification,
               {
                 rootDir: options.verifiedTaskReplayStoreDir,
-                acceptedAt,
+                acceptedAt: verifiedTaskAcceptedAt,
                 taskPda: taskPda.toBase58(),
                 taskId: bytesToHex(taskId),
                 transactionSignature: null,
@@ -3110,26 +3140,57 @@ export function createCreateTaskTool(
 
         let txSignature: string;
         try {
-          txSignature = await executeCreateTask(program);
-        } catch (error) {
-          if (!shouldRetryLegacyCreateTask(error)) {
-            throw error;
+          try {
+            txSignature = await executeCreateTask(program);
+          } catch (error) {
+            if (!shouldRetryLegacyCreateTask(error)) {
+              throw error;
+            }
+            logger.warn(
+              'Retrying task creation with legacy devnet create_task account layout compatibility',
+            );
+            const legacyProgram = createProgram(
+              program.provider as AnchorProvider,
+              program.programId,
+              'legacyCreateTask',
+            );
+            txSignature = await executeCreateTask(legacyProgram, 'legacyCreateTask');
           }
-          logger.warn(
-            'Retrying task creation with legacy devnet create_task account layout compatibility',
-          );
-          const legacyProgram = createProgram(
-            program.provider as AnchorProvider,
-            program.programId,
-            'legacyCreateTask',
-          );
-          txSignature = await executeCreateTask(legacyProgram, 'legacyCreateTask');
+        } catch (error) {
+          if (verifiedTaskReplayReservation) {
+            try {
+              await releaseVerifiedTaskAttestationReplay(verifiedTaskReplayReservation);
+            } catch (releaseError) {
+              logger.warn(
+                `Failed to release verified task replay reservation after create_task failure: ${
+                  releaseError instanceof Error ? releaseError.message : String(releaseError)
+                }`,
+              );
+            }
+          }
+          throw error;
         }
-        if (verifiedTaskVerification && verifiedTaskMetadata) {
+        if (verifiedTaskVerification && verifiedTaskReplayReservation) {
+          try {
+            await finalizeVerifiedTaskAttestationReplay(
+              verifiedTaskReplayReservation,
+              {
+                acceptedAt: verifiedTaskAcceptedAt ?? undefined,
+                taskPda: taskPda.toBase58(),
+                taskId: bytesToHex(taskId),
+                transactionSignature: txSignature,
+              },
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return errorResult(
+              `Task was created at ${taskPda.toBase58()} (tx ${txSignature}) but verified task replay finalization failed: ${message}`,
+            );
+          }
           verifiedTaskMetadata = buildVerifiedTaskMetadata(
             verifiedTaskVerification,
             {
-              acceptedAt: verifiedTaskMetadata.acceptedAt,
+              acceptedAt: verifiedTaskAcceptedAt ?? undefined,
               taskPda: taskPda.toBase58(),
               taskId: bytesToHex(taskId),
               transactionSignature: txSignature,
@@ -3212,7 +3273,8 @@ export function createCreateTaskTool(
                 taskPda: taskPda.toBase58(),
                 taskId: bytesToHex(taskId),
                 transactionSignature: jobSpecTransactionSignature ?? txSignature,
-                verifiedTask: verifiedTaskMetadata,
+                verifiedTaskAttestation: verifiedTaskVerification?.attestation ?? null,
+                verifiedTaskAcceptedAt: verifiedTaskAcceptedAt,
               },
               options.jobSpecStoreDir
                 ? { rootDir: options.jobSpecStoreDir }

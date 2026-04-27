@@ -1,13 +1,15 @@
 import { Keypair } from "@solana/web3.js";
-import { mkdtemp } from "node:fs/promises";
+import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { signAgentMessage } from "../social/crypto.js";
 import {
+  beginVerifiedTaskAttestationReplay,
   canonicalJson,
   computeCanonicalMarketplaceTaskHash,
-  reserveVerifiedTaskAttestationReplay,
+  finalizeVerifiedTaskAttestationReplay,
+  releaseVerifiedTaskAttestationReplay,
   unsignedVerifiedTaskAttestation,
   verifyVerifiedTaskAttestation,
   type MarketplaceCanonicalTaskInput,
@@ -160,7 +162,7 @@ describe("verified task attestations", () => {
     ).rejects.toThrow(/unknown verified task issuerKeyId/);
   });
 
-  it("rejects replayed verified task hashes and nonces", async () => {
+  it("rejects replayed verified task hashes and nonces after a finalized reservation", async () => {
     const keypair = Keypair.generate();
     const canonicalTask = baseCanonicalTaskInput();
     const issuerKeys = { "storefront-devnet-1": keypair.publicKey.toBase58() };
@@ -178,18 +180,23 @@ describe("verified task attestations", () => {
       },
     );
 
-    await reserveVerifiedTaskAttestationReplay(verification, {
+    const reservation = await beginVerifiedTaskAttestationReplay(verification, {
       rootDir: replayStoreDir,
       taskPda: Keypair.generate().publicKey.toBase58(),
       taskId: "1".repeat(64),
     });
+    await finalizeVerifiedTaskAttestationReplay(reservation, {
+      taskPda: reservation.verification.attestation.buyerWallet ?? "",
+      taskId: "1".repeat(64),
+      transactionSignature: "tx-signature-1",
+    });
     await expect(
-      reserveVerifiedTaskAttestationReplay(verification, {
+      beginVerifiedTaskAttestationReplay(verification, {
         rootDir: replayStoreDir,
         taskPda: Keypair.generate().publicKey.toBase58(),
         taskId: "2".repeat(64),
       }),
-    ).rejects.toThrow(/verifiedTaskHash/);
+    ).rejects.toThrow(/verifiedTaskHash|nonce/);
 
     const sameNonceDifferentHash = await verifyVerifiedTaskAttestation(
       createSignedAttestation(keypair, canonicalTask, {
@@ -205,11 +212,69 @@ describe("verified task attestations", () => {
       },
     );
     await expect(
-      reserveVerifiedTaskAttestationReplay(sameNonceDifferentHash, {
+      beginVerifiedTaskAttestationReplay(sameNonceDifferentHash, {
         rootDir: replayStoreDir,
         taskPda: Keypair.generate().publicKey.toBase58(),
         taskId: "3".repeat(64),
       }),
     ).rejects.toThrow(/nonce/);
+  });
+
+  it("does not consume a nonce if the on-chain create fails (release rolls back the pending reservation)", async () => {
+    const keypair = Keypair.generate();
+    const canonicalTask = baseCanonicalTaskInput();
+    const issuerKeys = { "storefront-devnet-1": keypair.publicKey.toBase58() };
+    const replayStoreDir = await mkdtemp(
+      join(tmpdir(), "agenc-verified-task-replay-"),
+    );
+    const verification = await verifyVerifiedTaskAttestation(
+      createSignedAttestation(keypair, canonicalTask),
+      {
+        issuerKeys,
+        expectedJobSpecHash: canonicalTask.jobSpecHash,
+        expectedCanonicalTaskHash: computeCanonicalMarketplaceTaskHash(canonicalTask),
+        expectedBuyerWallet: canonicalTask.creatorWallet,
+        now: new Date("2026-04-02T00:00:00.000Z"),
+      },
+    );
+
+    const reservation = await beginVerifiedTaskAttestationReplay(verification, {
+      rootDir: replayStoreDir,
+      taskPda: Keypair.generate().publicKey.toBase58(),
+      taskId: "1".repeat(64),
+    });
+
+    // While the reservation is pending, a concurrent attempt is rejected — but
+    // releasing it lets the next attempt succeed (the simulated retry path).
+    await expect(
+      beginVerifiedTaskAttestationReplay(verification, {
+        rootDir: replayStoreDir,
+        taskPda: Keypair.generate().publicKey.toBase58(),
+        taskId: "2".repeat(64),
+      }),
+    ).rejects.toThrow(/in flight/);
+
+    await releaseVerifiedTaskAttestationReplay(reservation);
+    await expect(access(reservation.hashMarkerPath)).rejects.toThrow();
+    await expect(access(reservation.nonceMarkerPath)).rejects.toThrow();
+
+    const retryReservation = await beginVerifiedTaskAttestationReplay(
+      verification,
+      {
+        rootDir: replayStoreDir,
+        taskPda: Keypair.generate().publicKey.toBase58(),
+        taskId: "1".repeat(64),
+      },
+    );
+    await finalizeVerifiedTaskAttestationReplay(retryReservation, {
+      taskPda: "11111111111111111111111111111111",
+      taskId: "1".repeat(64),
+      transactionSignature: "retry-tx",
+    });
+    const finalNonce = JSON.parse(
+      await readFile(retryReservation.nonceMarkerPath, "utf8"),
+    );
+    expect(finalNonce.state).toBe("consumed");
+    expect(finalNonce.verifiedTask.transactionSignature).toBe("retry-tx");
   });
 });

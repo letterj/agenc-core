@@ -1,5 +1,5 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { PublicKey } from "@solana/web3.js";
@@ -71,11 +71,16 @@ export interface VerifiedTaskMetadata {
   readonly transactionSignature?: string | null;
 }
 
+export type VerifiedTaskReplayMarkerState = "pending" | "consumed";
+
 export interface VerifiedTaskReplayMarker {
   readonly kind: typeof VERIFIED_TASK_REPLAY_MARKER_KIND;
   readonly schemaVersion: typeof VERIFIED_TASK_SCHEMA_VERSION;
   readonly markerType: "nonce" | "verifiedTaskHash";
-  readonly consumedAt: string;
+  readonly state: VerifiedTaskReplayMarkerState;
+  readonly reservedAt: string;
+  readonly consumedAt: string | null;
+  readonly attestationExpiresAt: string;
   readonly verifiedTask: VerifiedTaskMetadata;
 }
 
@@ -105,6 +110,13 @@ export interface VerifiedTaskAttestationVerificationOptions {
   readonly expectedCanonicalTaskHash: string;
   readonly expectedBuyerWallet?: string | null;
   readonly now?: Date;
+  /**
+   * Skip the `expiresAt` check. Use ONLY when re-verifying a previously
+   * accepted attestation at read time — the attestation's expiry is meant to
+   * bound the *acceptance* window, not the lifetime of the resulting verified
+   * record. Never skip expiry when accepting a new attestation.
+   */
+  readonly skipExpiry?: boolean;
 }
 
 export interface VerifiedTaskAttestationVerificationResult {
@@ -273,8 +285,20 @@ export function parseVerifiedTaskAttestation(
   return attestation;
 }
 
+export interface ReadVerifiedTaskAttestationInputOptions {
+  /**
+   * When true, a string input that is not JSON is treated as a path to a local
+   * file containing the attestation. This MUST only be enabled for trusted
+   * local entry points (e.g. CLI). Remote channels must leave this disabled to
+   * avoid letting untrusted callers ask the runtime to read arbitrary local
+   * files.
+   */
+  readonly allowFilePath?: boolean;
+}
+
 export async function readVerifiedTaskAttestationInput(
   input: unknown,
+  options: ReadVerifiedTaskAttestationInputOptions = {},
 ): Promise<VerifiedTaskAttestation | null> {
   if (input === undefined || input === null) return null;
   if (typeof input !== "string") return parseVerifiedTaskAttestation(input);
@@ -283,6 +307,11 @@ export async function readVerifiedTaskAttestationInput(
   if (trimmed.length === 0) return null;
   if (trimmed.startsWith("{")) {
     return parseVerifiedTaskAttestation(trimmed);
+  }
+  if (options.allowFilePath !== true) {
+    throw new Error(
+      "verifiedAttestation must be a JSON object or JSON string; filesystem paths are not allowed in this context",
+    );
   }
   const content = await readFile(trimmed, "utf8");
   return parseVerifiedTaskAttestation(content);
@@ -381,9 +410,11 @@ export async function verifyVerifiedTaskAttestation(
     );
   }
 
-  const nowMs = (options.now ?? new Date()).getTime();
-  if (Date.parse(attestation.expiresAt) <= nowMs) {
-    throw new Error("verified task attestation is expired");
+  if (options.skipExpiry !== true) {
+    const nowMs = (options.now ?? new Date()).getTime();
+    if (Date.parse(attestation.expiresAt) <= nowMs) {
+      throw new Error("verified task attestation is expired");
+    }
   }
 
   const unsignedAttestation = unsignedVerifiedTaskAttestation(attestation);
@@ -509,51 +540,113 @@ export function parseVerifiedTaskMetadata(input: unknown): VerifiedTaskMetadata 
   return metadata;
 }
 
-export async function reserveVerifiedTaskAttestationReplay(
-  verification: VerifiedTaskAttestationVerificationResult,
-  options: VerifiedTaskReplayStoreOptions & VerifiedTaskAcceptanceMetadata = {},
-): Promise<{
+export interface VerifiedTaskReplayReservation {
+  readonly verification: VerifiedTaskAttestationVerificationResult;
+  readonly rootDir: string;
   readonly hashMarkerPath: string;
   readonly nonceMarkerPath: string;
-}> {
+  readonly reservedAt: string;
+}
+
+export async function beginVerifiedTaskAttestationReplay(
+  verification: VerifiedTaskAttestationVerificationResult,
+  options: VerifiedTaskReplayStoreOptions & VerifiedTaskAcceptanceMetadata = {},
+): Promise<VerifiedTaskReplayReservation> {
   const rootDir = options.rootDir ?? getDefaultVerifiedTaskReplayStoreDir();
   const paths = replayMarkerPaths(rootDir, verification);
-  const metadata = buildVerifiedTaskMetadata(verification, options);
-  const consumedAt = options.acceptedAt ?? new Date().toISOString();
-
-  await ensureReplayMarkerMissing(paths.hashMarkerPath, "verifiedTaskHash");
-  await ensureReplayMarkerMissing(paths.nonceMarkerPath, "nonce");
-  await mkdir(join(rootDir, "hashes"), { recursive: true, mode: 0o700 });
-  await mkdir(join(rootDir, "nonces"), { recursive: true, mode: 0o700 });
-
-  const nonceMarker: VerifiedTaskReplayMarker = {
+  const reservedAt = options.acceptedAt ?? new Date().toISOString();
+  const pendingMetadata = buildVerifiedTaskMetadata(verification, {
+    ...options,
+    transactionSignature: null,
+  });
+  const pendingNonce: VerifiedTaskReplayMarker = {
     kind: VERIFIED_TASK_REPLAY_MARKER_KIND,
     schemaVersion: VERIFIED_TASK_SCHEMA_VERSION,
     markerType: "nonce",
-    consumedAt,
-    verifiedTask: metadata,
+    state: "pending",
+    reservedAt,
+    consumedAt: null,
+    attestationExpiresAt: verification.attestation.expiresAt,
+    verifiedTask: pendingMetadata,
   };
-  const hashMarker: VerifiedTaskReplayMarker = {
-    kind: VERIFIED_TASK_REPLAY_MARKER_KIND,
-    schemaVersion: VERIFIED_TASK_SCHEMA_VERSION,
+  const pendingHash: VerifiedTaskReplayMarker = {
+    ...pendingNonce,
     markerType: "verifiedTaskHash",
-    consumedAt,
-    verifiedTask: metadata,
   };
 
-  await writeReplayMarker(paths.nonceMarkerPath, nonceMarker);
+  await mkdir(join(rootDir, "hashes"), { recursive: true, mode: 0o700 });
+  await mkdir(join(rootDir, "nonces"), { recursive: true, mode: 0o700 });
+
+  await reserveReplayMarker(paths.nonceMarkerPath, pendingNonce, "nonce");
   try {
-    await writeReplayMarker(paths.hashMarkerPath, hashMarker);
+    await reserveReplayMarker(paths.hashMarkerPath, pendingHash, "verifiedTaskHash");
   } catch (error) {
-    if (isAlreadyExistsError(error)) {
-      throw new Error(
-        `verified task replay rejected: verifiedTaskHash ${verification.verifiedTaskHash} was already consumed`,
-      );
-    }
+    await unlinkIfPendingOwned(paths.nonceMarkerPath, reservedAt);
     throw error;
   }
 
-  return paths;
+  return {
+    verification,
+    rootDir,
+    hashMarkerPath: paths.hashMarkerPath,
+    nonceMarkerPath: paths.nonceMarkerPath,
+    reservedAt,
+  };
+}
+
+export async function finalizeVerifiedTaskAttestationReplay(
+  reservation: VerifiedTaskReplayReservation,
+  options: VerifiedTaskAcceptanceMetadata = {},
+): Promise<void> {
+  if (
+    options.transactionSignature === undefined ||
+    options.transactionSignature === null ||
+    options.transactionSignature.trim().length === 0
+  ) {
+    throw new Error(
+      "verified task replay finalization requires a non-empty transactionSignature",
+    );
+  }
+  const consumedAt = options.acceptedAt ?? new Date().toISOString();
+  const finalMetadata = buildVerifiedTaskMetadata(reservation.verification, {
+    ...options,
+    acceptedAt: options.acceptedAt ?? reservation.reservedAt,
+  });
+  const baseMarker = {
+    kind: VERIFIED_TASK_REPLAY_MARKER_KIND,
+    schemaVersion: VERIFIED_TASK_SCHEMA_VERSION,
+    state: "consumed",
+    reservedAt: reservation.reservedAt,
+    consumedAt,
+    attestationExpiresAt: reservation.verification.attestation.expiresAt,
+    verifiedTask: finalMetadata,
+  } as const;
+  const consumedNonce: VerifiedTaskReplayMarker = {
+    ...baseMarker,
+    markerType: "nonce",
+  };
+  const consumedHash: VerifiedTaskReplayMarker = {
+    ...baseMarker,
+    markerType: "verifiedTaskHash",
+  };
+
+  await replacePendingMarker(
+    reservation.nonceMarkerPath,
+    consumedNonce,
+    reservation.reservedAt,
+  );
+  await replacePendingMarker(
+    reservation.hashMarkerPath,
+    consumedHash,
+    reservation.reservedAt,
+  );
+}
+
+export async function releaseVerifiedTaskAttestationReplay(
+  reservation: VerifiedTaskReplayReservation,
+): Promise<void> {
+  await unlinkIfPendingOwned(reservation.hashMarkerPath, reservation.reservedAt);
+  await unlinkIfPendingOwned(reservation.nonceMarkerPath, reservation.reservedAt);
 }
 
 function replayMarkerPaths(
@@ -569,23 +662,149 @@ function replayMarkerPaths(
   };
 }
 
-async function ensureReplayMarkerMissing(path: string, label: string): Promise<void> {
+async function reserveReplayMarker(
+  path: string,
+  marker: VerifiedTaskReplayMarker,
+  label: "nonce" | "verifiedTaskHash",
+  now: Date = new Date(),
+): Promise<void> {
   try {
-    await access(path);
+    await writeReplayMarker(path, marker, "wx");
+    return;
+  } catch (error) {
+    if (!isAlreadyExistsError(error)) throw error;
+  }
+
+  const existing = await readReplayMarker(path);
+  if (existing.state === "consumed") {
+    throw new Error(
+      `verified task replay rejected: ${label} was already consumed`,
+    );
+  }
+  if (Date.parse(existing.attestationExpiresAt) > now.getTime()) {
+    throw new Error(
+      `verified task replay rejected: ${label} reservation is in flight`,
+    );
+  }
+  await writeReplayMarker(path, marker, "w");
+}
+
+async function replacePendingMarker(
+  path: string,
+  marker: VerifiedTaskReplayMarker,
+  expectedReservedAt: string,
+): Promise<void> {
+  let existing: VerifiedTaskReplayMarker;
+  try {
+    existing = await readReplayMarker(path);
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      throw new Error(
+        `verified task replay marker missing: ${marker.markerType}`,
+      );
+    }
+    throw error;
+  }
+  if (existing.state === "consumed") {
+    throw new Error(
+      `verified task replay finalize rejected: ${marker.markerType} was already consumed`,
+    );
+  }
+  if (existing.reservedAt !== expectedReservedAt) {
+    throw new Error(
+      `verified task replay finalize rejected: ${marker.markerType} reservation does not match`,
+    );
+  }
+  const tempPath = `${path}.${Date.now()}.tmp`;
+  await writeFile(tempPath, `${canonicalJson(marker)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
+  await rename(tempPath, path);
+}
+
+async function unlinkIfPendingOwned(
+  path: string,
+  expectedReservedAt: string,
+): Promise<void> {
+  let existing: VerifiedTaskReplayMarker;
+  try {
+    existing = await readReplayMarker(path);
   } catch (error) {
     if (isNotFoundError(error)) return;
     throw error;
   }
-  throw new Error(`verified task replay rejected: ${label} was already consumed`);
+  if (existing.state !== "pending") return;
+  if (existing.reservedAt !== expectedReservedAt) return;
+  try {
+    await unlink(path);
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+  }
+}
+
+async function readReplayMarker(path: string): Promise<VerifiedTaskReplayMarker> {
+  const content = await readFile(path, "utf8");
+  const parsed = JSON.parse(content) as Record<string, unknown>;
+  return parseReplayMarker(parsed, path);
+}
+
+function parseReplayMarker(
+  candidate: Record<string, unknown>,
+  path: string,
+): VerifiedTaskReplayMarker {
+  if (candidate.kind !== VERIFIED_TASK_REPLAY_MARKER_KIND) {
+    throw new Error(`replay marker has invalid kind: ${path}`);
+  }
+  if (candidate.schemaVersion !== VERIFIED_TASK_SCHEMA_VERSION) {
+    throw new Error(`replay marker has unsupported schemaVersion: ${path}`);
+  }
+  const markerType = candidate.markerType;
+  if (markerType !== "nonce" && markerType !== "verifiedTaskHash") {
+    throw new Error(`replay marker has invalid markerType: ${path}`);
+  }
+  const state = candidate.state;
+  if (state !== "pending" && state !== "consumed") {
+    throw new Error(`replay marker has invalid state: ${path}`);
+  }
+  const reservedAt = requireIsoDateString(candidate.reservedAt, "reservedAt");
+  const attestationExpiresAt = requireIsoDateString(
+    candidate.attestationExpiresAt,
+    "attestationExpiresAt",
+  );
+  const consumedAt =
+    state === "consumed"
+      ? requireIsoDateString(candidate.consumedAt, "consumedAt")
+      : candidate.consumedAt === null || candidate.consumedAt === undefined
+        ? null
+        : (() => {
+            throw new Error(`replay marker has invalid consumedAt: ${path}`);
+          })();
+  const verifiedTask = parseVerifiedTaskMetadata(candidate.verifiedTask);
+  if (!verifiedTask) {
+    throw new Error(`replay marker has invalid verifiedTask: ${path}`);
+  }
+  return {
+    kind: VERIFIED_TASK_REPLAY_MARKER_KIND,
+    schemaVersion: VERIFIED_TASK_SCHEMA_VERSION,
+    markerType,
+    state,
+    reservedAt,
+    consumedAt,
+    attestationExpiresAt,
+    verifiedTask,
+  };
 }
 
 async function writeReplayMarker(
   path: string,
   marker: VerifiedTaskReplayMarker,
+  flag: "wx" | "w",
 ): Promise<void> {
   await writeFile(path, `${canonicalJson(marker)}\n`, {
     encoding: "utf8",
-    flag: "wx",
+    flag,
     mode: 0o600,
   });
 }

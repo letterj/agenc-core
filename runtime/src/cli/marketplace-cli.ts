@@ -36,6 +36,7 @@ import {
   type ResolvedOnChainTaskJobSpec,
 } from "../marketplace/task-job-spec.js";
 import {
+  loadVerifiedTaskIssuerKeysFromEnv,
   parseVerifiedTaskIssuerKeys,
   type VerifiedTaskMetadata,
 } from "../marketplace/verified-task-attestation.js";
@@ -523,9 +524,15 @@ function getJobSpecStoreOptions(
   rootDir?: string,
   allowRemoteJobSpecResolution = false,
 ): MarketplaceJobSpecStoreOptions {
+  // CLI is a trusted local entry point; load issuer keys from the environment
+  // (or AGENC_VERIFIED_TASK_ISSUER_KEYS) so the on-disk task-link `verifiedTask`
+  // metadata is re-verified at read time before being surfaced to the user.
+  const issuerKeys = loadVerifiedTaskIssuerKeysFromEnv();
+  const hasIssuerKeys = Object.keys(issuerKeys).length > 0;
   return {
     ...(rootDir ? { rootDir } : {}),
     ...(allowRemoteJobSpecResolution ? { allowRemote: true } : {}),
+    ...(hasIssuerKeys ? { verifiedTaskIssuerKeys: issuerKeys } : {}),
   };
 }
 
@@ -1118,6 +1125,10 @@ export async function runMarketTaskCreateCommand(
           }
         : {}),
       allowRawTaskCreation: true,
+      // CLI is a trusted local entry point so accepting a path to a local
+      // attestation JSON file is OK here. Webchat/HTTP callers MUST NOT enable
+      // this — see CreateTaskToolOptions.allowVerifiedAttestationFilePath.
+      allowVerifiedAttestationFilePath: true,
     };
     const tool = createCreateTaskTool(program, silentLogger, createTaskOptions);
     const result = await tool.execute({

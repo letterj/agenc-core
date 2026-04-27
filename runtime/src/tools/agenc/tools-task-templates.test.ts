@@ -281,12 +281,47 @@ describe("agenc task template tools", () => {
 
     const pointer = await readMarketplaceJobSpecPointerForTask(payload.taskPda, {
       rootDir: jobSpecStoreDir,
+      verifiedTaskIssuerKeys: {
+        "storefront-devnet-1": issuer.publicKey.toBase58(),
+      },
     });
     expect(pointer?.verifiedTask).toMatchObject({
       verifiedTaskHash: payload.verifiedTaskHash,
       verifiedTaskUri: payload.verifiedTaskUri,
       status: "verified",
     });
+
+    // Re-reading without the issuer keyring should report the task as
+    // unverified; on-disk metadata is never trusted directly.
+    const pointerWithoutKeys = await readMarketplaceJobSpecPointerForTask(
+      payload.taskPda,
+      { rootDir: jobSpecStoreDir },
+    );
+    expect(pointerWithoutKeys?.verifiedTask).toBeNull();
+
+    // Tampering with the on-disk file should not be enough to surface
+    // verified status either — re-verification of the signed attestation must
+    // still succeed against the issuer keyring.
+    const linkPath = pointer?.jobSpecTaskLinkPath;
+    if (linkPath) {
+      const { readFile, writeFile } = await import("node:fs/promises");
+      const raw = JSON.parse(await readFile(linkPath, "utf8"));
+      raw.verifiedTaskAttestation = {
+        ...raw.verifiedTaskAttestation,
+        signature: "00".repeat(64),
+      };
+      await writeFile(linkPath, `${JSON.stringify(raw)}\n`, "utf8");
+      const tamperedPointer = await readMarketplaceJobSpecPointerForTask(
+        payload.taskPda,
+        {
+          rootDir: jobSpecStoreDir,
+          verifiedTaskIssuerKeys: {
+            "storefront-devnet-1": issuer.publicKey.toBase58(),
+          },
+        },
+      );
+      expect(tamperedPointer?.verifiedTask).toBeNull();
+    }
   });
 
   it("uses taskDescription (not description) as the input schema property name", () => {

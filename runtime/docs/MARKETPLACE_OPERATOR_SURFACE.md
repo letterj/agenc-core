@@ -163,6 +163,27 @@ verifiedTaskUri = agenc://verified-task/devnet/{verifiedTaskHash}
 The local replay store defaults to
 `~/.agenc/marketplace/verified-task-replay` and can be overridden with
 `--verified-task-replay-store-dir` for tests or isolated operators. Replay
-markers are reserved before transaction submission, so a failed submission may
-burn that attestation locally; storefront integrations should issue a fresh
-nonce for retry paths.
+reservations are written as a `pending` marker before transaction submission
+and only finalized to `consumed` after the on-chain `create_task` returns a
+signature. If submission fails, the pending reservation is released and the
+attestation can be retried with the same nonce. A pending marker whose
+attestation `expiresAt` has already passed is treated as released, so a crash
+between begin and finalize cannot permanently strand a nonce.
+
+Concurrency: while a reservation is `pending`, a second attempt to use the same
+nonce or verified task hash is rejected with `… reservation is in flight`. Once
+finalized, subsequent attempts are rejected with `… was already consumed`.
+
+Surfacing verified status from the local task link store is gated on
+re-verification of the signed attestation against the configured issuer
+keyring. The on-disk task link persists the original signed attestation (not
+just the derived metadata); on read, callers that pass
+`verifiedTaskIssuerKeys` (or set `AGENC_MARKETPLACE_VERIFIED_TASK_ISSUER_KEYS`)
+get a fresh `verifiedTask` field derived from a successful re-verification —
+otherwise `verifiedTask` is reported as `null`. A tampered link file cannot
+fabricate verified status because the signature check still has to pass.
+
+Webchat / HTTP entry points only accept `verifiedAttestation` as a structured
+JSON object or a JSON string. Local filesystem paths are CLI-only and rejected
+on remote channels — a remote caller cannot ask the runtime to read arbitrary
+local attestation files.

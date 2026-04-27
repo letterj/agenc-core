@@ -1241,11 +1241,30 @@ async function handleTasksCreate(
       'attachments',
       'jobSpecUri',
       'jobSpecPublishUri',
-      'verifiedAttestation',
     ]) {
       if (taskParams[field] !== undefined) {
         createArgs[field] = taskParams[field];
       }
+    }
+    if (taskParams.verifiedAttestation !== undefined && taskParams.verifiedAttestation !== null) {
+      // Webchat is a remote/untrusted entry point; only accept structured JSON
+      // (object or JSON string). Local filesystem paths are rejected here so a
+      // remote caller cannot ask the runtime to read arbitrary local files.
+      const attestationInput = taskParams.verifiedAttestation;
+      const isObject =
+        typeof attestationInput === 'object' && !Array.isArray(attestationInput);
+      const isJsonString =
+        typeof attestationInput === 'string' && attestationInput.trim().startsWith('{');
+      if (!isObject && !isJsonString) {
+        send({
+          type: 'error',
+          error:
+            'Failed to create task: verifiedAttestation must be a JSON object or JSON string; filesystem paths are not allowed over webchat',
+          id,
+        });
+        return;
+      }
+      createArgs.verifiedAttestation = attestationInput;
     }
     const { program } = await createProgramContext(deps);
     const tool = createCreateTaskTool(program, silentLogger, {
