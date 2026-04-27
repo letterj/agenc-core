@@ -2,6 +2,18 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  buildVerifiedTaskMetadata,
+  computeCanonicalMarketplaceTaskHash,
+  loadVerifiedTaskIssuerKeysFromEnv,
+  parseMarketplaceCanonicalTaskInput,
+  parseVerifiedTaskAttestation,
+  verifyVerifiedTaskAttestation,
+  type MarketplaceCanonicalTaskInput,
+  type VerifiedTaskAttestation,
+  type VerifiedTaskIssuerKeyring,
+  type VerifiedTaskMetadata,
+} from "./verified-task-attestation.js";
 
 export type MarketplaceJobSpecJsonPrimitive = string | number | boolean | null;
 export type MarketplaceJobSpecJsonObject = {
@@ -81,6 +93,13 @@ export interface MarketplaceJobSpecInput {
 export interface MarketplaceJobSpecStoreOptions {
   readonly rootDir?: string;
   readonly allowRemote?: boolean;
+  /**
+   * Issuer keyring used to re-verify the signed attestation embedded in a task
+   * link before reporting `verifiedTask` metadata. Required to surface
+   * `verifiedTask` to callers — when omitted (and not present in the
+   * environment) the link is treated as unverified at read time.
+   */
+  readonly verifiedTaskIssuerKeys?: VerifiedTaskIssuerKeyring;
 }
 
 export class MarketplaceJobSpecNotFoundError extends Error {
@@ -123,6 +142,21 @@ export interface MarketplaceJobSpecTaskLinkInput {
   readonly taskPda: string;
   readonly taskId: string;
   readonly transactionSignature: string;
+  /**
+   * Original signed attestation (not the derived metadata). Persisted to disk
+   * and re-verified on every read so a tampered link cannot fabricate verified
+   * status without breaking the issuer signature.
+   */
+  readonly verifiedTaskAttestation?: VerifiedTaskAttestation | null;
+  readonly verifiedTaskAcceptedAt?: string | null;
+  /**
+   * The canonical task input the runtime computed when accepting the
+   * attestation. Persisted alongside the attestation so the read path can
+   * recompute `canonicalTaskHash` independently and compare it against
+   * `attestation.canonicalTaskHash` — without this the read-time check would
+   * be tautological (attestation vs itself).
+   */
+  readonly verifiedTaskCanonicalInput?: MarketplaceCanonicalTaskInput | null;
 }
 
 export interface MarketplaceJobSpecTaskLink {
@@ -133,6 +167,12 @@ export interface MarketplaceJobSpecTaskLink {
   readonly jobSpecHash: string;
   readonly jobSpecUri: string;
   readonly transactionSignature: string;
+  /**
+   * Derived from re-verifying the on-disk signed attestation. Only populated
+   * when re-verification succeeds against the supplied issuer keyring;
+   * otherwise null. NEVER trust `verifiedTask` from the on-disk file directly.
+   */
+  readonly verifiedTask?: VerifiedTaskMetadata | null;
 }
 
 export interface MarketplaceJobSpecReference {
@@ -157,6 +197,7 @@ export interface ResolvedMarketplaceJobSpec {
   readonly jobSpecPath: string;
   readonly jobSpecTaskLinkPath: string;
   readonly transactionSignature: string;
+  readonly verifiedTask?: VerifiedTaskMetadata | null;
   readonly integrity: MarketplaceJobSpecEnvelope["integrity"];
   readonly envelope: MarketplaceJobSpecEnvelope;
   readonly payload: MarketplaceJobSpecPayload;
@@ -170,6 +211,7 @@ export interface MarketplaceJobSpecTaskPointer {
   readonly jobSpecUri: string;
   readonly jobSpecTaskLinkPath: string;
   readonly transactionSignature: string;
+  readonly verifiedTask?: VerifiedTaskMetadata | null;
   readonly link: MarketplaceJobSpecTaskLink;
 }
 
@@ -241,7 +283,21 @@ export async function linkMarketplaceJobSpecToTask(
     throw new Error("taskId must be a 32-byte hex string");
   }
 
-  const link: MarketplaceJobSpecTaskLink = {
+  if (input.verifiedTaskAttestation && !input.verifiedTaskCanonicalInput) {
+    throw new Error(
+      "verifiedTaskAttestation requires verifiedTaskCanonicalInput so the read path can re-derive canonicalTaskHash independently",
+    );
+  }
+  if (
+    input.verifiedTaskCanonicalInput &&
+    input.verifiedTaskCanonicalInput.jobSpecHash !== input.hash
+  ) {
+    throw new Error(
+      `verifiedTaskCanonicalInput.jobSpecHash ${input.verifiedTaskCanonicalInput.jobSpecHash} does not match link jobSpecHash ${input.hash}`,
+    );
+  }
+
+  const persistedLink: PersistedMarketplaceJobSpecTaskLink = {
     schemaVersion: JOB_SPEC_SCHEMA_VERSION,
     kind: "agenc.marketplace.jobSpecTaskLink",
     taskPda: input.taskPda,
@@ -253,15 +309,47 @@ export async function linkMarketplaceJobSpecToTask(
       "transactionSignature",
       256,
     ),
+    ...(input.verifiedTaskAttestation
+      ? { verifiedTaskAttestation: parseVerifiedTaskAttestation(input.verifiedTaskAttestation) }
+      : {}),
+    ...(input.verifiedTaskAcceptedAt
+      ? { verifiedTaskAcceptedAt: input.verifiedTaskAcceptedAt }
+      : {}),
+    ...(input.verifiedTaskCanonicalInput
+      ? {
+          verifiedTaskCanonicalInput: parseMarketplaceCanonicalTaskInput(
+            input.verifiedTaskCanonicalInput,
+          ),
+        }
+      : {}),
   };
   const rootDir = options.rootDir ?? getDefaultMarketplaceJobSpecStoreDir();
   const linksDir = join(rootDir, "task-links");
   const linkPath = join(linksDir, `${input.taskPda}.json`);
-  const serializedLink = `${canonicalJson(link)}\n`;
+  const serializedLink = `${canonicalJson(persistedLink)}\n`;
 
   await mkdir(linksDir, { recursive: true, mode: 0o700 });
   await writeStableLinkFile(linkPath, serializedLink, input.hash);
   return linkPath;
+}
+
+/**
+ * On-disk representation of the link. Distinct from `MarketplaceJobSpecTaskLink`
+ * because the on-disk record stores the signed attestation, not the derived
+ * verified-task metadata. The metadata is re-derived at read time after
+ * re-verification.
+ */
+interface PersistedMarketplaceJobSpecTaskLink {
+  readonly schemaVersion: typeof JOB_SPEC_SCHEMA_VERSION;
+  readonly kind: "agenc.marketplace.jobSpecTaskLink";
+  readonly taskPda: string;
+  readonly taskId: string;
+  readonly jobSpecHash: string;
+  readonly jobSpecUri: string;
+  readonly transactionSignature: string;
+  readonly verifiedTaskAttestation?: VerifiedTaskAttestation;
+  readonly verifiedTaskAcceptedAt?: string;
+  readonly verifiedTaskCanonicalInput?: MarketplaceCanonicalTaskInput;
 }
 
 export async function readMarketplaceJobSpecPointerForTask(
@@ -281,6 +369,7 @@ export async function readMarketplaceJobSpecPointerForTask(
     link = await readMarketplaceJobSpecTaskLink(
       jobSpecTaskLinkPath,
       normalizedTaskPda,
+      options,
     );
   } catch (error) {
     if (isMarketplaceJobSpecNotFoundError(error)) return null;
@@ -294,6 +383,7 @@ export async function readMarketplaceJobSpecPointerForTask(
     jobSpecUri: link.jobSpecUri,
     jobSpecTaskLinkPath,
     transactionSignature: link.transactionSignature,
+    verifiedTask: link.verifiedTask ?? null,
     link,
   };
 }
@@ -366,6 +456,7 @@ export async function resolveMarketplaceJobSpecForTask(
   const link = await readMarketplaceJobSpecTaskLink(
     jobSpecTaskLinkPath,
     normalizedTaskPda,
+    options,
   );
   const resolved = await resolveMarketplaceJobSpecReference(link, options);
 
@@ -377,6 +468,7 @@ export async function resolveMarketplaceJobSpecForTask(
     jobSpecPath: resolved.jobSpecPath,
     jobSpecTaskLinkPath,
     transactionSignature: link.transactionSignature,
+    verifiedTask: link.verifiedTask ?? null,
     integrity: resolved.integrity,
     envelope: resolved.envelope,
     payload: resolved.payload,
@@ -678,6 +770,7 @@ function isRemoteJobSpecUri(uri: string): boolean {
 async function readMarketplaceJobSpecTaskLink(
   path: string,
   expectedTaskPda: string,
+  options: MarketplaceJobSpecStoreOptions = {},
 ): Promise<MarketplaceJobSpecTaskLink> {
   const parsed = await readJsonFile(
     path,
@@ -686,7 +779,7 @@ async function readMarketplaceJobSpecTaskLink(
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`marketplace jobSpec task link is not a JSON object: ${path}`);
   }
-  const candidate = parsed as Partial<MarketplaceJobSpecTaskLink>;
+  const candidate = parsed as Partial<PersistedMarketplaceJobSpecTaskLink>;
   if (candidate.schemaVersion !== JOB_SPEC_SCHEMA_VERSION) {
     throw new Error(`marketplace jobSpec task link has unsupported schemaVersion: ${path}`);
   }
@@ -724,6 +817,22 @@ async function readMarketplaceJobSpecTaskLink(
   if (typeof candidate.transactionSignature !== "string") {
     throw new Error(`marketplace jobSpec task link has invalid transactionSignature: ${path}`);
   }
+  const transactionSignature = normalizeBoundedString(
+    candidate.transactionSignature,
+    "transactionSignature",
+    256,
+  );
+
+  const verifiedTask = await reverifyVerifiedTaskFromLink(
+    candidate,
+    {
+      taskPda: candidate.taskPda,
+      taskId,
+      jobSpecHash: candidate.jobSpecHash,
+      transactionSignature,
+    },
+    options,
+  );
 
   return {
     schemaVersion: JOB_SPEC_SCHEMA_VERSION,
@@ -732,12 +841,93 @@ async function readMarketplaceJobSpecTaskLink(
     taskId,
     jobSpecHash: candidate.jobSpecHash,
     jobSpecUri,
-    transactionSignature: normalizeBoundedString(
-      candidate.transactionSignature,
-      "transactionSignature",
-      256,
-    ),
+    transactionSignature,
+    ...(verifiedTask ? { verifiedTask } : {}),
   };
+}
+
+async function reverifyVerifiedTaskFromLink(
+  candidate: Partial<PersistedMarketplaceJobSpecTaskLink>,
+  acceptance: {
+    readonly taskPda: string;
+    readonly taskId: string;
+    readonly jobSpecHash: string;
+    readonly transactionSignature: string;
+  },
+  options: MarketplaceJobSpecStoreOptions,
+): Promise<VerifiedTaskMetadata | null> {
+  const rawAttestation = candidate.verifiedTaskAttestation;
+  if (!rawAttestation) return null;
+
+  const issuerKeys =
+    options.verifiedTaskIssuerKeys ?? loadVerifiedTaskIssuerKeysFromEnv();
+  if (Object.keys(issuerKeys).length === 0) {
+    // No keys configured — we cannot trust the on-disk metadata, so report as
+    // unverified rather than echoing potentially-tampered fields.
+    return null;
+  }
+
+  // The canonical task input MUST be present and bound to this link before we
+  // will surface verified status. Without it the read-time canonical hash
+  // check would be tautological (attestation vs itself), so a valid signed
+  // attestation could be re-used in any link sharing the same jobSpecHash.
+  const rawCanonical = candidate.verifiedTaskCanonicalInput;
+  if (!rawCanonical) return null;
+
+  let canonicalInput: MarketplaceCanonicalTaskInput;
+  try {
+    canonicalInput = parseMarketplaceCanonicalTaskInput(rawCanonical);
+  } catch {
+    return null;
+  }
+  // Bind the persisted canonical input to the link being rendered. If any of
+  // these don't match the link's identity, an attacker has reassociated the
+  // attestation with a different task context and we must not surface verified.
+  if (canonicalInput.jobSpecHash !== acceptance.jobSpecHash) {
+    return null;
+  }
+
+  let attestation: VerifiedTaskAttestation;
+  try {
+    attestation = parseVerifiedTaskAttestation(rawAttestation);
+  } catch {
+    return null;
+  }
+  if (attestation.jobSpecHash !== acceptance.jobSpecHash) {
+    return null;
+  }
+
+  // Recompute canonicalTaskHash from the persisted task material — this is the
+  // independent comparison that makes the verification non-tautological.
+  let recomputedCanonicalHash: string;
+  try {
+    recomputedCanonicalHash = computeCanonicalMarketplaceTaskHash(canonicalInput);
+  } catch {
+    return null;
+  }
+
+  try {
+    const verification = await verifyVerifiedTaskAttestation(attestation, {
+      issuerKeys,
+      expectedJobSpecHash: acceptance.jobSpecHash,
+      expectedCanonicalTaskHash: recomputedCanonicalHash,
+      // If the attestation pins a buyer wallet, the persisted canonical input's
+      // creatorWallet is the value we expect on devnet — re-bind here so a
+      // copied attestation from another buyer is rejected.
+      expectedBuyerWallet: canonicalInput.creatorWallet,
+      // The attestation's expiry bounds the *acceptance* window — at read time
+      // we only need the signature to still verify under the current allowlist.
+      skipExpiry: true,
+    });
+    return buildVerifiedTaskMetadata(verification, {
+      acceptedAt: candidate.verifiedTaskAcceptedAt ?? undefined,
+      taskPda: acceptance.taskPda,
+      taskId: acceptance.taskId,
+      transactionSignature: acceptance.transactionSignature,
+    });
+  } catch {
+    return null;
+  }
 }
 
 async function readMarketplaceJobSpecEnvelope(

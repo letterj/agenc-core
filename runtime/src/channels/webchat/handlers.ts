@@ -1239,10 +1239,32 @@ async function handleTasksCreate(
       'deliverables',
       'constraints',
       'attachments',
+      'jobSpecUri',
+      'jobSpecPublishUri',
     ]) {
       if (taskParams[field] !== undefined) {
         createArgs[field] = taskParams[field];
       }
+    }
+    if (taskParams.verifiedAttestation !== undefined && taskParams.verifiedAttestation !== null) {
+      // Webchat is a remote/untrusted entry point; only accept structured JSON
+      // (object or JSON string). Local filesystem paths are rejected here so a
+      // remote caller cannot ask the runtime to read arbitrary local files.
+      const attestationInput = taskParams.verifiedAttestation;
+      const isObject =
+        typeof attestationInput === 'object' && !Array.isArray(attestationInput);
+      const isJsonString =
+        typeof attestationInput === 'string' && attestationInput.trim().startsWith('{');
+      if (!isObject && !isJsonString) {
+        send({
+          type: 'error',
+          error:
+            'Failed to create task: verifiedAttestation must be a JSON object or JSON string; filesystem paths are not allowed over webchat',
+          id,
+        });
+        return;
+      }
+      createArgs.verifiedAttestation = attestationInput;
     }
     const { program } = await createProgramContext(deps);
     const tool = createCreateTaskTool(program, silentLogger, {
@@ -1256,19 +1278,23 @@ async function handleTasksCreate(
     let createdTaskPda: string | undefined;
     let createdJobSpecHash: string | undefined;
     let createdJobSpecUri: string | undefined;
+    let createdVerifiedTask: unknown;
     try {
       const createdPayload = JSON.parse(result.content) as {
         taskPda?: string;
         jobSpecHash?: string | null;
         jobSpecUri?: string | null;
+        verifiedTask?: unknown;
       };
       createdTaskPda = createdPayload.taskPda;
       createdJobSpecHash = createdPayload.jobSpecHash ?? undefined;
       createdJobSpecUri = createdPayload.jobSpecUri ?? undefined;
+      createdVerifiedTask = createdPayload.verifiedTask;
     } catch {
       createdTaskPda = undefined;
       createdJobSpecHash = undefined;
       createdJobSpecUri = undefined;
+      createdVerifiedTask = undefined;
     }
 
     // Auto-refresh task list after creation
@@ -1278,6 +1304,7 @@ async function handleTasksCreate(
       description: descStr,
       jobSpecHash: createdJobSpecHash,
       jobSpecUri: createdJobSpecUri,
+      verifiedTask: createdVerifiedTask,
     });
   } catch (err) {
     send({ type: 'error', error: `Failed to create task: ${(err as Error).message}`, id });

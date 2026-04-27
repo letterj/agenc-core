@@ -96,6 +96,22 @@ import {
   setTaskJobSpecPointer,
 } from '../../marketplace/task-job-spec.js';
 import {
+  beginVerifiedTaskAttestationReplay,
+  buildVerifiedTaskMetadata,
+  computeCanonicalMarketplaceTaskHash,
+  finalizeVerifiedTaskAttestationReplay,
+  loadVerifiedTaskIssuerKeysFromEnv,
+  readVerifiedTaskAttestationInput,
+  releaseVerifiedTaskAttestationReplay,
+  verifyVerifiedTaskAttestation,
+  type MarketplaceCanonicalTaskInput,
+  type VerifiedTaskAttestation,
+  type VerifiedTaskAttestationVerificationResult,
+  type VerifiedTaskIssuerKeyring,
+  type VerifiedTaskMetadata,
+  type VerifiedTaskReplayReservation,
+} from '../../marketplace/verified-task-attestation.js';
+import {
   lamportsToSol,
   bytesToHex,
   generateAgentId,
@@ -144,6 +160,15 @@ const CREATE_TASK_DEDUP_TTL_MS = 30_000;
 export interface CreateTaskToolOptions {
   readonly jobSpecStoreDir?: string;
   readonly allowRawTaskCreation?: boolean;
+  readonly verifiedTaskIssuerKeys?: VerifiedTaskIssuerKeyring;
+  readonly verifiedTaskReplayStoreDir?: string;
+  /**
+   * Allow `verifiedAttestation` strings to be interpreted as a local filesystem
+   * path. Must only be enabled for trusted local entry points (e.g. CLI). Remote
+   * channels (webchat, HTTP API) must leave this disabled to avoid letting
+   * untrusted callers ask the runtime to read arbitrary local files.
+   */
+  readonly allowVerifiedAttestationFilePath?: boolean;
 }
 
 export interface TaskTemplateToolOptions extends CreateTaskToolOptions {
@@ -158,6 +183,7 @@ export interface TaskJobSpecQueryToolOptions {
   readonly program?: Program<AgencCoordination>;
   readonly jobSpecStoreDir?: string;
   readonly allowRemoteJobSpecResolution?: boolean;
+  readonly verifiedTaskIssuerKeys?: VerifiedTaskIssuerKeyring;
 }
 
 const KNOWN_MINTS: Record<string, { symbol: string; decimals: number }> = {
@@ -539,11 +565,25 @@ function shouldRetryLegacyCreateTask(err: unknown): boolean {
 function getJobSpecStoreOptions(
   rootDir?: string,
   allowRemoteJobSpecResolution = false,
-): { rootDir?: string; allowRemote?: boolean } | undefined {
-  if (!rootDir && !allowRemoteJobSpecResolution) return undefined;
+  verifiedTaskIssuerKeys?: VerifiedTaskIssuerKeyring,
+): {
+  rootDir?: string;
+  allowRemote?: boolean;
+  verifiedTaskIssuerKeys?: VerifiedTaskIssuerKeyring;
+} | undefined {
+  // Always include issuer keys when available so on-disk verifiedTask metadata
+  // can be re-verified at read time. Otherwise the task link's verifiedTask
+  // is reported as null (treated as untrusted).
+  const issuerKeys =
+    verifiedTaskIssuerKeys ?? loadVerifiedTaskIssuerKeysFromEnv();
+  const hasIssuerKeys = Object.keys(issuerKeys).length > 0;
+  if (!rootDir && !allowRemoteJobSpecResolution && !hasIssuerKeys) {
+    return undefined;
+  }
   return {
     ...(rootDir ? { rootDir } : {}),
     ...(allowRemoteJobSpecResolution ? { allowRemote: true } : {}),
+    ...(hasIssuerKeys ? { verifiedTaskIssuerKeys: issuerKeys } : {}),
   };
 }
 
@@ -569,6 +609,60 @@ function formatJobSpecPublishWarning(error: unknown): string {
   }
 
   return `Task was created, but job spec metadata publishing failed: ${message}`;
+}
+
+function parseCanonicalJobSpecUriHash(uri: string): string | null {
+  const prefix = 'agenc://job-spec/sha256/';
+  if (!uri.startsWith(prefix)) return null;
+  const hash = uri.slice(prefix.length);
+  return /^[a-f0-9]{64}$/.test(hash) ? hash : null;
+}
+
+function getVerifiedTaskIssuerKeys(
+  options: CreateTaskToolOptions,
+): VerifiedTaskIssuerKeyring {
+  return options.verifiedTaskIssuerKeys ?? loadVerifiedTaskIssuerKeysFromEnv();
+}
+
+function buildMarketplaceCanonicalTaskInput(params: {
+  creator: PublicKey;
+  creatorAgentPda: PublicKey;
+  taskDescription: string;
+  reward: bigint;
+  requiredCapabilities: bigint;
+  rewardMint: PublicKey | null;
+  maxWorkers: number;
+  deadline: number;
+  taskType: TaskType;
+  minReputation: number;
+  constraintHash: Uint8Array | null;
+  validationMode: TaskValidationMode;
+  reviewWindowSecs: number;
+  jobSpecHash: string;
+}): MarketplaceCanonicalTaskInput {
+  return {
+    environment: 'devnet',
+    creatorWallet: params.creator.toBase58(),
+    creatorAgentPda: params.creatorAgentPda.toBase58(),
+    taskDescription: params.taskDescription,
+    rewardLamports: params.reward.toString(),
+    requiredCapabilities: params.requiredCapabilities.toString(),
+    rewardMint: params.rewardMint?.toBase58() ?? null,
+    maxWorkers: params.maxWorkers,
+    deadline: params.deadline,
+    taskType: params.taskType,
+    minReputation: params.minReputation,
+    constraintHash: params.constraintHash ? bytesToHex(params.constraintHash) : null,
+    validationMode:
+      params.validationMode === TaskValidationMode.CreatorReview
+        ? 'creator-review'
+        : 'auto',
+    reviewWindowSecs:
+      params.validationMode === TaskValidationMode.CreatorReview
+        ? params.reviewWindowSecs
+        : null,
+    jobSpecHash: params.jobSpecHash,
+  };
 }
 
 function buildVerifiedTaskJobSpec(
@@ -603,7 +697,18 @@ async function buildTaskJobSpecView(
   const storeOptions = getJobSpecStoreOptions(
     options.jobSpecStoreDir,
     options.allowRemoteJobSpecResolution,
+    options.verifiedTaskIssuerKeys,
   );
+  let localPointer: Awaited<ReturnType<typeof readMarketplaceJobSpecPointerForTask>> = null;
+  let localPointerError: unknown = null;
+  try {
+    localPointer = await readMarketplaceJobSpecPointerForTask(
+      taskPda.toBase58(),
+      storeOptions,
+    );
+  } catch (error) {
+    localPointerError = error;
+  }
 
   if (options.program) {
     const onChainPointer = await fetchTaskJobSpecPointer(options.program, taskPda);
@@ -615,6 +720,7 @@ async function buildTaskJobSpecView(
         jobSpecUri: onChainPointer.jobSpecUri,
         createdAt: onChainPointer.createdAt,
         updatedAt: onChainPointer.updatedAt,
+        verifiedTask: localPointer?.verifiedTask ?? null,
       };
 
       if (!includePayload) {
@@ -642,10 +748,7 @@ async function buildTaskJobSpecView(
     }
   }
 
-  const localPointer = await readMarketplaceJobSpecPointerForTask(
-    taskPda.toBase58(),
-    storeOptions,
-  );
+  if (localPointerError) throw localPointerError;
   if (!localPointer) return null;
 
   const base: Omit<SerializedTaskJobSpec, 'source' | 'verified' | 'jobSpecPath' | 'integrity' | 'payload' | 'error'> = {
@@ -655,6 +758,7 @@ async function buildTaskJobSpecView(
     jobSpecUri: localPointer.jobSpecUri,
     jobSpecTaskLinkPath: localPointer.jobSpecTaskLinkPath,
     transactionSignature: localPointer.transactionSignature,
+    verifiedTask: localPointer.verifiedTask ?? null,
   };
 
   if (!includePayload) {
@@ -684,6 +788,7 @@ async function resolveTaskJobSpecPayloadOrThrow(
   const storeOptions = getJobSpecStoreOptions(
     options.jobSpecStoreDir,
     options.allowRemoteJobSpecResolution,
+    options.verifiedTaskIssuerKeys,
   );
   const taskAddress = taskPda.toBase58();
   const localPointer = await readMarketplaceJobSpecPointerForTask(
@@ -716,6 +821,7 @@ async function resolveTaskJobSpecPayloadOrThrow(
         jobSpecPath: resolved.jobSpecPath,
         jobSpecTaskLinkPath: localPointer?.jobSpecTaskLinkPath ?? null,
         transactionSignature: localPointer?.transactionSignature ?? null,
+        verifiedTask: localPointer?.verifiedTask ?? null,
         integrity: resolved.integrity,
         payload: resolved.payload,
       };
@@ -739,6 +845,7 @@ async function resolveTaskJobSpecPayloadOrThrow(
       jobSpecPath: resolved.jobSpecPath,
       jobSpecTaskLinkPath: localPointer.jobSpecTaskLinkPath,
       transactionSignature: localPointer.transactionSignature,
+      verifiedTask: localPointer.verifiedTask ?? null,
       integrity: resolved.integrity,
       payload: resolved.payload,
     };
@@ -2601,6 +2708,16 @@ export function createCreateTaskTool(
           description:
             'Optional published URI for the task job-spec pointer. Must be either the canonical agenc:// URI for the resulting hash or an absolute https URL that serves the canonical envelope.',
         },
+        jobSpecUri: {
+          type: 'string',
+          description:
+            'Optional pre-published job spec URI. With verifiedAttestation, this may point at an existing agenc://job-spec/sha256/{hash} or https job spec envelope signed by the storefront.',
+        },
+        verifiedAttestation: {
+          anyOf: [{ type: 'object' }, { type: 'string' }],
+          description:
+            'Optional storefront-issued verified task attestation JSON object, JSON string, or local path. When provided, core verifies the devnet issuer signature, jobSpecHash, canonical task hash, expiry, and replay markers before creating the task.',
+        },
         fullDescription: {
           type: 'string',
           description: 'Optional long-form job description stored in the marketplace jobSpec object.',
@@ -2710,6 +2827,7 @@ export function createCreateTaskTool(
 
         const [descBytes, descErr] = parseTaskDescription(args.taskDescription ?? args.description);
         if (descErr || !descBytes) return descErr ?? errorResult('Invalid description');
+        const taskDescriptionText = (args.taskDescription ?? args.description) as string;
 
         const [reward, rewardErr] = parseBigIntInput(args.reward, 'reward');
         if (rewardErr || reward === null) return rewardErr ?? errorResult('Invalid reward');
@@ -2796,11 +2914,16 @@ export function createCreateTaskTool(
         }
 	        const constraintHash = customConstraintHash;
 
-	        const [jobSpecPublishUri, jobSpecPublishUriErr] = parseOptionalString(
-	          args.jobSpecPublishUri,
-	          'jobSpecPublishUri',
-	        );
-	        if (jobSpecPublishUriErr) return jobSpecPublishUriErr;
+        const [jobSpecPublishUri, jobSpecPublishUriErr] = parseOptionalString(
+          args.jobSpecPublishUri,
+          'jobSpecPublishUri',
+        );
+        if (jobSpecPublishUriErr) return jobSpecPublishUriErr;
+        const [jobSpecUriInput, jobSpecUriErr] = parseOptionalString(
+          args.jobSpecUri,
+          'jobSpecUri',
+        );
+        if (jobSpecUriErr) return jobSpecUriErr;
 
         const [rewardMint, rewardMintErr] = parseKnownRewardMint(args.rewardMint);
         if (rewardMintErr) return rewardMintErr;
@@ -2815,12 +2938,26 @@ export function createCreateTaskTool(
           );
         }
 
+        let verifiedAttestation: VerifiedTaskAttestation | null = null;
+        try {
+          verifiedAttestation = await readVerifiedTaskAttestationInput(
+            args.verifiedAttestation,
+            { allowFilePath: options.allowVerifiedAttestationFilePath === true },
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return errorResult(`Invalid verifiedAttestation: ${message}`);
+        }
+
         let storedJobSpec: Awaited<ReturnType<typeof persistMarketplaceJobSpec>> | null = null;
-        if (hasMarketplaceJobSpecInput(args)) {
+        const shouldPersistJobSpec =
+          hasMarketplaceJobSpecInput(args) ||
+          (verifiedAttestation !== null && !jobSpecUriInput);
+        if (shouldPersistJobSpec) {
           try {
             storedJobSpec = await persistMarketplaceJobSpec(
               {
-                description: (args.taskDescription ?? args.description) as string,
+                description: taskDescriptionText,
                 jobSpec: args.jobSpec,
                 fullDescription: args.fullDescription,
                 acceptanceCriteria: args.acceptanceCriteria,
@@ -2857,6 +2994,77 @@ export function createCreateTaskTool(
           }
         }
 
+        let jobSpecReference: { hash: string; uri: string } | null = storedJobSpec
+          ? { hash: storedJobSpec.hash, uri: storedJobSpec.uri }
+          : null;
+        if (!jobSpecReference && jobSpecUriInput) {
+          const externalJobSpecHash =
+            verifiedAttestation?.jobSpecHash ??
+            parseCanonicalJobSpecUriHash(jobSpecUriInput);
+          if (!externalJobSpecHash) {
+            return errorResult(
+              'jobSpecUri without a persisted jobSpec must be canonical agenc://job-spec/sha256/{hash} or accompanied by verifiedAttestation',
+            );
+          }
+          try {
+            jobSpecReference = {
+              hash: externalJobSpecHash,
+              uri: normalizeJobSpecReferenceUri(
+                jobSpecUriInput,
+                externalJobSpecHash,
+                'jobSpecUri',
+              ),
+            };
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return errorResult(`Invalid jobSpecUri: ${message}`);
+          }
+        }
+
+        let verifiedTaskVerification: VerifiedTaskAttestationVerificationResult | null = null;
+        let verifiedTaskMetadata: VerifiedTaskMetadata | null = null;
+        let verifiedTaskCanonicalInput: MarketplaceCanonicalTaskInput | null = null;
+        if (verifiedAttestation) {
+          if (!jobSpecReference) {
+            return errorResult(
+              'verifiedAttestation requires a submitted jobSpecHash via jobSpec metadata or jobSpecUri',
+            );
+          }
+          verifiedTaskCanonicalInput = buildMarketplaceCanonicalTaskInput({
+            creator,
+            creatorAgentPda,
+            taskDescription: taskDescriptionText,
+            reward,
+            requiredCapabilities,
+            rewardMint,
+            maxWorkers,
+            deadline,
+            taskType,
+            minReputation,
+            constraintHash,
+            validationMode,
+            reviewWindowSecs,
+            jobSpecHash: jobSpecReference.hash,
+          });
+          const canonicalTaskHash = computeCanonicalMarketplaceTaskHash(
+            verifiedTaskCanonicalInput,
+          );
+          try {
+            verifiedTaskVerification = await verifyVerifiedTaskAttestation(
+              verifiedAttestation,
+              {
+                issuerKeys: getVerifiedTaskIssuerKeys(options),
+                expectedJobSpecHash: jobSpecReference.hash,
+                expectedCanonicalTaskHash: canonicalTaskHash,
+                expectedBuyerWallet: creator.toBase58(),
+              },
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return errorResult(`Verified task attestation rejected: ${message}`);
+          }
+        }
+
         const taskPda = findTaskPda(creator, taskId, program.programId);
         const escrowPda = findEscrowPda(taskPda, program.programId);
         const protocolPda = findProtocolPda(program.programId);
@@ -2869,6 +3077,36 @@ export function createCreateTaskTool(
           escrowPda,
           creator,
         );
+
+        let verifiedTaskReplayReservation: VerifiedTaskReplayReservation | null = null;
+        let verifiedTaskAcceptedAt: string | null = null;
+        if (verifiedTaskVerification) {
+          verifiedTaskAcceptedAt = new Date().toISOString();
+          verifiedTaskMetadata = buildVerifiedTaskMetadata(
+            verifiedTaskVerification,
+            {
+              acceptedAt: verifiedTaskAcceptedAt,
+              taskPda: taskPda.toBase58(),
+              taskId: bytesToHex(taskId),
+              transactionSignature: null,
+            },
+          );
+          try {
+            verifiedTaskReplayReservation = await beginVerifiedTaskAttestationReplay(
+              verifiedTaskVerification,
+              {
+                rootDir: options.verifiedTaskReplayStoreDir,
+                acceptedAt: verifiedTaskAcceptedAt,
+                taskPda: taskPda.toBase58(),
+                taskId: bytesToHex(taskId),
+                transactionSignature: null,
+              },
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return errorResult(`Verified task attestation replay rejected: ${message}`);
+          }
+        }
 
         const executeCreateTask = async (
           targetProgram: Program<AgencCoordination>,
@@ -2904,20 +3142,62 @@ export function createCreateTaskTool(
 
         let txSignature: string;
         try {
-          txSignature = await executeCreateTask(program);
-        } catch (error) {
-          if (!shouldRetryLegacyCreateTask(error)) {
-            throw error;
+          try {
+            txSignature = await executeCreateTask(program);
+          } catch (error) {
+            if (!shouldRetryLegacyCreateTask(error)) {
+              throw error;
+            }
+            logger.warn(
+              'Retrying task creation with legacy devnet create_task account layout compatibility',
+            );
+            const legacyProgram = createProgram(
+              program.provider as AnchorProvider,
+              program.programId,
+              'legacyCreateTask',
+            );
+            txSignature = await executeCreateTask(legacyProgram, 'legacyCreateTask');
           }
-          logger.warn(
-            'Retrying task creation with legacy devnet create_task account layout compatibility',
+        } catch (error) {
+          if (verifiedTaskReplayReservation) {
+            try {
+              await releaseVerifiedTaskAttestationReplay(verifiedTaskReplayReservation);
+            } catch (releaseError) {
+              logger.warn(
+                `Failed to release verified task replay reservation after create_task failure: ${
+                  releaseError instanceof Error ? releaseError.message : String(releaseError)
+                }`,
+              );
+            }
+          }
+          throw error;
+        }
+        if (verifiedTaskVerification && verifiedTaskReplayReservation) {
+          try {
+            await finalizeVerifiedTaskAttestationReplay(
+              verifiedTaskReplayReservation,
+              {
+                acceptedAt: verifiedTaskAcceptedAt ?? undefined,
+                taskPda: taskPda.toBase58(),
+                taskId: bytesToHex(taskId),
+                transactionSignature: txSignature,
+              },
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return errorResult(
+              `Task was created at ${taskPda.toBase58()} (tx ${txSignature}) but verified task replay finalization failed: ${message}`,
+            );
+          }
+          verifiedTaskMetadata = buildVerifiedTaskMetadata(
+            verifiedTaskVerification,
+            {
+              acceptedAt: verifiedTaskAcceptedAt ?? undefined,
+              taskPda: taskPda.toBase58(),
+              taskId: bytesToHex(taskId),
+              transactionSignature: txSignature,
+            },
           );
-          const legacyProgram = createProgram(
-            program.provider as AnchorProvider,
-            program.programId,
-            'legacyCreateTask',
-          );
-          txSignature = await executeCreateTask(legacyProgram, 'legacyCreateTask');
         }
 
         let validationTransactionSignature: string | null = null;
@@ -2950,45 +3230,54 @@ export function createCreateTaskTool(
           }
         }
 
-	        let taskJobSpecPda: string | null = null;
-	        let jobSpecTransactionSignature: string | null = null;
-	        let jobSpecPublishWarning: string | null = null;
-	        if (storedJobSpec) {
-	          try {
-	            const publishedJobSpecUri = normalizeJobSpecReferenceUri(
-	              jobSpecPublishUri ?? storedJobSpec.uri,
-	              storedJobSpec.hash,
-	              'jobSpecPublishUri',
-	            );
-	            const published = await setTaskJobSpecPointer(
-	              program,
-	              creator,
-	              taskPda,
-	              storedJobSpec.hash,
-	              publishedJobSpecUri,
-	            );
-	            taskJobSpecPda = published.taskJobSpecPda.toBase58();
-	            jobSpecTransactionSignature = published.transactionSignature;
-	            storedJobSpec = {
-	              ...storedJobSpec,
-	              uri: publishedJobSpecUri,
-	            };
-	          } catch (error) {
-	            jobSpecPublishWarning = formatJobSpecPublishWarning(error);
-	          }
-	        }
+        let taskJobSpecPda: string | null = null;
+        let jobSpecTransactionSignature: string | null = null;
+        let jobSpecPublishWarning: string | null = null;
+        if (jobSpecReference) {
+          try {
+            const publishedJobSpecUri = normalizeJobSpecReferenceUri(
+              jobSpecPublishUri ?? jobSpecUriInput ?? jobSpecReference.uri,
+              jobSpecReference.hash,
+              jobSpecPublishUri ? 'jobSpecPublishUri' : 'jobSpecUri',
+            );
+            const published = await setTaskJobSpecPointer(
+              program,
+              creator,
+              taskPda,
+              jobSpecReference.hash,
+              publishedJobSpecUri,
+            );
+            taskJobSpecPda = published.taskJobSpecPda.toBase58();
+            jobSpecTransactionSignature = published.transactionSignature;
+            jobSpecReference = {
+              ...jobSpecReference,
+              uri: publishedJobSpecUri,
+            };
+            if (storedJobSpec) {
+              storedJobSpec = {
+                ...storedJobSpec,
+                uri: publishedJobSpecUri,
+              };
+            }
+          } catch (error) {
+            jobSpecPublishWarning = formatJobSpecPublishWarning(error);
+          }
+        }
 
         let jobSpecTaskLinkPath: string | null = null;
         let jobSpecLinkWarning: string | null = null;
-        if (storedJobSpec) {
+        if (jobSpecReference) {
           try {
             jobSpecTaskLinkPath = await linkMarketplaceJobSpecToTask(
               {
-                hash: storedJobSpec.hash,
-                uri: storedJobSpec.uri,
+                hash: jobSpecReference.hash,
+                uri: jobSpecReference.uri,
                 taskPda: taskPda.toBase58(),
                 taskId: bytesToHex(taskId),
                 transactionSignature: jobSpecTransactionSignature ?? txSignature,
+                verifiedTaskAttestation: verifiedTaskVerification?.attestation ?? null,
+                verifiedTaskAcceptedAt: verifiedTaskAcceptedAt,
+                verifiedTaskCanonicalInput,
               },
               options.jobSpecStoreDir
                 ? { rootDir: options.jobSpecStoreDir }
@@ -3033,8 +3322,8 @@ export function createCreateTaskTool(
             taskValidationConfigPda,
             taskAttestorConfigPda,
             taskJobSpecPda,
-            jobSpecHash: storedJobSpec?.hash ?? null,
-            jobSpecUri: storedJobSpec?.uri ?? null,
+            jobSpecHash: jobSpecReference?.hash ?? null,
+            jobSpecUri: jobSpecReference?.uri ?? null,
             jobSpecPath: storedJobSpec?.path ?? null,
             jobSpecTaskLinkPath,
             jobSpecIntegrity: storedJobSpec
@@ -3043,6 +3332,11 @@ export function createCreateTaskTool(
             jobSpecTransactionSignature,
             jobSpecPublishWarning,
             jobSpecLinkWarning,
+            verifiedStatus: verifiedTaskMetadata ? 'verified' : 'unverified',
+            verifiedIssuerKeyId: verifiedTaskMetadata?.issuerKeyId ?? null,
+            verifiedTaskHash: verifiedTaskMetadata?.verifiedTaskHash ?? null,
+            verifiedTaskUri: verifiedTaskMetadata?.verifiedTaskUri ?? null,
+            verifiedTask: verifiedTaskMetadata,
             transactionSignature: txSignature,
             validationTransactionSignature,
           }),
