@@ -38,6 +38,7 @@ import {
 } from "../runtime/src/cli/marketplace-cli.js";
 import type { BaseCliOptions, CliRuntimeContext } from "../runtime/src/cli/types.js";
 import { DisputeOperations } from "../runtime/src/dispute/operations.js";
+import { TaskOperations } from "../runtime/src/task/operations.js";
 import { createAgencTools } from "../runtime/src/tools/agenc/index.js";
 
 const DEFAULT_RPC_URL =
@@ -114,12 +115,46 @@ interface ReviewedPublicArtifactSmokeArtifact {
   }>;
 }
 
+interface ClaimContentionSmokeArtifact {
+  version: 1;
+  kind: "marketplace-claim-contention-devnet-smoke";
+  createdAt: string;
+  rpcUrl: string;
+  programId: string;
+  runId: string;
+  description: string;
+  rewardLamports: string;
+  creatorAgentPda: string;
+  taskPda: string;
+  winner: {
+    label: string;
+    workerAgentPda: string;
+    workerClaimPda: string;
+    transactionSignature: string;
+  };
+  rejected: {
+    label: string;
+    workerAgentPda: string;
+    error: string;
+    raceError?: string;
+  };
+  taskStatus: string;
+  currentWorkers: number;
+  maxWorkers: number;
+  visibilityChecks: Array<{
+    stage: string;
+    status: string;
+    taskPda: string;
+    observedAt: string;
+  }>;
+}
+
 type MarketRunner = (
   context: CliRuntimeContext,
   options: Record<string, unknown>,
 ) => Promise<0 | 1 | 2>;
 
-type InitialFlow = "dispute" | "reviewed-public-artifact";
+type InitialFlow = "dispute" | "reviewed-public-artifact" | "claim-contention";
 
 let activeSignerKey: string | null = null;
 
@@ -139,6 +174,7 @@ function usage(): void {
 Environment:
   CREATOR_WALLET                Required for all initial flows.
   WORKER_WALLET                 Required for all initial flows.
+  WORKER_B_WALLET               Required for --flow claim-contention.
   ARBITER_A_WALLET              Required for --flow dispute.
   ARBITER_B_WALLET              Required for --flow dispute.
   ARBITER_C_WALLET              Required for --flow dispute.
@@ -151,7 +187,7 @@ Environment:
 Flags:
   --resume <path>               Resume a previously-created artifact and resolve.
   --artifact <path>             Custom output path for the resume artifact.
-  --flow <name>                 Initial flow: dispute | reviewed-public-artifact.
+  --flow <name>                 Initial flow: dispute | reviewed-public-artifact | claim-contention.
   --help                        Show this message.
 `);
 }
@@ -184,7 +220,7 @@ function getFlagValue(flag: string): string | null {
 
 function parseInitialFlow(): InitialFlow {
   const raw = getFlagValue("--flow") ?? "dispute";
-  if (raw === "dispute" || raw === "reviewed-public-artifact") {
+  if (raw === "dispute" || raw === "reviewed-public-artifact" || raw === "claim-contention") {
     return raw;
   }
   throw new Error(`Unsupported --flow ${raw}`);
@@ -721,6 +757,22 @@ async function writeReviewedPublicArtifact(
   return filePath;
 }
 
+async function writeClaimContentionArtifact(
+  artifact: ClaimContentionSmokeArtifact,
+  explicitPath?: string | null,
+): Promise<string> {
+  const filePath =
+    explicitPath ??
+    path.join(
+      ARTIFACT_DIR,
+      `marketplace-claim-contention-devnet-smoke-${Date.now()}.json`,
+    );
+
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+  return filePath;
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -960,6 +1012,235 @@ async function runReviewedPublicArtifactFlow(params: {
   console.log(`[artifact] ${savedPath}`);
 }
 
+async function runClaimContentionFlow(params: {
+  baseOptions: BaseCliOptions;
+  rpcUrl: string;
+  programId: string;
+  rewardLamports: bigint;
+  runId: string;
+  creator: AgentActor;
+  workerA: AgentActor;
+  workerB: AgentActor;
+  artifactPath?: string | null;
+}): Promise<void> {
+  const {
+    baseOptions,
+    rpcUrl,
+    programId,
+    rewardLamports,
+    runId,
+    creator,
+    workerA,
+    workerB,
+    artifactPath,
+  } = params;
+  const description = `claim contention smoke ${runId}`;
+  const visibilityChecks: ClaimContentionSmokeArtifact["visibilityChecks"] = [];
+
+  const createOutput = await runMarketCommand(
+    baseOptions,
+    runMarketTaskCreateCommand as MarketRunner,
+    {
+      description,
+      reward: rewardLamports.toString(),
+      requiredCapabilities: AgentCapabilities.COMPUTE.toString(),
+      creatorAgentPda: creator.agentPda.toBase58(),
+      validationMode: "creator-review",
+      reviewWindowSecs: 3_600,
+      maxWorkers: 1,
+      fullDescription:
+        "Live devnet smoke for exclusive reviewed-public claim contention.",
+      acceptanceCriteria: [
+        "Exactly one worker can claim the exclusive task.",
+        "A competing worker is rejected cleanly.",
+        "Explorer/list visibility reflects one in-progress worker.",
+      ],
+      deliverables: ["Claim contention evidence artifact"],
+      constraints: ["No Private ZK and no storefront dependencies."],
+    },
+    creator.agentPda.toBase58(),
+  );
+  const createResult = asRecord(createOutput.result, "contentionCreate.result");
+  const taskPda = getStringField(
+    createResult,
+    "taskPda",
+    "contentionCreate.result",
+  );
+  console.log(`[contention] created ${taskPda}`);
+  visibilityChecks.push(
+    await assertTaskVisibleInList(baseOptions, taskPda, "open", "after-create"),
+  );
+
+  const taskKey = new PublicKey(taskPda);
+  const workerAOps = new TaskOperations({
+    program: workerA.program,
+    agentId: workerA.agentId,
+    logger: silentLogger,
+  });
+  const workerBOps = new TaskOperations({
+    program: workerB.program,
+    agentId: workerB.agentId,
+    logger: silentLogger,
+  });
+  const taskBeforeClaim = await workerAOps.fetchTask(taskKey);
+  if (!taskBeforeClaim) {
+    throw new Error(`Claim contention task ${taskPda} was not fetchable before claim`);
+  }
+
+  function isExpectedContentionRejection(message: string): boolean {
+    return /Task has reached maximum workers|Task is not open for claims|Task not claimable|TaskFullyClaimed|TaskNotOpen|AlreadyClaimed/i.test(
+      message,
+    );
+  }
+
+  async function verifyPostRaceRejection(
+    label: string,
+    ops: TaskOperations,
+  ): Promise<string> {
+    const freshTask = await ops.fetchTask(taskKey);
+    if (!freshTask) {
+      throw new Error(`Claim contention task ${taskPda} was not fetchable after race`);
+    }
+
+    let rejection: string | null = null;
+    try {
+      await ops.claimTask(taskKey, freshTask);
+    } catch (error) {
+      rejection = error instanceof Error ? error.message : stringifyUnknown(error);
+    }
+
+    if (!rejection) {
+      throw new Error(`${label} was able to claim ${taskPda} after contention winner was accepted`);
+    }
+    if (!isExpectedContentionRejection(rejection)) {
+      throw new Error(`${label} post-race rejection was not a clean marketplace rejection: ${rejection}`);
+    }
+    return rejection;
+  }
+
+  async function attemptClaim(label: string, actor: AgentActor, ops: TaskOperations) {
+    try {
+      const result = await ops.claimTask(taskKey, taskBeforeClaim);
+      return {
+        status: "fulfilled" as const,
+        label,
+        actor,
+        result,
+      };
+    } catch (error) {
+      return {
+        status: "rejected" as const,
+        label,
+        actor,
+        error: error instanceof Error ? error.message : stringifyUnknown(error),
+      };
+    }
+  }
+
+  const attempts = await Promise.all([
+    attemptClaim("worker-a", workerA, workerAOps),
+    attemptClaim("worker-b", workerB, workerBOps),
+  ]);
+  const fulfilled = attempts.filter((attempt) => attempt.status === "fulfilled");
+  const rejected = attempts.filter((attempt) => attempt.status === "rejected");
+
+  if (fulfilled.length !== 1 || rejected.length !== 1) {
+    throw new Error(
+      `Expected exactly one winning claim and one rejected claim, got fulfilled=${fulfilled.length} rejected=${rejected.length}: ${stringifyUnknown(attempts)}`,
+    );
+  }
+
+  const winner = fulfilled[0];
+  const loser = rejected[0];
+  if (winner.status !== "fulfilled" || loser.status !== "rejected") {
+    throw new Error("Claim contention result partition failed");
+  }
+
+  console.log(
+    `[contention] winner=${winner.label} claim=${winner.result.claimPda.toBase58()}`,
+  );
+  console.log(`[contention] rejected=${loser.label} error=${loser.error}`);
+
+  const raceError = loser.error;
+  const cleanRejectionError = isExpectedContentionRejection(raceError)
+    ? raceError
+    : await verifyPostRaceRejection(
+        loser.label,
+        loser.label === "worker-a" ? workerAOps : workerBOps,
+      );
+  if (cleanRejectionError !== raceError) {
+    console.log(
+      `[contention] post-race rejection confirmed for ${loser.label}: ${cleanRejectionError}`,
+    );
+  }
+
+  visibilityChecks.push(
+    await assertTaskVisibleInList(baseOptions, taskPda, "in_progress", "after-contention"),
+  );
+
+  const detailOutput = await runMarketCommand(
+    baseOptions,
+    runMarketTaskDetailCommand as MarketRunner,
+    {
+      taskPda,
+    },
+  );
+  const task = asRecord(detailOutput.task, "contentionDetail.task");
+  const taskStatus = getStringField(task, "status", "contentionDetail.task");
+  const currentWorkers = getNumberField(
+    task,
+    "currentWorkers",
+    "contentionDetail.task",
+  );
+  const maxWorkers = getNumberField(task, "maxWorkers", "contentionDetail.task");
+
+  if (taskStatus !== "in_progress") {
+    throw new Error(`Claim contention task ${taskPda} status=${taskStatus}, expected in_progress`);
+  }
+  if (currentWorkers !== 1 || maxWorkers !== 1) {
+    throw new Error(
+      `Claim contention worker counts invalid: currentWorkers=${currentWorkers}, maxWorkers=${maxWorkers}`,
+    );
+  }
+
+  const savedPath = await writeClaimContentionArtifact(
+    {
+      version: 1,
+      kind: "marketplace-claim-contention-devnet-smoke",
+      createdAt: new Date().toISOString(),
+      rpcUrl,
+      programId,
+      runId,
+      description,
+      rewardLamports: rewardLamports.toString(),
+      creatorAgentPda: creator.agentPda.toBase58(),
+      taskPda,
+      winner: {
+        label: winner.label,
+        workerAgentPda: winner.actor.agentPda.toBase58(),
+        workerClaimPda: winner.result.claimPda.toBase58(),
+        transactionSignature: winner.result.transactionSignature ?? "",
+      },
+      rejected: {
+        label: loser.label,
+        workerAgentPda: loser.actor.agentPda.toBase58(),
+        error: cleanRejectionError,
+        ...(cleanRejectionError === raceError ? {} : { raceError }),
+      },
+      taskStatus,
+      currentWorkers,
+      maxWorkers,
+      visibilityChecks,
+    },
+    artifactPath,
+  );
+
+  console.log(
+    `[ok] claim contention complete for ${taskPda}: winner=${winner.label}, rejected=${loser.label}`,
+  );
+  console.log(`[artifact] ${savedPath}`);
+}
+
 async function initial(): Promise<void> {
   const rpcUrl = process.env.AGENC_RPC_URL ?? DEFAULT_RPC_URL;
   const programId = parseOptionalProgramId();
@@ -1073,6 +1354,107 @@ async function initial(): Promise<void> {
         runId,
         creator,
         worker,
+        artifactPath,
+      });
+      return;
+    } finally {
+      resetMarketplaceCliProgramContextOverrides();
+    }
+  }
+
+  if (flow === "claim-contention") {
+    const workerBSigner = createSignerContext(
+      "worker-b",
+      env("WORKER_B_WALLET"),
+      connection,
+      programId,
+    );
+    ensureDistinctWallets([creatorSigner, workerSigner, workerBSigner]);
+    await Promise.all([
+      ensureBalance(
+        connection,
+        "creator",
+        creatorSigner.keypair.publicKey,
+        creatorStake + rewardLamports + DEFAULT_FEE_BUFFER_LAMPORTS,
+      ),
+      ensureBalance(
+        connection,
+        "worker-a",
+        workerSigner.keypair.publicKey,
+        workerStake + DEFAULT_FEE_BUFFER_LAMPORTS,
+      ),
+      ensureBalance(
+        connection,
+        "worker-b",
+        workerBSigner.keypair.publicKey,
+        workerStake + DEFAULT_FEE_BUFFER_LAMPORTS,
+      ),
+    ]);
+
+    console.log(`[config] rpc: ${rpcUrl}`);
+    console.log(`[config] program: ${readOnlyProgram.programId.toBase58()}`);
+    console.log(`[config] flow: ${flow}`);
+    console.log(`[config] reward lamports: ${rewardLamports.toString()}`);
+    console.log(`[config] creator wallet: ${creatorSigner.keypair.publicKey.toBase58()}`);
+    console.log(`[config] worker-a wallet: ${workerSigner.keypair.publicKey.toBase58()}`);
+    console.log(`[config] worker-b wallet: ${workerBSigner.keypair.publicKey.toBase58()}`);
+
+    const creator = await registerOrLoadAgent(
+      creatorSigner,
+      connection,
+      programId,
+      AgentCapabilities.COMPUTE,
+      creatorStake,
+      maxBigInt(protocolConfig.minAgentStake, protocolConfig.minStakeForDispute),
+    );
+    const workerA = await registerOrLoadAgent(
+      workerSigner,
+      connection,
+      programId,
+      AgentCapabilities.COMPUTE,
+      workerStake,
+      workerStake,
+    );
+    const workerB = await registerOrLoadAgent(
+      workerBSigner,
+      connection,
+      programId,
+      AgentCapabilities.COMPUTE,
+      workerStake,
+      workerStake,
+    );
+
+    console.log(`[agent] creator: ${creator.agentPda.toBase58()}`);
+    console.log(`[agent] worker-a: ${workerA.agentPda.toBase58()}`);
+    console.log(`[agent] worker-b: ${workerB.agentPda.toBase58()}`);
+
+    const runtime: SmokeRuntime = {
+      connection,
+      readOnlyProgram,
+      signersByKey: new Map<string, SignerContext>([
+        [creator.agentPda.toBase58(), creator],
+        [workerA.agentPda.toBase58(), workerA],
+        [workerB.agentPda.toBase58(), workerB],
+      ]),
+    };
+    installMarketplaceCliOverrides(runtime);
+
+    const baseOptions = buildBaseOptions(
+      rpcUrl,
+      readOnlyProgram.programId.toBase58(),
+    );
+    const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    try {
+      await runClaimContentionFlow({
+        baseOptions,
+        rpcUrl,
+        programId: readOnlyProgram.programId.toBase58(),
+        rewardLamports,
+        runId,
+        creator,
+        workerA,
+        workerB,
         artifactPath,
       });
       return;
