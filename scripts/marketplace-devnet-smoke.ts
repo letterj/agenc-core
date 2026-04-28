@@ -50,6 +50,7 @@ const DEFAULT_FEE_BUFFER_LAMPORTS = 20_000_000n;
 const DEFAULT_AUTHORITY_FEE_BUFFER_LAMPORTS = 10_000_000n;
 const DEFAULT_RPC_RETRY_ATTEMPTS = 5;
 const DEFAULT_RPC_RETRY_DELAY_MS = 1_500;
+const DEFAULT_CONTENTION_REGISTRATION_DELAY_MS = 1_500;
 const ARTIFACT_DIR = path.join(os.tmpdir(), "agenc-marketplace-smoke");
 const AGENT_DISCRIMINATOR = Buffer.from([130, 53, 100, 103, 121, 77, 148, 19]);
 const AGENT_AUTHORITY_OFFSET = 40;
@@ -126,18 +127,19 @@ interface ClaimContentionSmokeArtifact {
   rewardLamports: string;
   creatorAgentPda: string;
   taskPda: string;
+  workerCount: number;
   winner: {
     label: string;
     workerAgentPda: string;
     workerClaimPda: string;
     transactionSignature: string;
   };
-  rejected: {
+  rejected: Array<{
     label: string;
     workerAgentPda: string;
     error: string;
     raceError?: string;
-  };
+  }>;
   taskStatus: string;
   currentWorkers: number;
   maxWorkers: number;
@@ -175,6 +177,7 @@ Environment:
   CREATOR_WALLET                Required for all initial flows.
   WORKER_WALLET                 Required for all initial flows.
   WORKER_B_WALLET               Required for --flow claim-contention.
+  WORKER_WALLETS                Optional comma-separated wallet list for --flow claim-contention.
   ARBITER_A_WALLET              Required for --flow dispute.
   ARBITER_B_WALLET              Required for --flow dispute.
   ARBITER_C_WALLET              Required for --flow dispute.
@@ -252,6 +255,29 @@ function readNumberEnv(name: string, fallback: number): number {
     throw new Error(`${name} must be a non-negative number`);
   }
   return Math.trunc(parsed);
+}
+
+function readWalletListEnv(name: string): string[] {
+  const raw = process.env[name];
+  if (!raw?.trim()) {
+    return [];
+  }
+  return raw
+    .split(/[,\n]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function readContentionWorkerWalletPaths(defaultWorkerWallet: string): string[] {
+  const explicit = readWalletListEnv("WORKER_WALLETS");
+  if (explicit.length > 0) {
+    if (explicit.length < 2) {
+      throw new Error("WORKER_WALLETS must contain at least two wallet paths for claim contention");
+    }
+    return explicit;
+  }
+
+  return [defaultWorkerWallet, env("WORKER_B_WALLET")];
 }
 
 function formatUnix(unixSeconds: number): string {
@@ -545,11 +571,23 @@ async function registerOrLoadAgent(
   }
 
   const endpoint = `${DEFAULT_ENDPOINT_BASE}/${signer.label}`;
-  const result = await registerTool.execute({
-    capabilities: requiredCapabilities.toString(),
-    endpoint,
-    stakeAmount: stakeAmount.toString(),
-  });
+  const result = await withRpcRateLimitRetry(
+    `${signer.label} registration`,
+    async () => {
+      const registrationResult = await registerTool.execute({
+        capabilities: requiredCapabilities.toString(),
+        endpoint,
+        stakeAmount: stakeAmount.toString(),
+      });
+      if (
+        registrationResult.isError &&
+        isRpcRateLimitError(registrationResult.content)
+      ) {
+        throw new Error(stringifyUnknown(registrationResult.content));
+      }
+      return registrationResult;
+    },
+  );
 
   if (result.isError) {
     throw new Error(
@@ -1019,8 +1057,7 @@ async function runClaimContentionFlow(params: {
   rewardLamports: bigint;
   runId: string;
   creator: AgentActor;
-  workerA: AgentActor;
-  workerB: AgentActor;
+  workers: AgentActor[];
   artifactPath?: string | null;
 }): Promise<void> {
   const {
@@ -1030,10 +1067,12 @@ async function runClaimContentionFlow(params: {
     rewardLamports,
     runId,
     creator,
-    workerA,
-    workerB,
+    workers,
     artifactPath,
   } = params;
+  if (workers.length < 2) {
+    throw new Error("Claim contention smoke requires at least two workers");
+  }
   const description = `claim contention smoke ${runId}`;
   const visibilityChecks: ClaimContentionSmokeArtifact["visibilityChecks"] = [];
 
@@ -1051,8 +1090,8 @@ async function runClaimContentionFlow(params: {
       fullDescription:
         "Live devnet smoke for exclusive reviewed-public claim contention.",
       acceptanceCriteria: [
-        "Exactly one worker can claim the exclusive task.",
-        "A competing worker is rejected cleanly.",
+        `Exactly one of ${workers.length} workers can claim the exclusive task.`,
+        "Competing workers are rejected cleanly.",
         "Explorer/list visibility reflects one in-progress worker.",
       ],
       deliverables: ["Claim contention evidence artifact"],
@@ -1072,17 +1111,16 @@ async function runClaimContentionFlow(params: {
   );
 
   const taskKey = new PublicKey(taskPda);
-  const workerAOps = new TaskOperations({
-    program: workerA.program,
-    agentId: workerA.agentId,
-    logger: silentLogger,
-  });
-  const workerBOps = new TaskOperations({
-    program: workerB.program,
-    agentId: workerB.agentId,
-    logger: silentLogger,
-  });
-  const taskBeforeClaim = await workerAOps.fetchTask(taskKey);
+  const contenders = workers.map((worker, index) => ({
+    label: `worker-${index + 1}`,
+    actor: worker,
+    ops: new TaskOperations({
+      program: worker.program,
+      agentId: worker.agentId,
+      logger: silentLogger,
+    }),
+  }));
+  const taskBeforeClaim = await contenders[0]!.ops.fetchTask(taskKey);
   if (!taskBeforeClaim) {
     throw new Error(`Claim contention task ${taskPda} was not fetchable before claim`);
   }
@@ -1137,41 +1175,53 @@ async function runClaimContentionFlow(params: {
     }
   }
 
-  const attempts = await Promise.all([
-    attemptClaim("worker-a", workerA, workerAOps),
-    attemptClaim("worker-b", workerB, workerBOps),
-  ]);
+  const attempts = await Promise.all(
+    contenders.map((contender) =>
+      attemptClaim(contender.label, contender.actor, contender.ops),
+    ),
+  );
   const fulfilled = attempts.filter((attempt) => attempt.status === "fulfilled");
   const rejected = attempts.filter((attempt) => attempt.status === "rejected");
 
-  if (fulfilled.length !== 1 || rejected.length !== 1) {
+  if (fulfilled.length !== 1 || rejected.length !== workers.length - 1) {
     throw new Error(
-      `Expected exactly one winning claim and one rejected claim, got fulfilled=${fulfilled.length} rejected=${rejected.length}: ${stringifyUnknown(attempts)}`,
+      `Expected exactly one winning claim and ${workers.length - 1} rejected claims, got fulfilled=${fulfilled.length} rejected=${rejected.length}: ${stringifyUnknown(attempts)}`,
     );
   }
 
   const winner = fulfilled[0];
-  const loser = rejected[0];
-  if (winner.status !== "fulfilled" || loser.status !== "rejected") {
+  if (winner.status !== "fulfilled") {
     throw new Error("Claim contention result partition failed");
   }
 
   console.log(
     `[contention] winner=${winner.label} claim=${winner.result.claimPda.toBase58()}`,
   );
-  console.log(`[contention] rejected=${loser.label} error=${loser.error}`);
-
-  const raceError = loser.error;
-  const cleanRejectionError = isExpectedContentionRejection(raceError)
-    ? raceError
-    : await verifyPostRaceRejection(
-        loser.label,
-        loser.label === "worker-a" ? workerAOps : workerBOps,
+  const cleanRejected = [];
+  for (const loser of rejected) {
+    if (loser.status !== "rejected") {
+      throw new Error("Claim contention result partition failed");
+    }
+    console.log(`[contention] rejected=${loser.label} error=${loser.error}`);
+    const raceError = loser.error;
+    const contender = contenders.find((entry) => entry.label === loser.label);
+    if (!contender) {
+      throw new Error(`Missing contender context for ${loser.label}`);
+    }
+    const cleanRejectionError = isExpectedContentionRejection(raceError)
+      ? raceError
+      : await verifyPostRaceRejection(loser.label, contender.ops);
+    if (cleanRejectionError !== raceError) {
+      console.log(
+        `[contention] post-race rejection confirmed for ${loser.label}: ${cleanRejectionError}`,
       );
-  if (cleanRejectionError !== raceError) {
-    console.log(
-      `[contention] post-race rejection confirmed for ${loser.label}: ${cleanRejectionError}`,
-    );
+    }
+    cleanRejected.push({
+      label: loser.label,
+      workerAgentPda: loser.actor.agentPda.toBase58(),
+      error: cleanRejectionError,
+      ...(cleanRejectionError === raceError ? {} : { raceError }),
+    });
   }
 
   visibilityChecks.push(
@@ -1215,18 +1265,14 @@ async function runClaimContentionFlow(params: {
       rewardLamports: rewardLamports.toString(),
       creatorAgentPda: creator.agentPda.toBase58(),
       taskPda,
+      workerCount: workers.length,
       winner: {
         label: winner.label,
         workerAgentPda: winner.actor.agentPda.toBase58(),
         workerClaimPda: winner.result.claimPda.toBase58(),
         transactionSignature: winner.result.transactionSignature ?? "",
       },
-      rejected: {
-        label: loser.label,
-        workerAgentPda: loser.actor.agentPda.toBase58(),
-        error: cleanRejectionError,
-        ...(cleanRejectionError === raceError ? {} : { raceError }),
-      },
+      rejected: cleanRejected,
       taskStatus,
       currentWorkers,
       maxWorkers,
@@ -1236,7 +1282,7 @@ async function runClaimContentionFlow(params: {
   );
 
   console.log(
-    `[ok] claim contention complete for ${taskPda}: winner=${winner.label}, rejected=${loser.label}`,
+    `[ok] claim contention complete for ${taskPda}: winner=${winner.label}, rejected=${cleanRejected.length}/${workers.length - 1}`,
   );
   console.log(`[artifact] ${savedPath}`);
 }
@@ -1363,13 +1409,11 @@ async function initial(): Promise<void> {
   }
 
   if (flow === "claim-contention") {
-    const workerBSigner = createSignerContext(
-      "worker-b",
-      env("WORKER_B_WALLET"),
-      connection,
-      programId,
+    const workerWalletPaths = readContentionWorkerWalletPaths(workerSigner.walletPath);
+    const workerSigners = workerWalletPaths.map((walletPath, index) =>
+      createSignerContext(`worker-${index + 1}`, walletPath, connection, programId),
     );
-    ensureDistinctWallets([creatorSigner, workerSigner, workerBSigner]);
+    ensureDistinctWallets([creatorSigner, ...workerSigners]);
     await Promise.all([
       ensureBalance(
         connection,
@@ -1377,17 +1421,13 @@ async function initial(): Promise<void> {
         creatorSigner.keypair.publicKey,
         creatorStake + rewardLamports + DEFAULT_FEE_BUFFER_LAMPORTS,
       ),
-      ensureBalance(
-        connection,
-        "worker-a",
-        workerSigner.keypair.publicKey,
-        workerStake + DEFAULT_FEE_BUFFER_LAMPORTS,
-      ),
-      ensureBalance(
-        connection,
-        "worker-b",
-        workerBSigner.keypair.publicKey,
-        workerStake + DEFAULT_FEE_BUFFER_LAMPORTS,
+      ...workerSigners.map((signer) =>
+        ensureBalance(
+          connection,
+          signer.label,
+          signer.keypair.publicKey,
+          workerStake + DEFAULT_FEE_BUFFER_LAMPORTS,
+        ),
       ),
     ]);
 
@@ -1396,8 +1436,9 @@ async function initial(): Promise<void> {
     console.log(`[config] flow: ${flow}`);
     console.log(`[config] reward lamports: ${rewardLamports.toString()}`);
     console.log(`[config] creator wallet: ${creatorSigner.keypair.publicKey.toBase58()}`);
-    console.log(`[config] worker-a wallet: ${workerSigner.keypair.publicKey.toBase58()}`);
-    console.log(`[config] worker-b wallet: ${workerBSigner.keypair.publicKey.toBase58()}`);
+    for (const signer of workerSigners) {
+      console.log(`[config] ${signer.label} wallet: ${signer.keypair.publicKey.toBase58()}`);
+    }
 
     const creator = await registerOrLoadAgent(
       creatorSigner,
@@ -1407,34 +1448,42 @@ async function initial(): Promise<void> {
       creatorStake,
       maxBigInt(protocolConfig.minAgentStake, protocolConfig.minStakeForDispute),
     );
-    const workerA = await registerOrLoadAgent(
-      workerSigner,
-      connection,
-      programId,
-      AgentCapabilities.COMPUTE,
-      workerStake,
-      workerStake,
-    );
-    const workerB = await registerOrLoadAgent(
-      workerBSigner,
-      connection,
-      programId,
-      AgentCapabilities.COMPUTE,
-      workerStake,
-      workerStake,
-    );
+    const workers: AgentActor[] = [];
+    for (const [index, signer] of workerSigners.entries()) {
+      workers.push(
+        await registerOrLoadAgent(
+          signer,
+          connection,
+          programId,
+          AgentCapabilities.COMPUTE,
+          workerStake,
+          workerStake,
+        ),
+      );
+      if (index < workerSigners.length - 1) {
+        await sleep(
+          readNumberEnv(
+            "AGENC_CONTENTION_REGISTRATION_DELAY_MS",
+            DEFAULT_CONTENTION_REGISTRATION_DELAY_MS,
+          ),
+        );
+      }
+    }
 
     console.log(`[agent] creator: ${creator.agentPda.toBase58()}`);
-    console.log(`[agent] worker-a: ${workerA.agentPda.toBase58()}`);
-    console.log(`[agent] worker-b: ${workerB.agentPda.toBase58()}`);
+    for (const worker of workers) {
+      console.log(`[agent] ${worker.label}: ${worker.agentPda.toBase58()}`);
+    }
 
     const runtime: SmokeRuntime = {
       connection,
       readOnlyProgram,
       signersByKey: new Map<string, SignerContext>([
         [creator.agentPda.toBase58(), creator],
-        [workerA.agentPda.toBase58(), workerA],
-        [workerB.agentPda.toBase58(), workerB],
+        ...workers.map((worker): [string, SignerContext] => [
+          worker.agentPda.toBase58(),
+          worker,
+        ]),
       ]),
     };
     installMarketplaceCliOverrides(runtime);
@@ -1453,8 +1502,7 @@ async function initial(): Promise<void> {
         rewardLamports,
         runId,
         creator,
-        workerA,
-        workerB,
+        workers,
         artifactPath,
       });
       return;
