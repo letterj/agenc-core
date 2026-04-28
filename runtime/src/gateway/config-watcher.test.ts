@@ -583,6 +583,14 @@ describe("validateGatewayConfig policy bundles", () => {
         defaultTenantId: "tenant-a",
         defaultProjectId: "project-x",
         simulationMode: "shadow",
+        marketplaceSigningToolsEnabled: true,
+        marketplaceSignerPolicy: {
+          allowedTools: ["agenc.claimTask"],
+          allowedProgramIds: ["11111111111111111111111111111111"],
+          maxRewardLamports: "100000000",
+          maxStakeLamports: "10000000",
+          allowedRewardMints: ["SOL"],
+        },
         networkAccess: {
           allowHosts: ["api.example.com"],
           denyHosts: ["blocked.example.com"],
@@ -682,6 +690,12 @@ describe("validateGatewayConfig policy bundles", () => {
       policy: {
         enabled: true,
         simulationMode: "preview",
+        marketplaceSigningToolsEnabled: "yes" as unknown as boolean,
+        marketplaceSignerPolicy: {
+          allowedTools: "agenc.claimTask" as unknown as string[],
+          maxRewardLamports: "0.1",
+          maxStakeLamports: 100 as unknown as string,
+        },
         networkAccess: {
           allowHosts: "api.example.com" as unknown as string[],
         },
@@ -746,6 +760,18 @@ describe("validateGatewayConfig policy bundles", () => {
     expect(result.valid).toBe(false);
     expect(result.errors).toContain(
       "policy.simulationMode must be one of: off, shadow",
+    );
+    expect(result.errors).toContain(
+      "policy.marketplaceSigningToolsEnabled must be a boolean",
+    );
+    expect(result.errors).toContain(
+      "policy.marketplaceSignerPolicy.allowedTools must be an array of strings",
+    );
+    expect(result.errors).toContain(
+      "policy.marketplaceSignerPolicy.maxRewardLamports must be a decimal string",
+    );
+    expect(result.errors).toContain(
+      "policy.marketplaceSignerPolicy.maxStakeLamports must be a decimal string",
     );
     expect(result.errors).toContain(
       "policy.networkAccess.allowHosts must be an array of strings",

@@ -151,6 +151,45 @@ const executor = new LLMTaskExecutor({
 });
 ```
 
+`createAgencTools()` is intentionally read-only by default. Signer-backed marketplace
+mutation tools such as `agenc.createTask`, `agenc.claimTask`, and
+`agenc.completeTask` must be enabled explicitly:
+
+```typescript
+registry.registerAll(
+  createAgencTools(
+    { connection, wallet, logger },
+    { includeMutationTools: true },
+  ),
+);
+```
+
+For daemon/gateway deployments, mutation tools are still fail-closed unless
+`policy.marketplaceSigningToolsEnabled: true`, a wallet is loaded, and gateway
+approvals are enabled.
+
+Daemon signing should also include a local signer capability policy. Without one,
+the daemon registers mutation tools behind approvals but denies every marketplace
+signature attempt:
+
+```json
+{
+  "policy": {
+    "marketplaceSigningToolsEnabled": true,
+    "marketplaceSignerPolicy": {
+      "allowedTools": ["agenc.claimTask", "agenc.completeTask"],
+      "allowedProgramIds": ["2jdBSJ8U5ixfwgs1bRLPtRRnpZAPm8Xv1tEdu8yjHJC7"],
+      "allowedTaskPdas": ["..."],
+      "maxRewardLamports": "100000000",
+      "allowedRewardMints": ["SOL"]
+    }
+  },
+  "approvals": {
+    "enabled": true
+  }
+}
+```
+
 ### Memory Integration
 
 ```typescript

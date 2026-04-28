@@ -906,6 +906,10 @@ export {
   JUPITER_ACTION_SCHEMAS,
   // Built-in AgenC tools
   createAgencTools,
+  createAgencReadOnlyTools,
+  createAgencMutationTools,
+  type CreateAgencToolsOptions,
+  type MarketplaceSignerPolicy,
   createListTasksTool,
   createGetTaskTool,
   createGetTokenBalanceTool,

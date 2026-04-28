@@ -43,6 +43,10 @@ export {
 // Built-in AgenC tools
 export {
   createAgencTools,
+  createAgencReadOnlyTools,
+  createAgencMutationTools,
+  type CreateAgencToolsOptions,
+  type MarketplaceSignerPolicy,
   createListTasksTool,
   createGetTaskTool,
   createGetTokenBalanceTool,
