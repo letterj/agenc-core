@@ -92,6 +92,7 @@ Required env for live protocol lanes:
   CREATOR_WALLET
   WORKER_WALLET
   WORKER_B_WALLET
+  WORKER_WALLETS (optional comma-separated list for --mode contention)
   ARBITER_A_WALLET
   ARBITER_B_WALLET
   ARBITER_C_WALLET

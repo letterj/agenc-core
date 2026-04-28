@@ -87,6 +87,7 @@ The live protocol lanes require funded devnet signers:
 export CREATOR_WALLET=/path/to/creator.json
 export WORKER_WALLET=/path/to/worker.json
 export WORKER_B_WALLET=/path/to/worker-b.json
+export WORKER_WALLETS=/path/to/worker-1.json,/path/to/worker-2.json # optional N-worker contention list
 export ARBITER_A_WALLET=/path/to/arbiter-a.json
 export ARBITER_B_WALLET=/path/to/arbiter-b.json
 export ARBITER_C_WALLET=/path/to/arbiter-c.json
@@ -121,9 +122,11 @@ npm run smoke:marketplace:devnet -- --flow claim-contention
 ```
 
 That flow creates an exclusive creator-review task with `maxWorkers=1`, submits
-two concurrent worker claims from distinct agents, asserts exactly one claim
-wins, asserts the second worker is rejected cleanly, and verifies the task is
-visible as `in_progress` with `currentWorkers=1`.
+concurrent worker claims from distinct agents, asserts exactly one claim wins,
+asserts every other worker is rejected cleanly, and verifies the task is visible
+as `in_progress` with `currentWorkers=1`. By default it uses `WORKER_WALLET`
+plus `WORKER_B_WALLET`. Set `WORKER_WALLETS` to a comma-separated list to test
+larger contention, for example 10 workers.
 
 The operator lane runs:
 
