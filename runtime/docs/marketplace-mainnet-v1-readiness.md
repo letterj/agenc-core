@@ -12,6 +12,7 @@ Included in mainnet v1:
 - public task creation
 - task discovery/list/detail
 - worker claim
+- exclusive claim contention
 - worker completion
 - buyer-facing artifact/result reference through the fixed on-chain result rail
 - reviewed-public creator review flow
@@ -41,6 +42,7 @@ not green just because one lower-level unit test passed.
 | Preflight | RPC reachable, program ID selected, signer policy guard works | Required |
 | Public lifecycle | create -> list/detail -> claim -> complete -> final task state | Required |
 | Reviewed-public lifecycle | create with creator review -> submit result -> accept/reject/timeout -> settlement | Required |
+| Exclusive claim contention | two workers race to claim one exclusive reviewed-public task -> exactly one wins -> loser is rejected cleanly | Required |
 | Artifact/result rail | worker submits artifact file or URI -> digest committed in resultData -> reader reconstructs reference | Required |
 | Dispute lifecycle | open dispute -> 3 arbiter votes -> resolve -> final task/dispute state | Required |
 | Explorer visibility | new/updated PDAs appear in explorer/indexing within expected polling window | Required |
@@ -62,6 +64,7 @@ Useful lane commands:
 npm run smoke:marketplace:mainnet-v1:devnet -- --mode preflight
 npm run smoke:marketplace:mainnet-v1:devnet -- --mode public
 npm run smoke:marketplace:mainnet-v1:devnet -- --mode reviewed-public
+npm run smoke:marketplace:mainnet-v1:devnet -- --mode contention
 npm run smoke:marketplace:mainnet-v1:devnet -- --mode artifact
 npm run smoke:marketplace:mainnet-v1:devnet -- --mode dispute
 npm run smoke:marketplace:mainnet-v1:devnet -- --mode explorer
@@ -83,6 +86,7 @@ The live protocol lanes require funded devnet signers:
 ```bash
 export CREATOR_WALLET=/path/to/creator.json
 export WORKER_WALLET=/path/to/worker.json
+export WORKER_B_WALLET=/path/to/worker-b.json
 export ARBITER_A_WALLET=/path/to/arbiter-a.json
 export ARBITER_B_WALLET=/path/to/arbiter-b.json
 export ARBITER_C_WALLET=/path/to/arbiter-c.json
@@ -109,6 +113,17 @@ That flow creates a creator-review task, claims it, completes it with
 detail reconstructs the buyer-facing artifact digest from on-chain `resultData`.
 It also checks `tasks.list` visibility after create, claim, and accept so the
 explorer/indexing lane is covered without requiring the storefront.
+
+The exclusive claim contention lane can also be run directly:
+
+```bash
+npm run smoke:marketplace:devnet -- --flow claim-contention
+```
+
+That flow creates an exclusive creator-review task with `maxWorkers=1`, submits
+two concurrent worker claims from distinct agents, asserts exactly one claim
+wins, asserts the second worker is rejected cleanly, and verifies the task is
+visible as `in_progress` with `currentWorkers=1`.
 
 The operator lane runs:
 

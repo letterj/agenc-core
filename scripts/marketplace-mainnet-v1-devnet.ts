@@ -13,6 +13,7 @@ type Mode =
   | "preflight"
   | "public"
   | "reviewed-public"
+  | "contention"
   | "artifact"
   | "dispute"
   | "explorer"
@@ -51,6 +52,7 @@ const VALID_MODES = new Set<Mode>([
   "preflight",
   "public",
   "reviewed-public",
+  "contention",
   "artifact",
   "dispute",
   "explorer",
@@ -69,6 +71,7 @@ Modes:
   preflight          RPC reachability and mutation signer-policy hardening.
   public             Public protocol lifecycle using the plain devnet smoke.
   reviewed-public    Creator-review lifecycle gate using the live artifact smoke.
+  contention         Live devnet exclusive-claim contention gate.
   artifact           Buyer-facing artifact rail gate, local tests plus live devnet smoke.
   dispute            Dispute lifecycle using the plain devnet smoke.
   explorer           Explorer/indexing visibility using the live artifact smoke.
@@ -88,6 +91,7 @@ Flags:
 Required env for live protocol lanes:
   CREATOR_WALLET
   WORKER_WALLET
+  WORKER_B_WALLET
   ARBITER_A_WALLET
   ARBITER_B_WALLET
   ARBITER_C_WALLET
@@ -228,6 +232,19 @@ async function runReviewedPublic(): Promise<LaneResult> {
   );
 }
 
+async function runContention(): Promise<LaneResult> {
+  return runChild(
+    "exclusive-claim-contention-live-devnet",
+    true,
+    "tsx",
+    [
+      "scripts/marketplace-devnet-smoke.ts",
+      "--flow",
+      "claim-contention",
+    ],
+  );
+}
+
 async function runExplorer(): Promise<LaneResult> {
   return runChild(
     "explorer-indexing-visibility",
@@ -310,6 +327,7 @@ async function runAll(options: CliOptions): Promise<LaneResult[]> {
   results.push(await runPreflight());
   results.push(await runPublic());
   results.push(await runReviewedPublic());
+  results.push(await runContention());
   results.push(...(await runArtifact()));
   results.push(await runDispute());
   results.push(await runExplorer());
@@ -329,6 +347,8 @@ async function runSelected(options: CliOptions): Promise<LaneResult[]> {
       return [await runPublic()];
     case "reviewed-public":
       return [await runReviewedPublic()];
+    case "contention":
+      return [await runContention()];
     case "artifact":
       return runArtifact();
     case "dispute":
@@ -356,6 +376,7 @@ async function writeArtifact(artifactPath: string, results: LaneResult[], option
         "core protocol task lifecycle",
         "CLI/runtime task creation and completion",
         "reviewed-public settlement",
+        "exclusive claim contention",
         "artifact result rail",
         "dispute lifecycle",
         "explorer/indexing visibility",
