@@ -247,6 +247,7 @@ describe("AgenC protocol tool factory", () => {
       name: string;
       policy: MarketplaceSignerPolicy;
       code: string;
+      intent?: MarketplaceTransactionIntent;
     }> = [
       {
         name: "wrong program",
@@ -310,12 +311,98 @@ describe("AgenC protocol tool factory", () => {
         },
         code: "ACCOUNT_META_PUBKEY_MISMATCH",
       },
+      {
+        name: "token reward denied",
+        policy: {
+          allowedTools: ["agenc.completeTask"],
+          denyTokenRewards: true,
+        },
+        intent: {
+          ...intent,
+          rewardMint: "TokenMint1111111111111111111111111111111111",
+        },
+        code: "TOKEN_REWARD_DENIED",
+      },
+      {
+        name: "wrong task type",
+        policy: {
+          allowedTools: ["agenc.completeTask"],
+          allowedTaskTypes: ["Exclusive"],
+        },
+        intent: {
+          ...intent,
+          taskType: "Collaborative",
+        },
+        code: "TASK_TYPE_NOT_ALLOWED",
+      },
+      {
+        name: "wrong validation mode",
+        policy: {
+          allowedTools: ["agenc.completeTask"],
+          allowedValidationModes: ["CreatorReview"],
+        },
+        intent: {
+          ...intent,
+          validationMode: "Auto",
+        },
+        code: "VALIDATION_MODE_NOT_ALLOWED",
+      },
+      {
+        name: "artifact without creator review",
+        policy: {
+          allowedTools: ["agenc.completeTask"],
+          requireCreatorReviewForArtifacts: true,
+        },
+        intent: {
+          ...intent,
+          hasArtifactDelivery: true,
+          requiresCreatorReview: false,
+        },
+        code: "CREATOR_REVIEW_REQUIRED_FOR_ARTIFACT",
+      },
+      {
+        name: "public auto-settle artifact",
+        policy: {
+          allowedTools: ["agenc.completeTask"],
+          denyPublicAutoSettleArtifacts: true,
+        },
+        intent: {
+          ...intent,
+          hasArtifactDelivery: true,
+        },
+        code: "PUBLIC_AUTO_SETTLE_ARTIFACT_DENIED",
+      },
+      {
+        name: "unverified job spec claim",
+        policy: {
+          allowedTools: ["agenc.claimTask"],
+          requireJobSpecVerification: true,
+        },
+        intent: {
+          ...intent,
+          kind: "claim_task_with_job_spec",
+          jobSpecVerified: false,
+        },
+        code: "JOB_SPEC_VERIFICATION_REQUIRED",
+      },
+      {
+        name: "private zk completion",
+        policy: {
+          allowedTools: ["agenc.completeTask"],
+          denyPrivateZk: true,
+        },
+        intent: {
+          ...intent,
+          kind: "complete_task_private",
+        },
+        code: "PRIVATE_ZK_DENIED",
+      },
     ];
 
     for (const testCase of cases) {
       const decision = evaluateMarketplaceSignerPolicyForIntent(
         testCase.policy,
-        intent,
+        testCase.intent ?? intent,
       );
       expect(decision.allowed, testCase.name).toBe(false);
       expect(decision.code, testCase.name).toBe(testCase.code);
