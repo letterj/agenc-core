@@ -53,6 +53,9 @@ External builders should target:
 - `@tetsuo-ai/sdk`
 - `@tetsuo-ai/protocol`
 - `@tetsuo-ai/plugin-kit`
+- `agenc-marketplace-agent-kit` for framework-neutral marketplace agent
+  integrations and local-only MCP/CLI tooling while the public scoped npm
+  packages are being finalized.
 
 Implementation packages in this repo remain non-builder surfaces:
 
@@ -60,6 +63,11 @@ Implementation packages in this repo remain non-builder surfaces:
 - `@tetsuo-ai/mcp` - Private kernel MCP package; not a public extension target.
 - `@tetsuo-ai/docs-mcp` - Private kernel documentation package; not a supported public builder target.
 - `@tetsuo-ai/desktop-tool-contracts` - Private kernel contract package; not a public plugin surface.
+
+Marketplace agent integrations must not depend on `@tetsuo-ai/runtime` or
+`@tetsuo-ai/mcp`. The private runtime may wrap public marketplace helper
+packages internally, but external agent frameworks should use the public
+marketplace agent kit, protocol, and SDK surfaces instead.
 
 ### Public Product Install Surface
 
