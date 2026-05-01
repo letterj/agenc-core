@@ -37,18 +37,24 @@ export interface MarketplaceTransactionIntent {
   readonly taskPda?: string;
   readonly taskId?: string;
   readonly claimPda?: string;
+  readonly submissionPda?: string;
   readonly workerPda?: string;
   readonly disputePda?: string;
   readonly disputeId?: string;
   readonly jobSpecHash?: string | null;
   readonly rewardLamports?: string;
   readonly rewardMint?: string | null;
+  readonly taskType?: string | null;
   readonly constraintHash?: string | null;
   readonly validationMode?: string | null;
+  readonly artifactSha256?: string | null;
   readonly reviewWindowSecs?: string | null;
   readonly validatorQuorum?: number | null;
   readonly evidenceHash?: string | null;
   readonly resolutionType?: string | null;
+  readonly requiresCreatorReview?: boolean;
+  readonly jobSpecVerified?: boolean;
+  readonly hasArtifactDelivery?: boolean;
   readonly accountMetas: readonly MarketplaceTransactionAccountMeta[];
 }
 

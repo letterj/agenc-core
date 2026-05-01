@@ -1,4 +1,9 @@
 import type { PublicKey } from "@solana/web3.js";
+import {
+  evaluateMarketplaceSignerPolicyForIntent as evaluateAgentKitMarketplaceSignerPolicyForIntent,
+  type MarketplaceSignerPolicy as AgentKitMarketplaceSignerPolicy,
+  type MarketplaceTransactionIntent as AgentKitMarketplaceTransactionIntent,
+} from "agenc-marketplace-agent-kit/policy";
 
 import type { MarketplaceTransactionIntent } from "../../task/transaction-intent.js";
 import type { Tool, ToolResult } from "../types.js";
@@ -41,6 +46,20 @@ export interface MarketplaceSignerPolicy {
     readonly isSigner?: boolean;
     readonly isWritable?: boolean;
   }[];
+  /** Restrict task creation/completion to canary-safe task types, e.g. Exclusive. */
+  readonly allowedTaskTypes?: readonly string[];
+  /** Restrict validation modes, e.g. CreatorReview only for reviewed-public canary. */
+  readonly allowedValidationModes?: readonly string[];
+  /** Require artifact delivery intents to use CreatorReview/manual validation. */
+  readonly requireCreatorReviewForArtifacts?: boolean;
+  /** Require claim intents to prove verified job-spec metadata. */
+  readonly requireJobSpecVerification?: boolean;
+  /** Deny Private ZK completion intents by policy. */
+  readonly denyPrivateZk?: boolean;
+  /** Deny SPL/token reward intents by policy. */
+  readonly denyTokenRewards?: boolean;
+  /** Deny public auto-settle artifact completion intents by policy. */
+  readonly denyPublicAutoSettleArtifacts?: boolean;
 }
 
 export interface MarketplaceSignerPolicyEvaluation {
@@ -279,6 +298,41 @@ function toolNameForIntent(kind: MarketplaceTransactionIntent["kind"]): string {
   }
 }
 
+function toAgentKitMarketplaceIntent(
+  intent: MarketplaceTransactionIntent,
+): AgentKitMarketplaceTransactionIntent {
+  return {
+    kind: intent.kind as AgentKitMarketplaceTransactionIntent["kind"],
+    toolName: toolNameForIntent(intent.kind),
+    programId: intent.programId,
+    signer: intent.signer,
+    ...(intent.taskPda ? { taskPda: intent.taskPda } : {}),
+    ...(intent.taskId ? { taskId: intent.taskId } : {}),
+    ...(intent.claimPda ? { claimPda: intent.claimPda } : {}),
+    ...(intent.submissionPda ? { submissionPda: intent.submissionPda } : {}),
+    ...(intent.workerPda ? { workerPda: intent.workerPda } : {}),
+    ...(intent.disputePda ? { disputePda: intent.disputePda } : {}),
+    ...(intent.disputeId ? { disputeId: intent.disputeId } : {}),
+    ...(intent.jobSpecHash !== undefined ? { jobSpecHash: intent.jobSpecHash } : {}),
+    ...(intent.rewardLamports ? { rewardLamports: intent.rewardLamports } : {}),
+    rewardMint: intent.rewardMint ?? "SOL",
+    ...(intent.taskType !== undefined ? { taskType: intent.taskType } : {}),
+    ...(intent.validationMode !== undefined ? { validationMode: intent.validationMode } : {}),
+    ...(intent.artifactSha256 !== undefined ? { artifactSha256: intent.artifactSha256 } : {}),
+    ...(intent.constraintHash !== undefined ? { constraintHash: intent.constraintHash } : {}),
+    ...(intent.requiresCreatorReview !== undefined
+      ? { requiresCreatorReview: intent.requiresCreatorReview }
+      : {}),
+    ...(intent.jobSpecVerified !== undefined
+      ? { jobSpecVerified: intent.jobSpecVerified }
+      : {}),
+    ...(intent.hasArtifactDelivery !== undefined
+      ? { hasArtifactDelivery: intent.hasArtifactDelivery }
+      : {}),
+    accountMetas: intent.accountMetas,
+  };
+}
+
 export function evaluateMarketplaceSignerPolicyForIntent(
   policy: MarketplaceSignerPolicy,
   intent: MarketplaceTransactionIntent,
@@ -305,52 +359,12 @@ export function evaluateMarketplaceSignerPolicyForIntent(
     return baseDecision;
   }
 
-  for (const expected of policy.expectedAccountMetas ?? []) {
-    const actual = intent.accountMetas.find(
-      (account) => account.name === expected.name,
-    );
-    if (!actual) {
-      return {
-        allowed: false,
-        code: "ACCOUNT_META_MISSING",
-        reason: `Required account meta ${expected.name} is missing from transaction intent`,
-        metadata: { accountName: expected.name },
-      };
-    }
-    if (expected.pubkey && actual.pubkey !== expected.pubkey) {
-      return {
-        allowed: false,
-        code: "ACCOUNT_META_PUBKEY_MISMATCH",
-        reason: `Account meta ${expected.name} pubkey does not match signer policy`,
-        metadata: {
-          accountName: expected.name,
-          expectedPubkey: expected.pubkey,
-          actualPubkey: actual.pubkey,
-        },
-      };
-    }
-    if (
-      expected.isSigner !== undefined &&
-      actual.isSigner !== expected.isSigner
-    ) {
-      return {
-        allowed: false,
-        code: "ACCOUNT_META_SIGNER_MISMATCH",
-        reason: `Account meta ${expected.name} signer flag does not match signer policy`,
-        metadata: { accountName: expected.name },
-      };
-    }
-    if (
-      expected.isWritable !== undefined &&
-      actual.isWritable !== expected.isWritable
-    ) {
-      return {
-        allowed: false,
-        code: "ACCOUNT_META_WRITABLE_MISMATCH",
-        reason: `Account meta ${expected.name} writable flag does not match signer policy`,
-        metadata: { accountName: expected.name },
-      };
-    }
+  const agentKitDecision = evaluateAgentKitMarketplaceSignerPolicyForIntent(
+    policy as AgentKitMarketplaceSignerPolicy,
+    toAgentKitMarketplaceIntent(intent),
+  );
+  if (!agentKitDecision.allowed) {
+    return agentKitDecision;
   }
 
   return baseDecision;
