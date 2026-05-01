@@ -53,7 +53,10 @@ This file is the navigation guide for `runtime/src/`.
 
 - `dispute/` - dispute operations
 - `governance/` - governance support
-- `marketplace/` - protocol marketplace serialization helpers used by the operator CLI, TUI, and web transport
+- `marketplace/` - protocol marketplace serialization helpers used by the
+  operator CLI, TUI, and web transport. Artifact helpers are wrapped from the
+  public marketplace agent kit; job-spec storage still owns private task-link
+  and verified-attestation behavior in core.
 - `reputation/` - reputation mechanics
 - `social/` - social/feed surfaces
 
